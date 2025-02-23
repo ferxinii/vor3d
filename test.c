@@ -6,7 +6,7 @@
 #include "geometry.c"
 #include "simplical_complex.c"
 
-int main() {
+int main(void) {
     srand(time(NULL));
 
     // FIND UNIQUE PAIR, seems OK -----------------------------------
@@ -46,92 +46,48 @@ int main() {
     s_ncell *ncell2 = malloc_ncell(&setup);
     s_ncell *ncell3 = malloc_ncell(&setup);
     s_ncell *ncell4 = malloc_ncell(&setup);
-    s_facet *facet1 = malloc_facet(&setup);
-    s_facet *facet2 = malloc_facet(&setup);
-    s_facet *facet3 = malloc_facet(&setup);
-    s_facet *facet4 = malloc_facet(&setup);
-    s_facet *facetO_1 = malloc_facet(&setup);
-    s_facet *facetO_2 = malloc_facet(&setup);
-    s_facet *facetO_3 = malloc_facet(&setup);
-    s_facet *facetO_4 = malloc_facet(&setup);
-    
-    setup.head = ncell2;
-    ncell2->next = ncell1;
-    ncell1->next = ncell3;
+
+    setup.head = ncell1;
+    ncell1->next = ncell2;
+    ncell2->next = ncell3;
     ncell3->next = ncell4;
 
     ncell1->vertex_id[0] = 0;
     ncell1->vertex_id[1] = 1;
     ncell1->vertex_id[2] = 3;
-    ncell1->facet[0] = facet1;
-    ncell1->facet[1] = facet2;
-    ncell1->facet[2] = facetO_1;
+    ncell1->opposite[0] = ncell2;
+    ncell1->opposite[1] = ncell3;
+    ncell1->opposite[2] = NULL;
 
     ncell2->vertex_id[0] = 1;
     ncell2->vertex_id[1] = 2;
     ncell2->vertex_id[2] = 3;
-    ncell2->facet[0] = facet4;
-    ncell2->facet[1] = facet1;
-    ncell2->facet[2] = facetO_2;
+    ncell2->opposite[0] = ncell4;
+    ncell2->opposite[1] = ncell1;
+    ncell2->opposite[2] = NULL;
 
     ncell3->vertex_id[0] = 0;
     ncell3->vertex_id[1] = 3;
     ncell3->vertex_id[2] = 4;
-    ncell3->facet[0] = facet3;
-    ncell3->facet[1] = facetO_3;
-    ncell3->facet[2] = facet2;
+    ncell3->opposite[0] = ncell4;
+    ncell3->opposite[1] = NULL;
+    ncell3->opposite[2] = ncell1;
 
     ncell4->vertex_id[0] = 2;
     ncell4->vertex_id[1] = 4;
     ncell4->vertex_id[2] = 3;
-    ncell4->facet[0] = facet3;
-    ncell4->facet[1] = facet4;
-    ncell4->facet[2] = facetO_4;
+    ncell4->opposite[0] = ncell3;
+    ncell4->opposite[1] = ncell2;
+    ncell4->opposite[2] = NULL;
 
-    facet1->vertex_id[0] = 1;
-    facet1->vertex_id[1] = 3;
-    facet1->incident_ncell[0] = ncell1;
-    facet1->incident_ncell[1] = ncell2;
-
-    facet2->vertex_id[0] = 0;
-    facet2->vertex_id[1] = 3;
-    facet2->incident_ncell[0] = ncell1;
-    facet2->incident_ncell[1] = ncell3;
-
-    facet3->vertex_id[0] = 3;
-    facet3->vertex_id[1] = 4;
-    facet3->incident_ncell[0] = ncell3;
-    facet3->incident_ncell[1] = ncell4;
-
-    facet4->vertex_id[0] = 2;
-    facet4->vertex_id[1] = 4;
-    facet4->incident_ncell[0] = ncell2;
-    facet4->incident_ncell[1] = ncell4;
-
-    facetO_1->vertex_id[0] = 0;
-    facetO_1->vertex_id[1] = 1;
-    facetO_1->incident_ncell[0] = ncell1;
-    facetO_1->incident_ncell[1] = NULL;
-
-    facetO_2->vertex_id[0] = 1;
-    facetO_2->vertex_id[1] = 2;
-    facetO_2->incident_ncell[0] = ncell2;
-    facetO_2->incident_ncell[1] = NULL;
-
-    facetO_3->vertex_id[0] = 0;
-    facetO_3->vertex_id[1] = 4;
-    facetO_3->incident_ncell[0] = ncell3;
-    facetO_3->incident_ncell[1] = NULL;
-
-    facetO_4->vertex_id[0] = 2;
-    facetO_4->vertex_id[1] = 4;
-    facetO_4->incident_ncell[0] = ncell4;
-    facetO_4->incident_ncell[1] = NULL;
-
-    result = is_locally_delaunay(&setup, facet1);
+    result = are_locally_delaunay(&setup, ncell1, ncell2);
     printf("is_locally_delaunay(f1): %d\n", result);
-    result = is_locally_delaunay(&setup, facet2);
-    printf("is_locally_delaunay(f2): %d\n\n", result);
+    result = are_locally_delaunay(&setup, ncell1, ncell3);
+    printf("is_locally_delaunay(f2): %d\n", result);
+    result = are_locally_delaunay(&setup, ncell3, ncell4);
+    printf("is_locally_delaunay(f3): %d\n", result);
+    result = are_locally_delaunay(&setup, ncell2, ncell4);
+    printf("is_locally_delaunay(f4): %d\n\n", result);
 
 
     // WALKING, seems OK --------------------------------------------
@@ -146,6 +102,7 @@ int main() {
 
     // SETUP COMPLEX
     s_setup *setup_test = initialize_setup(2, points, 5);
+    (void) setup_test;
 
 
     // CYCLIC ORDERING AROUND RIDGE
