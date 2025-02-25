@@ -1,3 +1,5 @@
+#ifndef SIMPLICAL_COMPLEX_C
+#define SIMPLICAL_COMPLEX_C
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -32,7 +34,48 @@ s_ncell *malloc_ncell(const s_setup *setup)
     out->opposite = malloc(sizeof(s_ncell*) * (setup->dim + 1));
     out->next = NULL;
     out->mark = 0;
+    assert(out->vertex_id && out->opposite && "Could not malloc ncell!");
     return out;
+}
+
+
+void free_ncell(s_ncell *ncell)
+{
+    free(ncell->vertex_id);
+    free(ncell->opposite);
+    free(ncell);
+}
+
+
+void print_ncell(const s_setup *setup, const s_ncell *ncell)
+{
+    printf("%p, ( ", (void*)ncell);
+    for (int ii=0; ii<setup->dim+1; ii++) {
+        printf("%d ", ncell->vertex_id[ii]);
+    }
+    printf(") \n");
+}
+
+
+void print_ncells(const s_setup *setup)
+{
+    puts("NCELLS");
+    s_ncell *current = setup->head;
+    int ii = 0;
+    while (current) {
+        printf("%d  |  p : %p  |  marked : %d  |  vertex_ids :", ii, (void*)current, current->mark);
+        for (int jj=0; jj<setup->dim+1; jj++) {
+            printf(" %d", current->vertex_id[jj]);
+        }
+        printf("  |  opposite :");
+        for (int jj=0; jj<setup->dim+1; jj++) {
+            printf(" %p", (void*)current->opposite[jj]);
+        }
+        printf("\n");
+        ii++;
+        current = current->next;
+    }
+    puts("");
 }
 
 
@@ -59,6 +102,20 @@ void print_marked(const s_setup *setup)
 }
 
 
+int count_marked(const s_setup *setup) 
+{   
+    int count = 0;
+    s_ncell *current = setup->head;
+    for (int ii=0; ii<setup->N_ncells; ii++) {
+        if (current->mark == 1) {
+            count++;
+        }
+        current = current->next;
+    }
+    return count;
+}
+
+
 void extract_vertices_ncell(const s_setup *setup, const s_ncell *ncell, double **out)
 {
     for (int ii=0; ii<setup->dim+1; ii++) {
@@ -67,6 +124,18 @@ void extract_vertices_ncell(const s_setup *setup, const s_ncell *ncell, double *
         }
     }
 }
+
+
+// s_ncell *get_adjacent_ncell_opposite_to_v(const s_setup *setup, const s_ncell *ncell, int vertex_id)
+// {
+//     for (int ii=0; ii<setup->dim+1; ii++) {
+//         if (ncell->vertex_id[ii] == vertex_id) {
+//             return ncell->opposite[ii];
+//         }
+//     }
+//     assert(1 == 0 && "Query ncell does not contain vertex_id.");
+//     exit(1);
+// }   
 
 
 // void extract_ids_facet(const s_setup *setup, const s_ncell *ncell1, int v1_localid, int *out)
@@ -136,22 +205,41 @@ void extract_vertices_face(const s_setup *setup, const s_ncell *ncell, const int
 }
 
 
-void find_face_localid_of_adjacent_ncell(const s_setup *setup, const s_ncell *ncell, const int *v_localid,
+void face_localid_of_adjacent_ncell(const s_setup *setup, const s_ncell *ncell, const int *v_localid,
                                          int dim_face, int id_adjacent, int *out_v_localid)
 {
     s_ncell *adjacent = ncell->opposite[id_adjacent];
 
-    int N_v = setup->dim - dim_face;
-    int vertex_id[dim_face+1];
-    extract_ids_face(setup, ncell, v_localid, dim_face, vertex_id);
+    int vertex_id_face[dim_face+1];
+    extract_ids_face(setup, ncell, v_localid, dim_face, vertex_id_face);
+
+    // print_ncell(setup, ncell);
+    // print_ncell(setup, adjacent);
 
     int kk = 0;
     for (int ii=0; ii<setup->dim+1; ii++) {
-        if (!inarray(vertex_id, N_v, adjacent->vertex_id[ii])) {
+        if (!inarray(vertex_id_face, dim_face+1, adjacent->vertex_id[ii])) {
             out_v_localid[kk] = ii;
+            kk++;
         }
     }
 }
+
+
+// void adjacent_localid_of_face(const s_setup *setup, const s_ncell *ncell, const int *v_localid,
+//                               int dim_face, const s_ncell *adjacent, int *out_v_localid)
+// {
+//     int vertex_id_face[dim_face + 1];
+//     extract_ids_face(setup, ncell, v_localid, dim_face, vertex_id_face);
+//     
+//     int kk = 0;
+//     for (int ii=0; ii<setup->dim+1; ii++) {
+//         if (!inarray(vertex_id_face, dim_face + 1, adjacent->vertex_id[ii])) {
+//             out_v_localid[kk] = ii;
+//             kk++;
+//         }
+//     }
+// }
 
 
 s_ncell *next_ncell_ridge_cycle(const s_setup *setup, const s_ncell *ncell, int v_localid_main, int v_localid_2, 
@@ -177,6 +265,8 @@ int count_cycle_ridge(const s_setup *setup, const s_ncell *ncell, int v_localid_
     const s_ncell *current = ncell;
     while (counter < maxit) {
         int new_v_localid_main, new_v_localid_2;
+        if (!current->opposite[v_localid_main]) return 0;  // THIS IS TO CHECK THERE IS INDEED A NEXT CELL; TODO HANDLE THIS BETTER??
+
         s_ncell *next = next_ncell_ridge_cycle(setup, current, v_localid_main, v_localid_2, 
                                               &new_v_localid_main, &new_v_localid_2);
         if (next == ncell) return counter;
@@ -190,32 +280,16 @@ int count_cycle_ridge(const s_setup *setup, const s_ncell *ncell, int v_localid_
 }
 
 
-void adjacent_localid_of_face(const s_setup *setup, const s_ncell *ncell, const int *v_localid,
-                              int dim_face, const s_ncell *adjacent, int *out_v_localid)
-{
-    int vertex_id_face[setup->dim - dim_face];
-    extract_ids_face(setup, ncell, v_localid, dim_face, out_v_localid);
-    
-    int kk = 0;
-    for (int ii=0; ii<setup->dim+1; ii++) {
-        if (!inarray(vertex_id_face, setup->dim - dim_face, adjacent->vertex_id[ii])) {
-            out_v_localid[kk] = ii;
-            kk++;
-        }
-    }
-}
-
-
 void mark_ncells_incident_face_STEP(const s_setup *setup, const s_ncell *ncell, const int *v_localid, int dim_face)
 {
     for (int ii=0; ii<setup->dim+1; ii++) {
         if (inarray(v_localid, setup->dim - dim_face, ii)) {
             s_ncell *adjacent_ncell = ncell->opposite[ii];  // This ncell should already share the face!
-            if (adjacent_ncell->mark == 0) {
+            if (adjacent_ncell && adjacent_ncell->mark == 0) {
                 adjacent_ncell->mark = 1;
                 
                 int new_v_localid[setup->dim - dim_face];
-                adjacent_localid_of_face(setup, ncell, v_localid, dim_face, adjacent_ncell, new_v_localid);
+                face_localid_of_adjacent_ncell(setup, ncell, v_localid, dim_face, ii, new_v_localid);
 
                 // Recursion
                 mark_ncells_incident_face_STEP(setup, adjacent_ncell, new_v_localid, dim_face);
@@ -253,7 +327,7 @@ void find_center_mass(double **in, int N_points, int dim, double *out)
 }
 
 
-s_setup *initialize_setup(int dim, double **points, int N_points)
+s_setup *initialize_setup(double **points, int N_points, int dim)
 {
     // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL
     double **setup_points = malloc_matrix(N_points + dim + 1, dim);
@@ -306,23 +380,25 @@ s_setup *initialize_setup(int dim, double **points, int N_points)
 }
 
 
-int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell1, const s_ncell *ncell2)
-{   // TODO Check if incident?
-    int v1, v2;
-    find_unique_pair(ncell1->vertex_id, ncell2->vertex_id, setup->dim + 1, &v1, &v2);
-    
+int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell, int id_opposite)
+{   
     // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
     static int prev_dim = 0;
     static double **coords1 = NULL;
     if (setup->dim != prev_dim) {
+        if (coords1) free_matrix(coords1, prev_dim + 1);
         prev_dim = setup->dim;
-        if (coords1) free_matrix(coords1, setup->dim + 1);
         coords1 = malloc_matrix(setup->dim + 1, setup->dim);
     }
 
-    extract_vertices_ncell(setup, ncell1, coords1);
-    int out = insphere(coords1, setup->points[v2], setup->dim);
-    if (out == -1) {
+    extract_vertices_ncell(setup, ncell, coords1);
+            
+    // Extract vertex_id of opposite's cell face
+    int opp_face_localid;
+    face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
+    int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
+
+    if (insphere(coords1, setup->points[opp_face_vertex_id], setup->dim) == -1) {
         return 1;
     } else {
         return 0;
@@ -342,8 +418,8 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
     static int prev_dim = 0;
     static double **facet_vertices = NULL;
     if (setup->dim != prev_dim) {
+        if (facet_vertices) free_matrix(facet_vertices, prev_dim);
         prev_dim = setup->dim;
-        if (facet_vertices) free_matrix(facet_vertices, setup->dim);
         facet_vertices = malloc_matrix(setup->dim, setup->dim);
     }
 
@@ -367,3 +443,5 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
     
     return current;
 }
+
+#endif

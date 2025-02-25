@@ -26,6 +26,16 @@ void free_matrix(double **array, int N1)
 }
 
 
+void copy_matrix(double **in, double **out, int N1, int N2)
+{
+    for (int ii=0; ii<N1; ii++) {
+        for (int jj=0; jj<N2; jj++) {
+            out[ii][jj] = in[ii][jj];
+        }
+    }
+}
+
+
 void print_matrix(double **array, int N1, int N2)
 {
     for (int ii=0; ii<N1; ii++) {
