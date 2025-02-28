@@ -1,11 +1,28 @@
-
+// TODO : 
+// [ ] IS DELAUNAY FUNCTION ONLY ON REAL NCELLS??
+// [ ] Check if points are in general position
+// [ ] Function to check if a point is inside a simplex, using barycentric coordinates?
+// [ ] Plotting 3D, to check and produce visual output?
+// [ ] Better robustness in geometric predicates? Tolerance?
+// [ ] Generation of points
+// [ ] Extracting the Voronoi Diagram
 
 #include <stdio.h>
 #include <time.h>
-// #include "algebra.c"
 #include "geometry.c"
 #include "simplical_complex.c"
 #include "dt_3d_incremental.c"
+
+
+void random_points_3d(int N, double **out) 
+{
+    for (int ii = 0; ii < N; ii++) {
+        out[ii][0] = (double) rand() / (double) RAND_MAX;
+        out[ii][1] = (double) rand() / (double) RAND_MAX;
+        out[ii][2] = (double) rand() / (double) RAND_MAX;
+    }
+}
+
 
 int main(void) {
     srand(time(NULL));
@@ -18,7 +35,7 @@ int main(void) {
     printf("u1: %d, u2: %d\n\n", u1, u2);
 
 
-    // INSPHERE, seems OK  ------------------------------------------
+    // in_sphere, seems OK  ------------------------------------------
     double **p = malloc_matrix(4, 3);
     p[0][0] = 0;    p[0][1] = 1;    p[0][2] = 0;
     p[1][0] = -1;   p[1][1] = 0;    p[1][2] = 0;
@@ -30,8 +47,8 @@ int main(void) {
     int result = orientation(p, p[3], 3);
     printf("orientation: %d\n", result);
 
-    result = insphere(p, q, 3);
-    printf("insphere: %d\n\n", result);
+    result = in_sphere(p, q, 3);
+    printf("in_sphere: %d\n\n", result);
 
 
     // ISDELAUNAY, seems OK  ----------------------------------------
@@ -122,8 +139,8 @@ int main(void) {
 
     // INCREMENTAL ALGORITHM
     double **p_dt = malloc_matrix(2, 3);
-    p_dt[0][0] = -1;    p[0][1] = 0;    p[0][2] = 0;
-    p_dt[1][0] = 1;     p[1][1] = 0;    p[1][2] = 0;
+    p_dt[0][0] = -1;    p_dt[0][1] = 0;      p_dt[0][2] = 0;
+    p_dt[1][0] = 1;     p_dt[1][1] = 0.5;    p_dt[1][2] = 0;
 
     s_stack *stack = stack_create();
     s_setup *setup_dt = initialize_setup(p_dt, 2, 3);
@@ -140,16 +157,33 @@ int main(void) {
     // INSERT_ONE_POINT
     s_stack *stack2 = stack_create();
     s_setup *setup2 = initialize_setup(p_dt, 2, 3);
+    print_matrix(setup2->points, 6, 3);
+
+    // plot_ncell_3d(setup2, setup2->head, "flip14/before");
+
     printf("Before insertion, N_ncells = %d, dim = %d\n", setup2->N_ncells, setup2->dim);
     puts("\nInserting 0:");
     insert_one_point(setup2, 0, stack2);
     printf("After insertion, N_ncells = %d\n", setup2->N_ncells);
-    print_ncells(setup_dt);
+    print_ncells(setup2);
+
+    // plot_ncell_3d(setup2, setup2->head, "flip14/after1_1");
+    // plot_ncell_3d(setup2, setup2->head->next, "flip14/after1_2");
+    // plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after1_3");
+    // plot_ncell_3d(setup2, setup2->head->next->next->next, "flip14/after1_4");
 
     puts("\nInserting 1:");
     insert_one_point(setup2, 1, stack2);
     printf("After insertion, N_ncells = %d\n", setup2->N_ncells);
-    print_ncells(setup_dt);
+    print_ncells(setup2);
+
+    // plot_ncell_3d(setup2, setup2->head, "flip14/after2_1");
+    // plot_ncell_3d(setup2, setup2->head->next, "flip14/after2_2");
+    // plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after2_3");
+    // plot_ncell_3d(setup2, setup2->head->next->next->next, "flip14/after2_4");
+    // plot_ncell_3d(setup2, setup2->head->next->next->next->next, "flip14/after2_5");
+    // plot_ncell_3d(setup2, setup2->head->next->next->next->next->next, "flip14/after2_6");
+    // plot_ncell_3d(setup2, setup2->head->next->next->next->next->next->next, "flip14/after2_7");
 
 
     // SEGMENT_CROSSES_TRIANGLE_3D
@@ -171,7 +205,7 @@ int main(void) {
     p2[3][0] = 0;    p2[3][1] = 0;    p2[3][2] = 1;
     p2[4][0] = 0;    p2[4][1] = 0;    p2[4][2] = -1;
 
-    s_setup s2 = {.dim = 3, .N_ncells = 2, .points = p2};
+    s_setup s2 = {.dim = 3, .N_ncells = 2, .N_points = 5, .points = p2};
     s_ncell *nc1 = malloc_ncell(&s2);
     s_ncell *nc2 = malloc_ncell(&s2);
     s2.head = nc1;
@@ -188,19 +222,164 @@ int main(void) {
     nc2->opposite[2] = NULL;    nc2->opposite[3] = nc1;
 
     print_ncells(&s2);
+    // plot_ncell_3d(&s2, s2.head, "flip23/before1");
+    // plot_ncell_3d(&s2, s2.head->next, "flip23/before2");
 
     flip23(&s2, stack, nc1, 3, 3);
     puts("\nFLIP23:");
     print_ncells(&s2);
+    // plot_ncell_3d(&s2, s2.head, "flip23/after1");
+    // plot_ncell_3d(&s2, s2.head->next, "flip23/after2");
+    // plot_ncell_3d(&s2, s2.head->next->next, "flip23/after3");
 
     flip32(&s2, stack, nc1, 0, 1, 2); 
     puts("\nFLIP32:");
     print_ncells(&s2);
 
+    
+    // FLIP44, seems ok!
+    double **p3 = malloc_matrix(6, 3);
+    p3[0][0] = 1;    p3[0][1] = 0;    p3[0][2] = 0;
+    p3[1][0] = 0;    p3[1][1] = 1;    p3[1][2] = 0;
+    p3[2][0] = -1;   p3[2][1] = 0;    p3[2][2] = 0;
+    p3[3][0] = 0;    p3[3][1] = -1;   p3[3][2] = 0;
+    p3[4][0] = 0;    p3[4][1] = 0;    p3[4][2] = 1;
+    p3[5][0] = 0;    p3[5][1] = 0;    p3[5][2] = -1;
+
+    s_setup s3 = {.dim = 3, .N_ncells = 4, .N_points = 6, .points = p3};
+    nc1 = malloc_ncell(&s3);
+    nc2 = malloc_ncell(&s3);
+    s_ncell *nc3 = malloc_ncell(&s3);
+    s_ncell *nc4 = malloc_ncell(&s3);
+
+    s3.head = nc1;
+    nc1->next = nc2;
+
+    nc2->next = nc3;
+    nc2->prev = nc1;
+
+    nc3->next = nc4;
+    nc3->prev = nc2;
+
+    nc4->prev = nc3;
+
+    nc1->vertex_id[0] = 0;      nc1->vertex_id[1] = 1;
+    nc1->vertex_id[2] = 4;      nc1->vertex_id[3] = 3;
+    nc1->opposite[0] = nc2;     nc1->opposite[1] = NULL;
+    nc1->opposite[2] = nc4;     nc1->opposite[3] = NULL;
+
+    nc2->vertex_id[0] = 1;      nc2->vertex_id[1] = 2;
+    nc2->vertex_id[2] = 3;      nc2->vertex_id[3] = 4;
+    nc2->opposite[0] = NULL;    nc2->opposite[1] = nc1;
+    nc2->opposite[2] = NULL;    nc2->opposite[3] = nc3;
+
+    nc3->vertex_id[0] = 1;      nc3->vertex_id[1] = 2;
+    nc3->vertex_id[2] = 3;      nc3->vertex_id[3] = 5;
+    nc3->opposite[0] = NULL;    nc3->opposite[1] = nc4;
+    nc3->opposite[2] = NULL;    nc3->opposite[3] = nc2;
+
+    nc4->vertex_id[0] = 1;      nc4->vertex_id[1] = 3;
+    nc4->vertex_id[2] = 5;      nc4->vertex_id[3] = 0;
+    nc4->opposite[0] = NULL;    nc4->opposite[1] = NULL;
+    nc4->opposite[2] = nc1;     nc4->opposite[3] = nc3;
+
+    puts("\nFLIP44\nbefore:");
+    print_ncells(&s3);
+    // double ranges3[6] = {-2, 2, -2, 2, -2, 2};
+    // plot_ncell_3d(&s3, s3.head, "flip44/1", ranges3);
+    // plot_ncell_3d(&s3, s3.head->next, "flip44/2", ranges3);
+    // plot_ncell_3d(&s3, s3.head->next->next, "flip44/3", ranges3);
+    // plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/4", ranges3);
+    // plot_dt_3d(&s3, "flip44/before", ranges3);
+    
+    flip44(&s3, stack, nc1, 0, 2);
+    puts("after:");
+    print_ncells(&s3);
+    // plot_dt_3d(&s3, "flip44/after", ranges3);
+    // plot_ncell_3d(&s3, s3.head, "flip44/after1", ranges3);
+    // plot_ncell_3d(&s3, s3.head->next, "flip44/after2", ranges3);
+    // plot_ncell_3d(&s3, s3.head->next->next, "flip44/after3", ranges3);
+    // plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/after4", ranges3);
+
+
 
     // CONSTRUCT_DT_3D
+    puts("\n-------------- TESTING DT ---------------");
+    print_matrix(p2, 5, 3);
+    printf("IS IN GENERAL POSITION: %d\n", are_in_general_position_3d(p2, 5));
     s_setup *dt_setup = construct_dt_3d(p2, 5);
     print_ncells(dt_setup);
+    printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt_setup));
+    printf("N POINTS : %d\n", dt_setup->N_points);
+    
+    // double ranges[6] = {-1.5, 1.5, -1.5, 1.5, -1.5, 1.5};
+    // plot_ncell_3d(dt_setup, dt_setup->head, "toy/test", ranges);
+    // plot_ncell_3d(dt_setup, dt_setup->head->next, "toy/test_1", ranges);
+    // plot_ncell_3d(dt_setup, dt_setup->head->next->next, "toy/test_2", ranges);
+    // plot_dt_3d(dt_setup,  "toy/test_3", ranges);
+    //
 
+    // TODO!! STILL CANNOT TRIANGULATE SETS THAT ARE NOT IN GENERAL POSITION
+    // puts("\n-------------- TESTING DT 2 ---------------");
+    // print_matrix(p3, 5, 3);
+    // printf("IS IN GENERAL POSITION: %d\n", are_in_general_position_3d(p3, 5));
+    // dt_setup = construct_dt_3d(p3, 5);
+    // print_ncells(dt_setup);
+    // printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt_setup));
+    // printf("N POINTS : %d\n", dt_setup->N_points);
+    // 
+    // double ranges[6] = {-1.5, 1.5, -1.5, 1.5, -1.5, 1.5};
+    // plot_ncell_3d(dt_setup, dt_setup->head, "toy3/test", ranges);
+    // plot_ncell_3d(dt_setup, dt_setup->head->next, "toy3/test_1", ranges);
+    // plot_dt_3d(dt_setup,  "toy3/test_3", ranges);
+
+
+    // TEST AGAIN WITH MORE POINTS
+    puts("\n-------------------------------");
+    puts("TESTING AGAIN WITH MORE POINTS");
+    double **p2_2 = malloc_matrix(6, 3);
+    p2_2[0][0] = 1;    p2_2[0][1] = 0;    p2_2[0][2] = 0;
+    p2_2[1][0] = -1;   p2_2[1][1] = 1;    p2_2[1][2] = 0;
+    p2_2[2][0] = 0;    p2_2[2][1] = -1;   p2_2[2][2] = 0;
+    p2_2[3][0] = 0;    p2_2[3][1] = 0;    p2_2[3][2] = 1;
+    p2_2[4][0] = 0;    p2_2[4][1] = 0;    p2_2[4][2] = -1;
+    p2_2[5][0] = 2;    p2_2[5][1] = 2;    p2_2[5][2] = 2;
+
+    printf("\n\nIS IN GENERAL POSITION: %d\n", are_in_general_position_3d(p2_2, 6));
+
+    s_setup *dt_setup_2 = construct_dt_3d(p2_2, 6);
+    print_ncells(dt_setup_2);
+    printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt_setup_2));
+
+    // double ranges_2[6] = {-2.5, 2.5, -2.5, 2.5, -2.5, 2.5};
+    // plot_dt_3d(dt_setup_2,  "toy2/test", ranges_2);
+    // plot_ncell_3d(dt_setup_2, dt_setup_2->head, "toy2/test_1", ranges_2);
+    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next,  "toy2/test_2", ranges_2);
+    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next, "toy2/test_3", ranges_2);
+    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next, "toy2/test_4", ranges_2);
+    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next->next, "toy2/test_5", ranges_2);
+    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next->next->next, "toy2/test_6", ranges_2);
+    
+    puts("--------------------------------------\n");
+
+    // ARE IN GENERAL POSITION, BY CREATING A CO_SPHERICAL SET OF POINTS
+    double **p4 = malloc_matrix(5, 3);
+    p4[0][0] = 1;    p4[0][1] = 0;    p4[0][2] = 0;
+    p4[1][0] = 0;    p4[1][1] = 1;    p4[1][2] = 0;
+    p4[2][0] = 0;    p4[2][1] = -1;   p4[2][2] = 0;
+    p4[3][0] = 0;    p4[3][1] = 0;    p4[3][2] = 1;
+    p4[4][0] = 0;    p4[4][1] = -1.0/sqrt(2);    p4[4][2] = -1.0/sqrt(2);
+    printf("\nIN GENERAL POSITION TEST = %d (should be 0)\n", are_in_general_position_3d(p3, 5));
+
+
+    // TESTING
+    int N = 10;
+    double **pp = malloc_matrix(N, 3);
+    random_points_3d(N, pp);
+    printf("\nRANDOM POINTS, IN GENERAL POSITION: %d\n", are_in_general_position_3d(pp, N));
+    s_setup *ss = construct_dt_3d(pp, N);
+    printf("RANDOM SET OF POINTS, IS DELAUNAY: %d\n", is_delaunay_3d(ss));
+    double ranges2[6] = {0, 1, 0, 1, 0, 1};
+    plot_dt_3d(ss, "random_example/out", ranges2);
     
 }

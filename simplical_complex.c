@@ -8,6 +8,48 @@
 #include "array_operations.c"
 
 
+int are_in_general_position_3d(double **points, int N)
+{
+    static double **aux1 = NULL;
+    if (!aux1) aux1 = malloc_matrix(3, 3);
+    static double **aux2 = NULL;
+    if (!aux2) aux2 = malloc_matrix(4, 3);
+
+    // Check that no 4-tuple is co-planar
+    for (int ii=0; ii<N; ii++) {
+        for (int jj=ii+1; jj<N; jj++) {
+            for (int kk=jj+1; kk<N; kk++) {
+                for (int ll=kk+1; ll<N; ll++) {
+                    aux1[0] = points[ii];
+                    aux1[1] = points[jj];
+                    aux1[2] = points[kk];
+                    if (orientation(aux1, points[ll], 3) == 0) return 0;
+                }
+            }
+        }
+    }
+
+    // Check that no 5-tuple is co-spherical
+    for (int ii=0; ii<N; ii++) {
+        for (int jj=ii+1; jj<N; jj++) {
+            for (int kk=jj+1; kk<N; kk++) {
+                for (int ll=kk+1; ll<N; ll++) {
+                    for (int mm=ll+1; mm<N; mm++) {
+                        aux2[0] = points[ii];
+                        aux2[1] = points[jj];
+                        aux2[2] = points[kk];
+                        aux2[3] = points[ll];
+                        if (in_sphere(aux2, points[mm], 3) == 0) return 0;
+                    }
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
+
 typedef struct setup {
     int dim;
     int N_points;
@@ -23,6 +65,7 @@ typedef struct ncell {
     int *vertex_id;
     struct ncell **opposite;
     struct ncell *next;  // Linked list of cells
+    struct ncell *prev;
     int mark;  // Used in flood-fill algorithms, i.e. to find the star of an (n-3)-cell.
 } s_ncell;
 
@@ -33,6 +76,7 @@ s_ncell *malloc_ncell(const s_setup *setup)
     out->vertex_id = malloc(sizeof(int) * (setup->dim + 1));
     out->opposite = malloc(sizeof(s_ncell*) * (setup->dim + 1));
     out->next = NULL;
+    out->prev = NULL;
     out->mark = 0;
     assert(out->vertex_id && out->opposite && "Could not malloc ncell!");
     return out;
@@ -63,7 +107,7 @@ void print_ncells(const s_setup *setup)
     s_ncell *current = setup->head;
     int ii = 0;
     while (current) {
-        printf("%d  |  p : %p  |  marked : %d  |  vertex_ids :", ii, (void*)current, current->mark);
+        printf("%d  |  p : %p  |  prev : %p  |  marked : %d  |  vertex_ids :", ii, (void*)current, (void*)current->prev, current->mark);
         for (int jj=0; jj<setup->dim+1; jj++) {
             printf(" %d", current->vertex_id[jj]);
         }
@@ -342,7 +386,7 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
     double maxd = max_distance(points, N_points, dim, CM);
 
     // Build the vertices of a regular simplex in R^(dim+1) with circumsphere of radius s centered at origin
-    double s = 1.5 * maxd * dim * sqrt((dim+1.0)/dim);  // Scale so that inradius = 1.5 * maxd, original norm = sqrt(dim/(dim+1))
+    double s = 3 * maxd * dim * sqrt((dim+1.0)/dim);  // Scale so that inradius = 1.5 * maxd, original norm = sqrt(dim/(dim+1))
     double **V = malloc_matrix(dim+1, dim+1); 
     for (int ii = 0; ii < dim+1; ii++) {
         for (int jj = 0; jj < dim+1; jj++) {
@@ -353,14 +397,19 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
     // Project in Rn by removing the last coordinate, and add CM to center around points
     for (int ii=0; ii<dim+1; ii++) {
         for (int jj=0; jj<dim; jj++) {
-            setup_points[N_points + ii][jj] = CM[jj] + V[ii][jj];
+            double aux = 2.0 * rand() / RAND_MAX - 1;  // ADD SOME NOISE TO AVOID COLINEARITIES
+            setup_points[N_points + ii][jj] = CM[jj] + V[ii][jj] + 0.001 * aux * s ; 
         }
     }
     free_matrix(V, dim+1);
     
+
+    // CHECKS???
+    if (dim == 3) assert(are_in_general_position_3d(setup_points, N_points+dim+1) == 1 && "setup points are not in general position.");
     for (int ii=0; ii<N_points; ii++) {  // DEBUG 
-        assert(insphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
+        assert(in_sphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
     }
+
 
     s_setup *setup = malloc(sizeof(s_setup));
     setup->dim = dim;
@@ -384,21 +433,25 @@ int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell, int id_oppo
 {   
     // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
     static int prev_dim = 0;
-    static double **coords1 = NULL;
+    static double **coords1 = NULL, **coords2 = NULL;
     if (setup->dim != prev_dim) {
         if (coords1) free_matrix(coords1, prev_dim + 1);
+        if (coords2) free_matrix(coords2, prev_dim + 1);
         prev_dim = setup->dim;
         coords1 = malloc_matrix(setup->dim + 1, setup->dim);
+        coords2 = malloc_matrix(setup->dim + 1, setup->dim);
     }
 
     extract_vertices_ncell(setup, ncell, coords1);
+    extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
             
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
     face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
 
-    if (insphere(coords1, setup->points[opp_face_vertex_id], setup->dim) == -1) {
+    if (in_sphere(coords1, setup->points[opp_face_vertex_id], setup->dim) == -1 &&
+        in_sphere(coords2, setup->points[ncell->vertex_id[id_opposite]], setup->dim) == -1) {
         return 1;
     } else {
         return 0;
@@ -410,8 +463,11 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
 {
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
-    for (int ii=0; ii<(rand() % setup->N_ncells); ii++) {  // Select random ncell to start
+    int randi = (rand() % setup->N_ncells);
+    // printf("randi : %d, N_ncells : %d\n", randi, setup->N_ncells);
+    for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
         current = current->next;
+        // if (ii < randi-1) assert(current->next != NULL && "Not sure...?");
     }
 
     // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
@@ -442,6 +498,92 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
     }
     
     return current;
+}
+
+
+void plot_ncell_3d(s_setup *setup, s_ncell *ncell, char *f_name, double *ranges)
+{
+    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
+    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
+    fprintf(pipe, "set output '%s.png'\n", f_name);
+    fprintf(pipe, "set pm3d depthorder\n");
+    fprintf(pipe, "set view 100, 60, \n");
+    fprintf(pipe, "set xyplane at 0\n");
+    fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
+    fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
+    fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+    fprintf(pipe, "set xlabel 'x'\n");
+    fprintf(pipe, "set ylabel 'y'\n");
+    fprintf(pipe, "set zlabel 'z'\n");
+    fflush(pipe);
+    fprintf(pipe, "splot ");
+
+    static double **face_vertices = NULL;
+    if (!face_vertices) face_vertices = malloc_matrix(3, 3);
+    for (int ii=0; ii<4; ii++) {
+        extract_vertices_face(setup, ncell, &ii, 2, face_vertices);
+        fprintf(pipe, "\"<echo \'");
+        fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
+        fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
+        fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
+        fprintf(pipe, "w polygons fs transparent solid 0.1 notitle, ");
+    }
+    fprintf(pipe, "\"<echo \'");
+    for (int ii=0; ii<setup->N_points; ii++) {
+        fprintf(pipe, "%f %f %f\\n", setup->points[ii][0], setup->points[ii][1], setup->points[ii][2]);
+    }
+    fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
+
+
+    fflush(pipe);
+    fprintf(pipe, "\n");
+    pclose(pipe);
+}
+
+
+void plot_dt_3d(s_setup *setup, char *f_name, double *ranges)
+{
+    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
+    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
+    fprintf(pipe, "set output '%s.png'\n", f_name);
+    fprintf(pipe, "set pm3d depthorder\n");
+    fprintf(pipe, "set view 100, 60, \n");
+    fprintf(pipe, "set xyplane at 0\n");
+    fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
+    fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
+    fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+    fprintf(pipe, "set xlabel 'x'\n");
+    fprintf(pipe, "set ylabel 'y'\n");
+    fprintf(pipe, "set zlabel 'z'\n");
+    fflush(pipe);
+    fprintf(pipe, "splot ");
+    static double **face_vertices = NULL;
+    if (!face_vertices) face_vertices = malloc_matrix(3, 3);
+
+    s_ncell *current = setup->head;
+    while (current) {
+        for (int ii=0; ii<4; ii++) {
+            extract_vertices_face(setup, current, &ii, 2, face_vertices);
+            fprintf(pipe, "\"<echo \'");
+            fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
+            fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
+            fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
+            fprintf(pipe, "w polygons fs transparent solid 0.1 notitle, ");
+        }
+        for (int ii=0; ii<4; ii++) {
+            extract_vertices_face(setup, current, &ii, 2, face_vertices);
+            fprintf(pipe, "\"<echo \'");
+            fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
+            fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
+            fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
+            fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");
+        }
+        current = current->next;
+    }
+
+    fflush(pipe);
+    fprintf(pipe, "\n");
+    pclose(pipe);
 }
 
 #endif

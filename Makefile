@@ -1,4 +1,4 @@
 
 
 make: 
-	clang test.c -o test -Wpedantic -Wextra -Wall -Werror -g -O0 -fsanitize=address
+	clang test.c /Users/ferxinii/Desktop/TFM/predicates/build/Bin/libpredicates.dylib -o test -Wpedantic -Wextra -Wall -Werror -Wl,-rpath,/Users/ferxinii/Desktop/TFM/predicates/build/Bin/
