@@ -28,11 +28,11 @@ int main(void) {
     srand(time(NULL));
 
     // FIND UNIQUE PAIR, seems OK  ----------------------------------
-    int arr1[] = {1, 3, 7, 9, 5};
-    int arr2[] = {7, 5, 2, 1, 9};
-    int u1, u2;
-    find_unique_pair(arr1, arr2, 5, &u1, &u2);
-    printf("u1: %d, u2: %d\n\n", u1, u2);
+    // int arr1[] = {1, 3, 7, 9, 5};
+    // int arr2[] = {7, 5, 2, 1, 9};
+    // int u1, u2;
+    // find_unique_pair(arr1, arr2, 5, &u1, &u2);
+    // printf("u1: %d, u2: %d\n\n", u1, u2);
 
 
     // in_sphere, seems OK  ------------------------------------------

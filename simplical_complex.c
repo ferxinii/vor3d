@@ -8,48 +8,6 @@
 #include "array_operations.c"
 
 
-int are_in_general_position_3d(double **points, int N)
-{
-    static double **aux1 = NULL;
-    if (!aux1) aux1 = malloc_matrix(3, 3);
-    static double **aux2 = NULL;
-    if (!aux2) aux2 = malloc_matrix(4, 3);
-
-    // Check that no 4-tuple is co-planar
-    for (int ii=0; ii<N; ii++) {
-        for (int jj=ii+1; jj<N; jj++) {
-            for (int kk=jj+1; kk<N; kk++) {
-                for (int ll=kk+1; ll<N; ll++) {
-                    aux1[0] = points[ii];
-                    aux1[1] = points[jj];
-                    aux1[2] = points[kk];
-                    if (orientation(aux1, points[ll], 3) == 0) return 0;
-                }
-            }
-        }
-    }
-
-    // Check that no 5-tuple is co-spherical
-    for (int ii=0; ii<N; ii++) {
-        for (int jj=ii+1; jj<N; jj++) {
-            for (int kk=jj+1; kk<N; kk++) {
-                for (int ll=kk+1; ll<N; ll++) {
-                    for (int mm=ll+1; mm<N; mm++) {
-                        aux2[0] = points[ii];
-                        aux2[1] = points[jj];
-                        aux2[2] = points[kk];
-                        aux2[3] = points[ll];
-                        if (in_sphere(aux2, points[mm], 3) == 0) return 0;
-                    }
-                }
-            }
-        }
-    }
-
-    return 1;
-}
-
-
 typedef struct setup {
     int dim;
     int N_points;
@@ -170,61 +128,6 @@ void extract_vertices_ncell(const s_setup *setup, const s_ncell *ncell, double *
 }
 
 
-// s_ncell *get_adjacent_ncell_opposite_to_v(const s_setup *setup, const s_ncell *ncell, int vertex_id)
-// {
-//     for (int ii=0; ii<setup->dim+1; ii++) {
-//         if (ncell->vertex_id[ii] == vertex_id) {
-//             return ncell->opposite[ii];
-//         }
-//     }
-//     assert(1 == 0 && "Query ncell does not contain vertex_id.");
-//     exit(1);
-// }   
-
-
-// void extract_ids_facet(const s_setup *setup, const s_ncell *ncell1, int v1_localid, int *out)
-// {  
-//     int kk=0;
-//     for (int ii=0; ii<setup->dim+1; ii++) {
-//         if (ii != v1_localid) {
-//             out[kk] = ncell1->vertex_id[ii];
-//             kk++;
-//         }
-//     }
-// }
-
-
-// void extract_vertices_facet(const s_setup *setup, const s_ncell *ncell1, int v1_localid, double **out)
-// {
-//     int facet_vertex_id[setup->dim];
-//     extract_ids_facet(setup, ncell1, v1_localid, facet_vertex_id);
-//     for (int ii=0; ii<setup->dim; ii++) {
-//         for (int jj=0; jj<setup->dim; jj++) {
-//             out[ii][jj] = setup->points[facet_vertex_id[ii]][jj];
-//         }
-//     }
-// }
-
-
-// void extract_ids_ridge(const s_setup *setup, const s_ncell *ncell1, int v1_localid, int v2_localid, int *out)
-// {
-//     // TODO   
-// }
-
-
-// void extract_ids_n3cell(const s_setup *setup, const s_ncell *ncell, int v1_localid, int v2_localid, int v3_localid, int *out)
-// {   // TODO TEST !!
-//     assert(v2_localid != v1_localid && v2_localid != v3_localid && v1_localid != v3_localid && "Must be different ids.");
-//     int kk = 0;
-//     for (int ii=0; ii<setup->dim+1; ii++) {
-//         if (ii != v1_localid && ii != v2_localid && ii != v3_localid) {
-//             out[kk] = ncell->vertex_id[ii];
-//             kk++;
-//         }
-//     }
-// }
-
-
 void extract_ids_face(const s_setup *setup, const s_ncell *ncell, const int *v_localid, int dim_face, int *out)
 {   // v_localid[dim-dim_face], out[dim_face+1]
     int kk = 0;
@@ -257,9 +160,6 @@ void face_localid_of_adjacent_ncell(const s_setup *setup, const s_ncell *ncell, 
     int vertex_id_face[dim_face+1];
     extract_ids_face(setup, ncell, v_localid, dim_face, vertex_id_face);
 
-    // print_ncell(setup, ncell);
-    // print_ncell(setup, adjacent);
-
     int kk = 0;
     for (int ii=0; ii<setup->dim+1; ii++) {
         if (!inarray(vertex_id_face, dim_face+1, adjacent->vertex_id[ii])) {
@@ -268,22 +168,6 @@ void face_localid_of_adjacent_ncell(const s_setup *setup, const s_ncell *ncell, 
         }
     }
 }
-
-
-// void adjacent_localid_of_face(const s_setup *setup, const s_ncell *ncell, const int *v_localid,
-//                               int dim_face, const s_ncell *adjacent, int *out_v_localid)
-// {
-//     int vertex_id_face[dim_face + 1];
-//     extract_ids_face(setup, ncell, v_localid, dim_face, vertex_id_face);
-//     
-//     int kk = 0;
-//     for (int ii=0; ii<setup->dim+1; ii++) {
-//         if (!inarray(vertex_id_face, dim_face + 1, adjacent->vertex_id[ii])) {
-//             out_v_localid[kk] = ii;
-//             kk++;
-//         }
-//     }
-// }
 
 
 s_ncell *next_ncell_ridge_cycle(const s_setup *setup, const s_ncell *ncell, int v_localid_main, int v_localid_2, 
@@ -371,64 +255,6 @@ void find_center_mass(double **in, int N_points, int dim, double *out)
 }
 
 
-s_setup *initialize_setup(double **points, int N_points, int dim)
-{
-    // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL
-    double **setup_points = malloc_matrix(N_points + dim + 1, dim);
-    for (int ii=0; ii<N_points; ii++) {
-        for (int jj=0; jj<dim; jj++) {
-            setup_points[ii][jj] = points[ii][jj];
-        }
-    }
-    
-    double *CM = malloc(sizeof(double) * dim);
-    find_center_mass(points, N_points, dim, CM);
-    double maxd = max_distance(points, N_points, dim, CM);
-
-    // Build the vertices of a regular simplex in R^(dim+1) with circumsphere of radius s centered at origin
-    double s = 3 * maxd * dim * sqrt((dim+1.0)/dim);  // Scale so that inradius = 1.5 * maxd, original norm = sqrt(dim/(dim+1))
-    double **V = malloc_matrix(dim+1, dim+1); 
-    for (int ii = 0; ii < dim+1; ii++) {
-        for (int jj = 0; jj < dim+1; jj++) {
-            V[ii][jj] = ((ii == jj) ? 1.0 : 0.0) - 1.0/(dim+1);
-            V[ii][jj] *= s;
-        }
-    }
-    // Project in Rn by removing the last coordinate, and add CM to center around points
-    for (int ii=0; ii<dim+1; ii++) {
-        for (int jj=0; jj<dim; jj++) {
-            double aux = 2.0 * rand() / RAND_MAX - 1;  // ADD SOME NOISE TO AVOID COLINEARITIES
-            setup_points[N_points + ii][jj] = CM[jj] + V[ii][jj] + 0.001 * aux * s ; 
-        }
-    }
-    free_matrix(V, dim+1);
-    
-
-    // CHECKS???
-    if (dim == 3) assert(are_in_general_position_3d(setup_points, N_points+dim+1) == 1 && "setup points are not in general position.");
-    for (int ii=0; ii<N_points; ii++) {  // DEBUG 
-        assert(in_sphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
-    }
-
-
-    s_setup *setup = malloc(sizeof(s_setup));
-    setup->dim = dim;
-    setup->N_points = N_points + dim + 1;
-    setup->points = setup_points;
-    setup->CM = CM;
-
-    s_ncell *big_ncell = malloc_ncell(setup);
-    for (int ii=0; ii<setup->dim+1; ii++) {
-        big_ncell->vertex_id[ii] = N_points + ii;
-        big_ncell->opposite[ii] = NULL;
-    }
-    setup->head = big_ncell;
-    setup->N_ncells = 1;
-    
-    return setup;
-}
-
-
 int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell, int id_opposite)
 {   
     // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
@@ -464,10 +290,8 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
     int randi = (rand() % setup->N_ncells);
-    // printf("randi : %d, N_ncells : %d\n", randi, setup->N_ncells);
     for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
         current = current->next;
-        // if (ii < randi-1) assert(current->next != NULL && "Not sure...?");
     }
 
     // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
@@ -500,6 +324,36 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
     return current;
 }
 
+
+int is_delaunay_3d(const s_setup *setup)
+{
+    static double **vertices_ncell = NULL;
+    if (!vertices_ncell) vertices_ncell = malloc_matrix(4, 3);
+
+    s_ncell *current = setup->head;
+    while (current) {
+        extract_vertices_ncell(setup, current, vertices_ncell);
+        s_ncell *query = current->next;
+        while (query) {
+            for (int ii=0; ii<4; ii++) {
+                if (!inarray(current->vertex_id, 4, query->vertex_id[ii]) && 
+                    in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3) != -1) {
+                    printf("CONFLICT: (%d, %d, %d, %d) and %d\n", current->vertex_id[0], current->vertex_id[1], 
+                                           current->vertex_id[2], current->vertex_id[3], query->vertex_id[ii]);
+                    return 0;
+                }
+            }
+            query = query->next;
+        }
+        current = current->next;
+    }
+    return 1;
+}
+
+
+// ----------------------------------------------------------------------------------------------
+// --------------------------------------- PLOTS ------------------------------------------------
+// ----------------------------------------------------------------------------------------------
 
 void plot_ncell_3d(s_setup *setup, s_ncell *ncell, char *f_name, double *ranges)
 {

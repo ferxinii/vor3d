@@ -4,6 +4,10 @@
 #include "simplical_complex.c"
 
 
+// ---------------------------------------------------------------------------------------
+// ----------------------------------- STACK ---------------------------------------------
+// ---------------------------------------------------------------------------------------
+
 #define MAX_STACK_SIZE 10000
 
 typedef struct stack {
@@ -59,6 +63,10 @@ void stack_print(s_stack *stack)
     puts("");
 }
 
+
+// ---------------------------------------------------------------------------------------
+// ----------------------------------- FLIPS ---------------------------------------------
+// ---------------------------------------------------------------------------------------
 
 void flip14(s_setup *setup, s_ncell *container_ncell, int point_id, s_stack *stack)
 {   
@@ -261,30 +269,6 @@ int can_perform_flip32(const s_setup *setup, const s_ncell *ncell, int opp_cell_
             }
     }
     return 0;
-
-    // int num_cells_ridge;
-    // 
-    // num_cells_ridge = count_cycle_ridge(setup, ncell, opp_cell_id, 
-    //                                     id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[0]));
-    // if (num_cells_ridge == 3) {
-    //     *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[0]);
-    //     return 1;
-    // }
-    //
-    // num_cells_ridge = count_cycle_ridge(setup, ncell, opp_cell_id, 
-    //                                     id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[1]));
-    // if (num_cells_ridge == 3) {
-    //     *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[1]);
-    //     return 1;
-    // }
-    //
-    // num_cells_ridge = count_cycle_ridge(setup, ncell, opp_cell_id, 
-    //                                     id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[2]));
-    // if (num_cells_ridge == 3) {
-    //     *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[2]);
-    //     return 1;
-    // }
-    // return 0;
 }
 
 
@@ -462,6 +446,10 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
 }
 
 
+// ---------------------------------------------------------------------------------------
+// ----------------------------------- CASES ---------------------------------------------
+// ---------------------------------------------------------------------------------------
+
 int is_case_3(double **vertices_face, double *p, double *d)
 {
     double *aux[3];
@@ -530,6 +518,68 @@ int determine_case(double **vertices_face, double *p, double *d)
 }
 
 
+// ---------------------------------------------------------------------------------------
+// --------------------------------- ALGORITHM -------------------------------------------
+// ---------------------------------------------------------------------------------------
+
+s_setup *initialize_setup(double **points, int N_points, int dim)
+{
+    // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL
+    double **setup_points = malloc_matrix(N_points + dim + 1, dim);
+    for (int ii=0; ii<N_points; ii++) {
+        for (int jj=0; jj<dim; jj++) {
+            setup_points[ii][jj] = points[ii][jj];
+        }
+    }
+    
+    double *CM = malloc(sizeof(double) * dim);
+    find_center_mass(points, N_points, dim, CM);
+    double maxd = max_distance(points, N_points, dim, CM);
+
+    // Build the vertices of a regular simplex in R^(dim+1) with circumsphere of radius s centered at origin
+    double s = 3 * maxd * dim * sqrt((dim+1.0)/dim);  // Scale so that inradius = 1.5 * maxd, original norm = sqrt(dim/(dim+1))
+    double **V = malloc_matrix(dim+1, dim+1); 
+    for (int ii = 0; ii < dim+1; ii++) {
+        for (int jj = 0; jj < dim+1; jj++) {
+            V[ii][jj] = ((ii == jj) ? 1.0 : 0.0) - 1.0/(dim+1);
+            V[ii][jj] *= s;
+        }
+    }
+    // Project in Rn by removing the last coordinate, and add CM to center around points
+    for (int ii=0; ii<dim+1; ii++) {
+        for (int jj=0; jj<dim; jj++) {
+            double aux = 2.0 * rand() / RAND_MAX - 1;  // ADD SOME NOISE TO AVOID COLINEARITIES
+            setup_points[N_points + ii][jj] = CM[jj] + V[ii][jj] + 0.001 * aux * s ; 
+        }
+    }
+    free_matrix(V, dim+1);
+    
+
+    // CHECKS???
+    if (dim == 3) assert(are_in_general_position_3d(setup_points, N_points+dim+1) == 1 && "setup points are not in general position.");
+    for (int ii=0; ii<N_points; ii++) {  // DEBUG 
+        assert(in_sphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
+    }
+
+
+    s_setup *setup = malloc(sizeof(s_setup));
+    setup->dim = dim;
+    setup->N_points = N_points + dim + 1;
+    setup->points = setup_points;
+    setup->CM = CM;
+
+    s_ncell *big_ncell = malloc_ncell(setup);
+    for (int ii=0; ii<setup->dim+1; ii++) {
+        big_ncell->vertex_id[ii] = N_points + ii;
+        big_ncell->opposite[ii] = NULL;
+    }
+    setup->head = big_ncell;
+    setup->N_ncells = 1;
+    
+    return setup;
+}
+
+
 void flip_tetrahedra(s_setup *setup, s_stack *stack, s_ncell *ncell, int opp_cell_id)
 {
     static double **coords_face = NULL;
@@ -566,69 +616,7 @@ void flip_tetrahedra(s_setup *setup, s_stack *stack, s_ncell *ncell, int opp_cel
             exit(1);
     }
 
-        
     return;
-}
-
-
-int DEBUG_ncell_exists(s_setup *setup)
-{
-    int a1 = 0;
-    int a2 = 1;
-    int a3 = 4;
-    int a4 = 5;
-
-    s_ncell *current = setup->head;
-    while (current) {
-        if (inarray(current->vertex_id, 4, a1) &&
-            inarray(current->vertex_id, 4, a2) &&
-            inarray(current->vertex_id, 4, a3) &&
-            inarray(current->vertex_id, 4, a4)) {
-            return 1;
-        }
-        current = current->next;
-    }
-    return 0;
-}
-
-
-int is_delaunay_3d(const s_setup *setup)
-{
-    static double **vertices_ncell = NULL;
-    if (!vertices_ncell) vertices_ncell = malloc_matrix(4, 3);
-
-    s_ncell *current = setup->head;
-    // int kk = 0;
-    while (current) {
-        extract_vertices_ncell(setup, current, vertices_ncell);
-        s_ncell *query = current->next;
-        while (query) {
-            for (int ii=0; ii<4; ii++) {
-                if (!inarray(current->vertex_id, 4, query->vertex_id[ii]) && 
-                    in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3) != -1) {
-                    printf("CONFLICT: (%d, %d, %d, %d) and %d\n", current->vertex_id[0], current->vertex_id[1], 
-                                           current->vertex_id[2], current->vertex_id[3], query->vertex_id[ii]);
-                    return 0;
-                }
-            }
-            query = query->next;
-        }
-        // for (int ii=0; ii<setup->N_points - 4; ii++) {
-        //     if (!inarray(current->vertex_id, 4, ii) && 
-        //         ii != setup->N_points - 1 &&
-        //         ii != setup->N_points - 2 &&
-        //         ii != setup->N_points - 3 &&
-        //         ii != setup->N_points - 4) {
-        //         if (insphere(vertices_ncell, setup->points[ii], 3) != -1) {
-        //             printf("CONFLICT: ncell=%d, vertex_id=%d\n",kk, ii);
-        //             return 0;
-        //         }
-        //     }
-        // }
-        current = current->next;
-        // kk++;
-    }
-    return 1;
 }
 
 
@@ -641,7 +629,6 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack)
     flip14(setup, container_ncell, point_id, stack);
 
     while (stack->size > 0) {
-        // printf("DEBUG NCELL EXISTS : %d\n", DEBUG_ncell_exists(setup));
         s_ncell *current = stack_pop(stack);
 
         if (current) {  // UNSURE IF THIS IS RIGHT... TODO
@@ -688,13 +675,12 @@ s_setup *construct_dt_3d(double **points, int N_points)
                                                                  
     for (int ii=0; ii<N_points; ii++) {
         insert_one_point(setup, ii, stack);
-        if (is_delaunay_3d(setup) != 1) {
+        if (is_delaunay_3d(setup) != 1) {  // TODO, DEBUG
             printf("ERROR? NOT DELAUNAY AFTER INSERTING: %d\n", ii);
             exit(1);
         }
-        // assert(is_delaunay_3d(setup) == 1 && "Is not delaunay after inserting points...");
     }
-    
+
     remove_big_tetra(setup);
     return setup;
 }

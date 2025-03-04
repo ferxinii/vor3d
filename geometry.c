@@ -23,34 +23,6 @@ int orientation(double **p, double *q, int dim)
         printf("orientation not implemented for this dimension.");
         exit(1);
     }
-    // static double **M = NULL;
-    // static int dim_prev = 0;
-    // if (dim != dim_prev) {
-    //     if (M) free(M);
-    //     M = malloc_matrix(dim, dim);
-    //     dim_prev = dim;
-    // }
-    //
-    // for (int ii=0; ii<dim; ii++) {
-    //     for (int jj=0; jj<dim; jj++) {
-    //         M[ii][jj] = p[ii][jj] - q[jj];
-    //     }
-    // }
-    // 
-    // const double TOL = 1e-6;
-    //
-    // double det = determinant(M, dim);
-    // if (fabs(det) < TOL) {
-    //     puts("Determinant inside tolerance.");
-    //     return 0;
-    // }
-    // if (det > 0) {
-    //     return 1;
-    // } else if (det < 0) {
-    //     return -1;
-    // } else {
-    //     return 0;
-    // }
 }
 
 
@@ -78,160 +50,229 @@ int in_sphere(double **p, double *q, int dim)
         else if (aux < 0) return -factor;
         else return 0;
 
-        // else {
-        //     puts("WHAT TO DO? Simply return output of either?");
-        //     exit(1);
-        // }
     } else {
         printf("orientation not implemented for this dimension.");
         exit(1);
     }
-    // static double **p_aux = NULL;
-    // static int prev_dim = 0;
-    // if (dim != prev_dim) {
-    //     if (p_aux) free_matrix(p_aux, prev_dim+1);
-    //     p_aux = malloc_matrix(dim+1, dim+1);
-    //     prev_dim = dim;
-    // }
-    // copy_matrix(p, p_aux, dim+1, dim);
-    //
-    // // check if p is oriented, if not, orient p_aux!
-    // int oriented = orientation(p, p[dim], dim);  
-    // if (oriented == 0) {
-    //     puts("COPLANAR POINTS! Is this legal?\n");
-    //     return 0;
-    // }
-    // if (oriented == -1) {
-    //     double *row_aux = p_aux[0];
-    //     p_aux[0] = p_aux[1];
-    //     p_aux[1] = row_aux;
-    //     if (oriented == orientation(p_aux, p_aux[dim], dim) ) {
-    //         printf("WHAT?, %d, %d\n", oriented, orientation(p_aux, p_aux[dim], dim));
-    //         print_matrix(p, dim+1, dim);
-    //         print_matrix(p_aux, dim+1, dim);
-    //     }
-    // }
-    // assert(orientation(p_aux, p_aux[dim], dim) == 1 && "points are not oriented");
-    //
-    // double norm_q_2 = norm_squared(q, dim);
-    // double **M = malloc_matrix(dim+2, dim+2);
-    // for (int ii=0; ii<dim+1; ii++) {
-    //     for (int jj=0; jj<dim; jj++) {
-    //         M[ii][jj] = p_aux[ii][jj] - q[jj];
-    //     }
-    //     M[ii][dim] = norm_squared(p_aux[ii], dim) - norm_q_2;
-    // }
-    //
-    // const double TOL = 1e-6;
-    // double det = determinant(M, dim+1);
-    // if (fabs(det) < TOL) {
-    //     puts("Determinant inside tolerance.");
-    //     return 0;
-    // }
-    // if (det > 0) {
-    //     return 1;
-    // } else if (det < 0) {
-    //     return -1;
-    // } else {
-    //     return 0;
-    // }
 }
 
 
-// --------------------------- SEGMENT TRIANGLE INTERSECTION --------------------------------
-
-// Compute the cross product: result = u x v
-void cross(const double u[3], const double v[3], double result[3]) {
-    result[0] = u[1]*v[2] - u[2]*v[1];
-    result[1] = u[2]*v[0] - u[0]*v[2];
-    result[2] = u[0]*v[1] - u[1]*v[0];
-}
-
-// Compute the dot product of two vectors
-double dot(const double u[3], const double v[3]) {
-    return u[0]*v[0] + u[1]*v[1] + u[2]*v[2];
-}
-
-// Compute the vector difference: result = u - v
-void subtract(const double u[3], const double v[3], double result[3]) {
-    result[0] = u[0] - v[0];
-    result[1] = u[1] - v[1];
-    result[2] = u[2] - v[2];
-}
-
-/*
- * Returns 1 if the segment from p0 to p1 intersects the triangle defined by vertices v0, v1, v2;
- * otherwise, returns 0.
- *
- * This implementation is based on the Möller–Trumbore algorithm for ray–triangle intersection.
- * The segment is parameterized such that t = 0 corresponds to p0 and t = 1 to p1.
- */
-int segment_crosses_triangle_3d(double **triangle, double *p0, const double *p1) 
+int segment_crosses_triangle_3d(double **triangle, double *a, double *b)
 {
-    const double EPSILON = 1e-9;
-
-    double *v0 = triangle[0];
-    double *v1 = triangle[1];
-    double *v2 = triangle[2];
-
-    double d[3];
-    subtract(p1, p0, d); // Direction of the segment
-
-    double e1[3], e2[3];
-    subtract(v1, v0, e1);
-    subtract(v2, v0, e2);
-
-    double h[3];
-    cross(d, e2, h);
-    double a = dot(e1, h);
+    static double **aux = NULL;  // multithreaded will not work!
+    if (!aux) aux = malloc_matrix(3, 3);
+    aux[2][0] = a[0];     aux[2][1] = a[1];     aux[2][2] = a[2];
     
-    if (fabs(a) < EPSILON)
-        return 0;  // The segment is parallel to the triangle plane or triangle is degenerate
+    if (orientation(triangle, a, 3) == orientation(triangle, b, 3)) return 0;
 
-    double f = 1.0 / a;
-    double s[3];
-    subtract(p0, v0, s);
-    // u and v are the barycentric coordinates
-    double u = f * dot(s, h);
-    if (u < 0.0 || u > 1.0)
-        return 0;  // The intersection lies outside of the triangle
+    aux[0][0] = triangle[0][0];     aux[0][1] = triangle[0][1];     aux[0][2] = triangle[0][2];
+    aux[1][0] = triangle[1][0];     aux[1][1] = triangle[1][1];     aux[1][2] = triangle[1][2];
+    int s1 = orientation(aux, b, 3);
 
-    double q[3];
-    cross(s, e1, q);
-    double v = f * dot(d, q);
-    if (v < 0.0 || u + v > 1.0)
-        return 0;  // The intersection lies outside of the triangle
+    aux[0][0] = triangle[1][0];     aux[0][1] = triangle[1][1];     aux[0][2] = triangle[1][2];
+    aux[1][0] = triangle[2][0];     aux[1][1] = triangle[2][1];     aux[1][2] = triangle[2][2];
+    int s2 = orientation(aux, b, 3);
 
-    double t = f * dot(e2, q);
-    if (t < 0.0 || t > 1.0)
-        return 0;  // The intersection point is not on the segment
+    aux[0][0] = triangle[2][0];     aux[0][1] = triangle[2][1];     aux[0][2] = triangle[2][2];
+    aux[1][0] = triangle[0][0];     aux[1][1] = triangle[0][1];     aux[1][2] = triangle[0][2];
+    int s3 = orientation(aux, b, 3);
+    
+    if (s1 == s2 && s2 == s3 && s3 == s1) return 1;
+    else return 0;
+}
+
+
+int are_in_general_position_3d(double **points, int N)
+{
+    static double **aux1 = NULL;
+    if (!aux1) aux1 = malloc_matrix(3, 3);
+    static double **aux2 = NULL;
+    if (!aux2) aux2 = malloc_matrix(4, 3);
+
+    // Check that no 4-tuple is co-planar
+    for (int ii=0; ii<N; ii++) {
+        for (int jj=ii+1; jj<N; jj++) {
+            for (int kk=jj+1; kk<N; kk++) {
+                for (int ll=kk+1; ll<N; ll++) {
+                    aux1[0] = points[ii];
+                    aux1[1] = points[jj];
+                    aux1[2] = points[kk];
+                    if (orientation(aux1, points[ll], 3) == 0) return 0;
+                }
+            }
+        }
+    }
+
+    // Check that no 5-tuple is co-spherical
+    for (int ii=0; ii<N; ii++) {
+        for (int jj=ii+1; jj<N; jj++) {
+            for (int kk=jj+1; kk<N; kk++) {
+                for (int ll=kk+1; ll<N; ll++) {
+                    for (int mm=ll+1; mm<N; mm++) {
+                        aux2[0] = points[ii];
+                        aux2[1] = points[jj];
+                        aux2[2] = points[kk];
+                        aux2[3] = points[ll];
+                        if (in_sphere(aux2, points[mm], 3) == 0) return 0;
+                    }
+                }
+            }
+        }
+    }
 
     return 1;
 }
 
 
-// int segment_crosses_triangle_3d(double **triangle, double *a, double *b)
+// ----------------------------------------------------------------------------------------------
+// ----------------------------------------- OLD ------------------------------------------------
+// ----------------------------------------------------------------------------------------------
+
+// int orientation_OLD(double **p, double *q, int dim)
 // {
-//     static double **aux = NULL;  // multithreaded will not work!
-//     if (!aux) aux = malloc_matrix(3, 3);
-//     aux[2][0] = a[0];     aux[2][1] = a[1];     aux[2][2] = a[2];
+//     static double **M = NULL;
+//     static int dim_prev = 0;
+//     if (dim != dim_prev) {
+//         if (M) free(M);
+//         M = malloc_matrix(dim, dim);
+//         dim_prev = dim;
+//     }
+//
+//     for (int ii=0; ii<dim; ii++) {
+//         for (int jj=0; jj<dim; jj++) {
+//             M[ii][jj] = p[ii][jj] - q[jj];
+//         }
+//     }
+//
+//     const double TOL = 1e-6;
+//
+//     double det = determinant(M, dim);
+//     if (fabs(det) < TOL) {
+//         puts("Determinant inside tolerance.");
+//         return 0;
+//     }
+//     if (det > 0) {
+//         return 1;
+//     } else if (det < 0) {
+//         return -1;
+//     } else {
+//         return 0;
+//     }
+// }
+//
+//
+// int insphere_OLD(double **p, double *q, int dim)
+// {
+//     static double **p_aux = NULL;
+//     static int prev_dim = 0;
+//     if (dim != prev_dim) {
+//         if (p_aux) free_matrix(p_aux, prev_dim+1);
+//         p_aux = malloc_matrix(dim+1, dim+1);
+//         prev_dim = dim;
+//     }
+//     copy_matrix(p, p_aux, dim+1, dim);
+//
+//     // check if p is oriented, if not, orient p_aux!
+//     int oriented = orientation(p, p[dim], dim);  
+//     if (oriented == 0) {
+//         puts("COPLANAR POINTS! Is this legal?\n");
+//         return 0;
+//     }
+//     if (oriented == -1) {
+//         double *row_aux = p_aux[0];
+//         p_aux[0] = p_aux[1];
+//         p_aux[1] = row_aux;
+//         if (oriented == orientation(p_aux, p_aux[dim], dim) ) {
+//             printf("WHAT?, %d, %d\n", oriented, orientation(p_aux, p_aux[dim], dim));
+//             print_matrix(p, dim+1, dim);
+//             print_matrix(p_aux, dim+1, dim);
+//         }
+//     }
+//     assert(orientation(p_aux, p_aux[dim], dim) == 1 && "points are not oriented");
+//
+//     double norm_q_2 = norm_squared(q, dim);
+//     double **M = malloc_matrix(dim+2, dim+2);
+//     for (int ii=0; ii<dim+1; ii++) {
+//         for (int jj=0; jj<dim; jj++) {
+//             M[ii][jj] = p_aux[ii][jj] - q[jj];
+//         }
+//         M[ii][dim] = norm_squared(p_aux[ii], dim) - norm_q_2;
+//     }
+//
+//     const double TOL = 1e-6;
+//     double det = determinant(M, dim+1);
+//     if (fabs(det) < TOL) {
+//         puts("Determinant inside tolerance.");
+//         return 0;
+//     }
+//     if (det > 0) {
+//         return 1;
+//     } else if (det < 0) {
+//         return -1;
+//     } else {
+//         return 0;
+//     }
+// }
+//
+//
+// void cross(const double u[3], const double v[3], double result[3]) {
+//     result[0] = u[1]*v[2] - u[2]*v[1];
+//     result[1] = u[2]*v[0] - u[0]*v[2];
+//     result[2] = u[0]*v[1] - u[1]*v[0];
+// }
+//
+// double dot(const double u[3], const double v[3]) {
+//     return u[0]*v[0] + u[1]*v[1] + u[2]*v[2];
+// }
+//
+// void subtract(const double u[3], const double v[3], double result[3]) {
+//     result[0] = u[0] - v[0];
+//     result[1] = u[1] - v[1];
+//     result[2] = u[2] - v[2];
+// }
+//
+//
+// int segment_crosses_triangle_3d_OLD(double **triangle, double *p0, const double *p1) 
+// {   // Based on the Möller–Trumbore algorithm for ray–triangle intersection
+//     const double EPSILON = 1e-9;
+//
+//     double *v0 = triangle[0];
+//     double *v1 = triangle[1];
+//     double *v2 = triangle[2];
+//
+//     double d[3];
+//     subtract(p1, p0, d); // Direction of the segment
+//
+//     double e1[3], e2[3];
+//     subtract(v1, v0, e1);
+//     subtract(v2, v0, e2);
+//
+//     double h[3];
+//     cross(d, e2, h);
+//     double a = dot(e1, h);
 //     
-//     if (orientation(triangle, a, 3) == orientation(triangle, b, 3)) return 0;
+//     if (fabs(a) < EPSILON)
+//         return 0;  // The segment is parallel to the triangle plane or triangle is degenerate
 //
-//     aux[0][0] = triangle[0][0];     aux[0][1] = triangle[0][1];     aux[0][2] = triangle[0][2];
-//     aux[1][0] = triangle[1][0];     aux[1][1] = triangle[1][1];     aux[1][2] = triangle[1][2];
-//     int s1 = orientation(aux, b, 3);
+//     double f = 1.0 / a;
+//     double s[3];
+//     subtract(p0, v0, s);
+//     // u and v are the barycentric coordinates
+//     double u = f * dot(s, h);
+//     if (u < 0.0 || u > 1.0)
+//         return 0;  // The intersection lies outside of the triangle
 //
-//     aux[0][0] = triangle[1][0];     aux[0][1] = triangle[1][1];     aux[0][2] = triangle[1][2];
-//     aux[1][0] = triangle[2][0];     aux[1][1] = triangle[2][1];     aux[1][2] = triangle[2][2];
-//     int s2 = orientation(aux, b, 3);
+//     double q[3];
+//     cross(s, e1, q);
+//     double v = f * dot(d, q);
+//     if (v < 0.0 || u + v > 1.0)
+//         return 0;  // The intersection lies outside of the triangle
 //
-//     aux[0][0] = triangle[2][0];     aux[0][1] = triangle[2][1];     aux[0][2] = triangle[2][2];
-//     aux[1][0] = triangle[0][0];     aux[1][1] = triangle[0][1];     aux[1][2] = triangle[0][2];
-//     int s3 = orientation(aux, b, 3);
-//     
-//     if (s1 == s2 && s2 == s3 && s3 == s1) return 1;
-//     else return 0;
+//     double t = f * dot(e2, q);
+//     if (t < 0.0 || t > 1.0)
+//         return 0;  // The intersection point is not on the segment
+//
+//     return 1;
 // }
 
 
