@@ -124,6 +124,24 @@ int are_in_general_position_3d(double **points, int N)
 }
 
 
+void find_center_mass(double **in, int N_points, int dim, double *out)
+{
+    for (int ii=0; ii<dim; ii++) {
+        out[ii] = in[0][ii];
+    }
+
+    for (int ii=1; ii<N_points; ii++) {
+        for (int jj=0; jj<dim; jj++) {
+            out[jj] += in[ii][jj];
+        }
+    }
+
+    for (int ii=0; ii<dim; ii++) {
+        out[ii] /= N_points;
+    }
+}
+
+
 // ----------------------------------------------------------------------------------------------
 // ----------------------------------------- OLD ------------------------------------------------
 // ----------------------------------------------------------------------------------------------

@@ -669,8 +669,6 @@ s_setup *construct_dt_3d(double **points, int N_points)
     s_stack *stack = stack_create();
     s_setup *setup = initialize_setup(points, N_points, 3);
 
-    printf("N_POINTS: %d\n", setup->N_points);
-    print_ncells(setup);
     assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
                                                                  
     for (int ii=0; ii<N_points; ii++) {

@@ -24,7 +24,7 @@ typedef struct ncell {
     struct ncell **opposite;
     struct ncell *next;  // Linked list of cells
     struct ncell *prev;
-    int mark;  // Used in flood-fill algorithms, i.e. to find the star of an (n-3)-cell.
+    int mark;  // Used to mark particular ncells
 } s_ncell;
 
 
@@ -234,24 +234,6 @@ void mark_ncells_incident_face(const s_setup *setup, s_ncell *ncell, const int *
     
     // Recursion:
     mark_ncells_incident_face_STEP(setup, ncell, v_localid, dim_face);
-}
-
-
-void find_center_mass(double **in, int N_points, int dim, double *out)
-{
-    for (int ii=0; ii<dim; ii++) {
-        out[ii] = in[0][ii];
-    }
-
-    for (int ii=1; ii<N_points; ii++) {
-        for (int jj=0; jj<dim; jj++) {
-            out[jj] += in[ii][jj];
-        }
-    }
-
-    for (int ii=0; ii<dim; ii++) {
-        out[ii] /= N_points;
-    }
 }
 
 
