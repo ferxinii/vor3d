@@ -17,6 +17,16 @@ double **malloc_matrix(int N1, int N2)
 }
 
 
+int **malloc_matrix_int(int N1, int N2)
+{
+    int **array = malloc(sizeof(int*) * N1);
+    for (int ii=0; ii<N1; ii++) {
+        array[ii] = malloc(sizeof(int) * N2);
+    }
+    return array;
+}
+
+
 void free_matrix(double **array, int N1)
 {
     for (int ii=0; ii<N1; ii++) {
@@ -47,7 +57,7 @@ void print_matrix(double **array, int N1, int N2)
 }
 
 
-double norm_squared(double *v, int dim)
+double norm_squared(const double *v, int dim)
 {
     double out = 0;
     for (int ii=0; ii<dim; ii++) {
@@ -57,7 +67,7 @@ double norm_squared(double *v, int dim)
 }
 
 
-double norm_difference(double *a, double *b, int dim)
+double norm_difference(const double *a, const double *b, int dim)
 {
     double out = 0;
     for (int ii=0; ii<dim; ii++) {

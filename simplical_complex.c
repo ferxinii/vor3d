@@ -25,6 +25,7 @@ typedef struct ncell {
     struct ncell *next;  // Linked list of cells
     struct ncell *prev;
     int mark;  // Used to mark particular ncells
+    int count;
 } s_ncell;
 
 
@@ -193,7 +194,10 @@ int count_cycle_ridge(const s_setup *setup, const s_ncell *ncell, int v_localid_
     const s_ncell *current = ncell;
     while (counter < maxit) {
         int new_v_localid_main, new_v_localid_2;
-        if (!current->opposite[v_localid_main]) return 0;  // THIS IS TO CHECK THERE IS INDEED A NEXT CELL; TODO HANDLE THIS BETTER??
+        if (current->opposite[v_localid_main] == NULL) {
+            printf("DEBUG: Warning, ridge cycle is not complete...\n");
+            return -1;
+        }
 
         s_ncell *next = next_ncell_ridge_cycle(setup, current, v_localid_main, v_localid_2, 
                                               &new_v_localid_main, &new_v_localid_2);

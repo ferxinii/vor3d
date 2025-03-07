@@ -12,6 +12,7 @@
 #include "geometry.c"
 #include "simplical_complex.c"
 #include "dt_3d_incremental.c"
+#include "vd_3d.c"
 
 
 void random_points_3d(int N, double **out) 
@@ -382,4 +383,44 @@ int main(void) {
     double ranges2[6] = {0, 1, 0, 1, 0, 1};
     plot_dt_3d(ss, "random_example/out", ranges2);
     
+
+    // VORONOI DIAGRAM
+    puts("\n\n------------- VORONOI DIAGRAM ---------------");
+    // printf("VALID NCELLS: %d\n", count_valid_ncells_reduced_triangulation(dt_setup));
+    s_vdiagram *vdiagram = initialize_vdiagram(dt_setup);
+    s_bound_poly *bp = malloc(sizeof(s_bound_poly));
+    bp->Np = 4;
+    bp->Nf = 4;
+    bp->faces = malloc_matrix_int(4, 3);
+    bp->points = malloc_matrix(4, 3);
+    double s = 100;
+    bp->points[0][0] = -s;     bp->points[0][1] = -s;     bp->points[0][2] = -s;
+    bp->points[1][0] = -s;     bp->points[1][1] = s;      bp->points[1][2] = s;
+    bp->points[2][0] = s;      bp->points[2][1] = -s;     bp->points[2][2] = s;
+    bp->points[3][0] = s;      bp->points[3][1] = s;      bp->points[3][2] = -s;
+    bp->faces[0][0] = 0;     bp->faces[0][1] = 1;     bp->faces[0][2] = 2;
+    bp->faces[1][0] = 0;     bp->faces[1][1] = 1;     bp->faces[1][2] = 3;
+    bp->faces[2][0] = 3;     bp->faces[2][1] = 1;     bp->faces[2][2] = 2;
+    bp->faces[3][0] = 2;     bp->faces[3][1] = 3;     bp->faces[3][2] = 0;
+
+    vdiagram->bpoly = bp;
+
+    s_vcell *vd = extract_voronoi_cell(vdiagram, dt_setup, 0);
+
+    print_vcell(vd);
+
+    // ORDERING OF FACES?  -> DOES NOT CHANGE NUMBERING! FACES ARE ALREADY ORDERED :)
+    // s_vface *vface = vd->head;
+    // for (int ii=0; ii<7; ii++) {
+    //     order_vertices_face(vdiagram, vface);
+    //     vface = vface->next;
+    // }
+    // print_vcell(vd);
+
+    // int **vcell_triang, N_triangles;
+    // triangulate_vcell(vdiagram, vd, &vcell_triang, &N_triangles);
+    // ranges2[0] = -0.5; ranges2[1] = 3.5;
+    // ranges2[2] = -6.5; ranges2[3] = 0.5;
+    // ranges2[4] = -3.5; ranges2[5] = 3.5;
+    // plot_vcell(vdiagram, vd, "vd/0", ranges2);
 }

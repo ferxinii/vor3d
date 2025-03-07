@@ -653,6 +653,19 @@ void remove_big_tetra(s_setup *setup)
                 if (current->next) (current->next)->prev = current->prev;
                 if (current->prev) (current->prev)->next = next;
                 else setup->head = current->next;
+
+                // Update opposite's opposite to NULL
+                for (int jj=0; jj<4; jj++) {
+                    if (current->opposite[jj]) {
+                        for (int kk=0; kk<4; kk++) {
+                            if (current->opposite[jj]->opposite[kk] == current) {
+                                current->opposite[jj]->opposite[kk] = NULL;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 free_ncell(current);
                 setup->N_ncells--;
                 break;
@@ -661,6 +674,24 @@ void remove_big_tetra(s_setup *setup)
         current = next;
     }
     setup->N_points -= 4;
+}
+
+
+int count_valid_ncells_reduced_triangulation(const s_setup *setup)
+{
+    int kk = 0;
+    s_ncell *current = setup->head;
+    while (current) {
+        s_ncell *next = current->next;
+        for (int ii=0; ii<4; ii++) {
+            if (current->vertex_id[ii] >= setup->N_points - 4) {  // This checks if a vertex is part of BIG TETRA
+                kk++;
+                break;
+            }
+        }
+        current = next;
+    }
+    return setup->N_ncells - kk;
 }
 
 

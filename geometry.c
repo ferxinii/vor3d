@@ -142,6 +142,130 @@ void find_center_mass(double **in, int N_points, int dim, double *out)
 }
 
 
+void cross_3d(const double *u, const double *v, double *out)
+{
+    out[0] = u[1]*v[2] - u[2]*v[1];
+    out[1] = u[2]*v[0] - u[0]*v[2];
+    out[2] = u[0]*v[1] - u[1]*v[0];
+}
+
+
+double dot_3d(const double *u, const double *v)
+{
+    return u[0]*v[0] + u[1]*v[1] + u[2]*v[2];
+}
+
+
+void subtract_3d(const double *u, const double *v, double *result)
+{
+    result[0] = u[0] - v[0];
+    result[1] = u[1] - v[1];
+    result[2] = u[2] - v[2];
+}
+
+
+double compute_signed_angle(const double *ref, const double *vec, const double *normal)
+{  // With reference to the plane determined by normal
+    double cross[3];
+    cross_3d(ref, vec, cross);
+
+    double dot = dot_3d(ref, vec);
+    
+    return atan2(dot_3d(normal, cross), dot);
+}
+
+
+int ray_triangle_intersection_3d(double **triangle, const double *origin, const double *dir, double *intersection) 
+{   // Based on the Möller–Trumbore algorithm
+    const double EPSILON = 1e-9;
+
+    // Retrieve the triangle vertices
+    double *v0 = triangle[0];
+    double *v1 = triangle[1];
+    double *v2 = triangle[2];
+
+    // Compute edges of the triangle: e1 = v1 - v0, e2 = v2 - v0
+    double e1[3], e2[3];
+    subtract_3d(v1, v0, e1);
+    subtract_3d(v2, v0, e2);
+
+    // Compute the determinant
+    double h[3];
+    cross_3d(dir, e2, h);
+    double a = dot_3d(e1, h);
+    if (fabs(a) < EPSILON)
+        return 0;  // The ray is parallel to the triangle plane or the triangle is degenerate
+
+    double f = 1.0 / a;
+    double s[3];
+    subtract_3d(origin, v0, s);
+
+    // Compute the barycentric coordinate u
+    double u = f * dot_3d(s, h);
+    if (u < 0.0 || u > 1.0)
+        return 0;  // The intersection lies outside the triangle
+
+    double q[3];
+    cross_3d(s, e1, q);
+
+    // Compute the barycentric coordinate v
+    double v = f * dot_3d(dir, q);
+    if (v < 0.0 || (u + v) > 1.0)
+        return 0;  // The intersection lies outside the triangle
+
+    // Compute the parameter t to determine the intersection point along the ray
+    double t = f * dot_3d(e2, q);
+
+    if (t < EPSILON)  // For a ray, we only require t to be positive
+        return 0;  
+
+    // Compute the intersection point: origin + t * dir
+    intersection[0] = origin[0] + t * dir[0];
+    intersection[1] = origin[1] + t * dir[1];
+    intersection[2] = origin[2] + t * dir[2];
+
+    return 1;
+}
+
+
+int intersect_edge_with_plane(const double *edgeStart, const double *edgeEnd, 
+                              const double *planePoint, const double *planeNormal,
+                              double *intersection)
+{
+    const double EPSILON = 1e-9;
+    double dir[3];
+    // Compute edge direction: dir = edgeEnd - edgeStart
+    subtract_3d(edgeEnd, edgeStart, dir);
+    
+    // Compute the dot product of the plane normal and edge direction
+    double denom = dot_3d(planeNormal, dir);
+    if (fabs(denom) < EPSILON) {
+        // The edge is parallel to the plane (or lies in the plane)
+        return 0;  // No valid intersection or the edge is coplanar
+    }
+    
+    // Compute parameter t where the intersection occurs on the edge
+    double diff[3];
+    subtract_3d(planePoint, edgeStart, diff);
+    double t = dot_3d(planeNormal, diff) / denom;
+    
+    // Check if the intersection point lies within the segment
+    if (t < 0.0 || t > 1.0) {
+        // Intersection exists but not within the segment
+        return 0;
+    }
+    
+    // Compute the intersection point: edgeStart + t * dir
+    intersection[0] = edgeStart[0] + t * dir[0];
+    intersection[1] = edgeStart[1] + t * dir[1];
+    intersection[2] = edgeStart[2] + t * dir[2];
+    
+    return 1;  // Intersection found and written to *intersection
+}
+
+
+
+
 // ----------------------------------------------------------------------------------------------
 // ----------------------------------------- OLD ------------------------------------------------
 // ----------------------------------------------------------------------------------------------
@@ -230,67 +354,6 @@ void find_center_mass(double **in, int N_points, int dim, double *out)
 //     } else {
 //         return 0;
 //     }
-// }
-//
-//
-// void cross(const double u[3], const double v[3], double result[3]) {
-//     result[0] = u[1]*v[2] - u[2]*v[1];
-//     result[1] = u[2]*v[0] - u[0]*v[2];
-//     result[2] = u[0]*v[1] - u[1]*v[0];
-// }
-//
-// double dot(const double u[3], const double v[3]) {
-//     return u[0]*v[0] + u[1]*v[1] + u[2]*v[2];
-// }
-//
-// void subtract(const double u[3], const double v[3], double result[3]) {
-//     result[0] = u[0] - v[0];
-//     result[1] = u[1] - v[1];
-//     result[2] = u[2] - v[2];
-// }
-//
-//
-// int segment_crosses_triangle_3d_OLD(double **triangle, double *p0, const double *p1) 
-// {   // Based on the Möller–Trumbore algorithm for ray–triangle intersection
-//     const double EPSILON = 1e-9;
-//
-//     double *v0 = triangle[0];
-//     double *v1 = triangle[1];
-//     double *v2 = triangle[2];
-//
-//     double d[3];
-//     subtract(p1, p0, d); // Direction of the segment
-//
-//     double e1[3], e2[3];
-//     subtract(v1, v0, e1);
-//     subtract(v2, v0, e2);
-//
-//     double h[3];
-//     cross(d, e2, h);
-//     double a = dot(e1, h);
-//     
-//     if (fabs(a) < EPSILON)
-//         return 0;  // The segment is parallel to the triangle plane or triangle is degenerate
-//
-//     double f = 1.0 / a;
-//     double s[3];
-//     subtract(p0, v0, s);
-//     // u and v are the barycentric coordinates
-//     double u = f * dot(s, h);
-//     if (u < 0.0 || u > 1.0)
-//         return 0;  // The intersection lies outside of the triangle
-//
-//     double q[3];
-//     cross(s, e1, q);
-//     double v = f * dot(d, q);
-//     if (v < 0.0 || u + v > 1.0)
-//         return 0;  // The intersection lies outside of the triangle
-//
-//     double t = f * dot(e2, q);
-//     if (t < 0.0 || t > 1.0)
-//         return 0;  // The intersection point is not on the segment
-//
-//     return 1;
 // }
 
 
