@@ -195,7 +195,6 @@ int count_cycle_ridge(const s_setup *setup, const s_ncell *ncell, int v_localid_
     while (counter < maxit) {
         int new_v_localid_main, new_v_localid_2;
         if (current->opposite[v_localid_main] == NULL) {
-            printf("DEBUG: Warning, ridge cycle is not complete...\n");
             return -1;
         }
 

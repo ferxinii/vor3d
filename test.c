@@ -387,13 +387,12 @@ int main(void) {
     // VORONOI DIAGRAM
     puts("\n\n------------- VORONOI DIAGRAM ---------------");
     // printf("VALID NCELLS: %d\n", count_valid_ncells_reduced_triangulation(dt_setup));
-    s_vdiagram *vdiagram = initialize_vdiagram(dt_setup);
     s_bound_poly *bp = malloc(sizeof(s_bound_poly));
     bp->Np = 4;
     bp->Nf = 4;
     bp->faces = malloc_matrix_int(4, 3);
     bp->points = malloc_matrix(4, 3);
-    double s = 100;
+    double s = 5;
     bp->points[0][0] = -s;     bp->points[0][1] = -s;     bp->points[0][2] = -s;
     bp->points[1][0] = -s;     bp->points[1][1] = s;      bp->points[1][2] = s;
     bp->points[2][0] = s;      bp->points[2][1] = -s;     bp->points[2][2] = s;
@@ -403,24 +402,12 @@ int main(void) {
     bp->faces[2][0] = 3;     bp->faces[2][1] = 1;     bp->faces[2][2] = 2;
     bp->faces[3][0] = 2;     bp->faces[3][1] = 3;     bp->faces[3][2] = 0;
 
-    vdiagram->bpoly = bp;
-
-    s_vcell *vd = extract_voronoi_cell(vdiagram, dt_setup, 0);
-
-    print_vcell(vd);
-
-    // ORDERING OF FACES?  -> DOES NOT CHANGE NUMBERING! FACES ARE ALREADY ORDERED :)
-    // s_vface *vface = vd->head;
-    // for (int ii=0; ii<7; ii++) {
-    //     order_vertices_face(vdiagram, vface);
-    //     vface = vface->next;
-    // }
-    // print_vcell(vd);
-
-    // int **vcell_triang, N_triangles;
-    // triangulate_vcell(vdiagram, vd, &vcell_triang, &N_triangles);
-    // ranges2[0] = -0.5; ranges2[1] = 3.5;
-    // ranges2[2] = -6.5; ranges2[3] = 0.5;
-    // ranges2[4] = -3.5; ranges2[5] = 3.5;
-    // plot_vcell(vdiagram, vd, "vd/0", ranges2);
+    
+    s_vdiagram *vd = voronoi_from_delaunay_3d(dt_setup, bp);
+    print_vdiagram(vd);
+    
+    ranges2[0] = -5; ranges2[1] = 5;
+    ranges2[2] = -5; ranges2[3] = 5;
+    ranges2[4] = -5; ranges2[5] = 5;
+    plot_vdiagram(vd, "vd/diagram", ranges2);
 }
