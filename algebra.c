@@ -88,6 +88,14 @@ double max_distance(double **p, int N, int dim, double *q)
 }
 
 
+void normalize_inplace(double *v, int dim)
+{
+    double norm = sqrt(norm_squared(v, dim));
+    for (int ii=0; ii<dim; ii++) {
+        v[ii] = v[ii] / norm;
+    }
+}
+
 // int PLU_inplace(double **A, int N, double tol, int *P, int *num_permut) 
 // {
 //     *num_permut = 0;

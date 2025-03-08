@@ -164,15 +164,15 @@ void subtract_3d(const double *u, const double *v, double *result)
 }
 
 
-double compute_signed_angle(const double *ref, const double *vec, const double *normal)
-{  // With reference to the plane determined by normal
-    double cross[3];
-    cross_3d(ref, vec, cross);
-
-    double dot = dot_3d(ref, vec);
-    
-    return atan2(dot_3d(normal, cross), dot);
-}
+// double compute_signed_angle(const double *ref, const double *vec, const double *normal)
+// {  // With reference to the plane determined by normal
+//     double cross[3];
+//     cross_3d(ref, vec, cross);
+//
+//     double dot = dot_3d(ref, vec);
+//     
+//     return atan2(dot_3d(normal, cross), dot);
+// }
 
 
 int ray_triangle_intersection_3d(double **triangle, const double *origin, const double *dir, double *intersection) 
@@ -226,44 +226,6 @@ int ray_triangle_intersection_3d(double **triangle, const double *origin, const 
 
     return 1;
 }
-
-
-int intersect_edge_with_plane(const double *edgeStart, const double *edgeEnd, 
-                              const double *planePoint, const double *planeNormal,
-                              double *intersection)
-{
-    const double EPSILON = 1e-9;
-    double dir[3];
-    // Compute edge direction: dir = edgeEnd - edgeStart
-    subtract_3d(edgeEnd, edgeStart, dir);
-    
-    // Compute the dot product of the plane normal and edge direction
-    double denom = dot_3d(planeNormal, dir);
-    if (fabs(denom) < EPSILON) {
-        // The edge is parallel to the plane (or lies in the plane)
-        return 0;  // No valid intersection or the edge is coplanar
-    }
-    
-    // Compute parameter t where the intersection occurs on the edge
-    double diff[3];
-    subtract_3d(planePoint, edgeStart, diff);
-    double t = dot_3d(planeNormal, diff) / denom;
-    
-    // Check if the intersection point lies within the segment
-    if (t < 0.0 || t > 1.0) {
-        // Intersection exists but not within the segment
-        return 0;
-    }
-    
-    // Compute the intersection point: edgeStart + t * dir
-    intersection[0] = edgeStart[0] + t * dir[0];
-    intersection[1] = edgeStart[1] + t * dir[1];
-    intersection[2] = edgeStart[2] + t * dir[2];
-    
-    return 1;  // Intersection found and written to *intersection
-}
-
-
 
 
 // ----------------------------------------------------------------------------------------------

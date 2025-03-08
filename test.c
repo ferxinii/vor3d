@@ -389,25 +389,33 @@ int main(void) {
     // printf("VALID NCELLS: %d\n", count_valid_ncells_reduced_triangulation(dt_setup));
     s_bound_poly *bp = malloc(sizeof(s_bound_poly));
     bp->Np = 4;
-    bp->Nf = 4;
-    bp->faces = malloc_matrix_int(4, 3);
+    // bp->Nf = 4;
+    // bp->faces = malloc_matrix_int(4, 3);
     bp->points = malloc_matrix(4, 3);
     double s = 5;
     bp->points[0][0] = -s;     bp->points[0][1] = -s;     bp->points[0][2] = -s;
     bp->points[1][0] = -s;     bp->points[1][1] = s;      bp->points[1][2] = s;
     bp->points[2][0] = s;      bp->points[2][1] = -s;     bp->points[2][2] = s;
     bp->points[3][0] = s;      bp->points[3][1] = s;      bp->points[3][2] = -s;
-    bp->faces[0][0] = 0;     bp->faces[0][1] = 1;     bp->faces[0][2] = 2;
-    bp->faces[1][0] = 0;     bp->faces[1][1] = 1;     bp->faces[1][2] = 3;
-    bp->faces[2][0] = 3;     bp->faces[2][1] = 1;     bp->faces[2][2] = 2;
-    bp->faces[3][0] = 2;     bp->faces[3][1] = 3;     bp->faces[3][2] = 0;
+    // bp->faces[0][0] = 0;     bp->faces[0][1] = 1;     bp->faces[0][2] = 2;
+    // bp->faces[1][0] = 0;     bp->faces[1][1] = 1;     bp->faces[1][2] = 3;
+    // bp->faces[2][0] = 3;     bp->faces[2][1] = 1;     bp->faces[2][2] = 2;
+    // bp->faces[3][0] = 2;     bp->faces[3][1] = 3;     bp->faces[3][2] = 0;
+    
 
+    // TESTING IS_INSIDE_CONVHULL, SEEMS OK
+    extract_dmax_bp(bp);
+    extract_convhull_bp(bp);
+    double queryp[3] = {1, 2, 1};
+    printf("IS INSIDE CONVHULL %d, expected 1\n", is_inside_convhull(queryp, bp->points, bp->Np, bp->faces, bp->fnormals, bp->Nf));
+    queryp[0] = 10*s; queryp[1] = 2*s; queryp[2] = 10*s;
+    printf("IS INSIDE CONVHULL %d, expected 0\n\n", is_inside_convhull(queryp, bp->points, bp->Np, bp->faces, bp->fnormals, bp->Nf));
     
     s_vdiagram *vd = voronoi_from_delaunay_3d(dt_setup, bp);
     print_vdiagram(vd);
     
-    ranges2[0] = -5; ranges2[1] = 5;
-    ranges2[2] = -5; ranges2[3] = 5;
-    ranges2[4] = -5; ranges2[5] = 5;
+    ranges2[0] = -6; ranges2[1] = 6;
+    ranges2[2] = -6; ranges2[3] = 6;
+    ranges2[4] = -6; ranges2[5] = 6;
     plot_vdiagram(vd, "vd/diagram", ranges2);
 }
