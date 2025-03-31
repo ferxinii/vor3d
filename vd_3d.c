@@ -1,30 +1,19 @@
 // [ ] TODO Improve malloc of vertices, or check if i have reached VCELL_MAX_VERTICES to increase size as needed
-// [ ] IMPROVE RAY INTERSECTION WITH BOUNDING BOX...
-// [ ] Plot each cell a different color
-
-
+#ifndef VD_3D_C
+#define VD_3D_C
 
 #include "simplical_complex.c"
 #include <float.h>
 #define CONVHULL_3D_ENABLE
 #include "convhull_3d.h"
+#include "bpoly.c"
 
-#define VCELL_MAX_VERTICES 1000
-
-typedef struct bound_poly {
-    int Np;
-    double **points;
-    int Nf;
-    int *faces;  // Its flat! Nf x 3
-    double **fnormals;
-    double dmax;  // Max distance between two pairs of points
-} s_bound_poly;
+#define VCELL_BLOCK_VERTICES 500
 
 
 typedef struct vdiagram {
     int N_vcells;
-    // struct vcell *head, *tail;  // linked list of vcells
-    struct vcell **vcells;  // N_vcells x 1
+    struct vcell **vcells;  // Array of pointers to the cells, N_vcells x 1
     const struct bound_poly *bpoly;
     double **seeds;
 } s_vdiagram;
@@ -34,6 +23,7 @@ typedef struct vcell {
     int seed_id;
     // struct vcell *next;     // linked list of vcells
     int Nv;
+    int Nv_capacity;
     double **vertices;  // Nv x 3
     int **origin_vertices;  // Nv x 4, LAST column indicates the dual ncell if POSITIVE,
                             // if -1: real extension. The rest of the columns indicate the delaunay indices
@@ -48,180 +38,25 @@ typedef struct vcell {
 } s_vcell;
 
 
-ch_vertex *convert_points_to_chvertex(double **points, int Np)
+void free_vcell(s_vcell *vcell)
 {
-    ch_vertex *out = malloc(sizeof(ch_vertex) * Np);
-    for (int ii=0; ii<Np; ii++) {
-        out[ii].x = points[ii][0];
-        out[ii].y = points[ii][1];
-        out[ii].z = points[ii][2];
-    }
-    return out;
+    free_matrix(vcell->vertices, vcell->Nv_capacity);
+    free_matrix_int(vcell->origin_vertices, vcell->Nv_capacity);
+    free(vcell->faces);
+    free_matrix(vcell->fnormals, vcell->Nf);
+    free(vcell);
 }
 
 
-void add_noise_to_bp(s_bound_poly *bpoly)
-{   // ADD SOME NOISE TO AVOID COLINEARITIES... Necessary??
-    for (int ii=0; ii<bpoly->Np; ii++) {
-        for (int jj=0; jj<3; jj++) {
-            double aux = 2.0 * rand() / RAND_MAX - 1;  
-            bpoly->points[ii][jj] += 0.001 * aux;
-        }
-    }
-}
-
-
-void extract_dmax_bp(s_bound_poly *bpoly)
+void free_vdiagram(s_vdiagram *vdiagram)
 {
-    double dmax = 0; 
-    for (int ii=0; ii<bpoly->Np-1; ii++) {
-        for (int jj=ii+1; jj<bpoly->Np; jj++) {
-            double d = norm_difference(bpoly->points[ii], bpoly->points[jj], 3);
-            if (d > dmax) 
-                dmax = d;
-        }
+    for (int ii=0; ii<vdiagram->N_vcells; ii++) {
+        free_vcell(vdiagram->vcells[ii]);
     }
-    bpoly->dmax = dmax;
-}
-
-
-double **extract_normals_from_ch(ch_vertex *vertices, int Nv, int *faces, int Nf, double *ch_CM)
-{   // Normalized normals
-    static double **vertices_face = NULL;
-    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
-
-    double **out = malloc_matrix(Nf, 3);
-    for (int ii=0; ii<Nf; ii++) {
-        ch_vertex v0 = vertices[faces[ii*3+0]];
-        ch_vertex v1 = vertices[faces[ii*3+1]];
-        ch_vertex v2 = vertices[faces[ii*3+2]];
-
-        double d1[3], d2[3];
-        d1[0] = v1.x - v0.x;
-        d1[1] = v1.y - v0.y;
-        d1[2] = v1.z - v0.z;
-        d2[0] = v2.x - v0.x;
-        d2[1] = v2.y - v0.y;
-        d2[2] = v2.z - v0.z;
-
-        double n[3];
-        cross_3d(d1, d2, n);
-        normalize_inplace(n, 3);
-        
-        vertices_face[0][0] = v0.x;     vertices_face[0][1] = v0.y;     vertices_face[0][2] = v0.z;
-        vertices_face[1][0] = v1.x;     vertices_face[1][1] = v1.y;     vertices_face[1][2] = v1.z;
-        vertices_face[2][0] = v2.x;     vertices_face[2][1] = v2.y;     vertices_face[2][2] = v2.z;
-        double fc[3], dir[3];
-        find_center_mass(vertices_face, 3, 3, fc);
-        subtract_3d(fc, ch_CM, dir);
-        double dot = dot_3d(dir, n);
-        if (dot < 0) {
-            n[0] = -n[0];
-            n[1] = -n[1];
-            n[2] = -n[2];
-            puts("DEBUG: Normal flipped! Is this normal?");
-        }
-
-        out[ii][0] = n[0];
-        out[ii][1] = n[1];
-        out[ii][2] = n[2];
-    }
-    return out;
-}
-
-
-void extract_convhull_bp(s_bound_poly *bpoly)
-{   
-    ch_vertex *pch = convert_points_to_chvertex(bpoly->points, bpoly->Np);
-
-    convhull_3d_build(pch, bpoly->Np, &bpoly->faces, &bpoly->Nf);
-    
-    double CM[3];
-    find_center_mass(bpoly->points, bpoly->Np, 3, CM);
-    double **normals = extract_normals_from_ch(pch, bpoly->Np, bpoly->faces, bpoly->Nf, CM);
-    bpoly->fnormals = normals;
-    free(pch);
-}
-
-
-int is_inside_convhull(double *query, double **pch, int Np, int *faces, double **fnormals, int Nf)
-{   
-    double *pf[3], fc[3];
-    pf[0] = pch[faces[0]];
-    pf[1] = pch[faces[1]];
-    pf[2] = pch[faces[2]];
-    find_center_mass(pf, 3, 3, fc);
-    
-    double d[3];
-    subtract_3d(fc, query, d);
-    double dot = dot_3d(d, fnormals[0]);
-    assert(dot != 0 && "parallel normal...");
-
-    int prev_sign = dot > 0 ? 1 : -1;
-
-    for (int ii=1; ii<Nf; ii++) {
-        pf[0] = pch[faces[ii*3 + 0]];
-        pf[1] = pch[faces[ii*3 + 1]];
-        pf[2] = pch[faces[ii*3 + 2]];
-        find_center_mass(pf, 3, 3, fc);
-        
-        subtract_3d(fc, query, d);
-        dot = dot_3d(d, fnormals[ii]);
-        assert(dot != 0 && "parallel normal...");
-        int sign = dot > 0 ? 1 : -1;
-        if (prev_sign * sign < 0) {// Check change in sign
-            return 0;
-        }
-
-        prev_sign = sign;
-    }
-    return 1;
-}
-
-
-void segment_convex_hull_intersection(const double *p0, const double *p1, double **pch, int Np, const int *faces, 
-                                     double **fnormals, int Nf, int *ind1, double *i1, int *ind2, double *i2)
-{       // ind1 indicates if i1 is a valid intersection, simil 2
-    double tmin = 0, tmax = 1;
-
-    double p1_p0[3];
-    subtract_3d(p1, p0, p1_p0);
-
-    for (int ii=0; ii<Nf; ii++) {
-        double *n = fnormals[ii];
-        double den = dot_3d(n, p1_p0);
-        assert(fabs(den) > 1e-6 && "Perpendicular normal with segment.");
-
-        double *q = pch[faces[ii*3]];
-        double q_p0[3];     
-        subtract_3d(q, p0, q_p0);
-        double t = dot_3d(n, q_p0) / den;
-
-        if (den < 0) {
-            tmin = fmax(tmin, t);
-        } else if (den >0) {
-            tmax = fmin(tmax, t);
-        }
-    }
-    
-    *ind1 = 0;
-    *ind2 = 0;
-    int intersection = 0;
-    double TOL = 1e-6;
-    if (tmin > TOL && tmin < tmax) {
-        *ind1 = 1;
-        i1[0] = p0[0] + tmin * p1_p0[0];  
-        i1[1] = p0[1] + tmin * p1_p0[1];  
-        i1[2] = p0[2] + tmin * p1_p0[2];  
-        intersection = 1;
-    }
-    if (tmax < 1-TOL && tmin < tmax) {
-        *ind2 = 1;
-        i2[0] = p0[0] + tmax * p1_p0[0];  
-        i2[1] = p0[1] + tmax * p1_p0[1];  
-        i2[2] = p0[2] + tmax * p1_p0[2];  
-        intersection = 1;
-    }
+    free(vdiagram->vcells);
+    free_matrix(vdiagram->seeds, vdiagram->N_vcells);
+    free_bpoly((s_bound_poly *)vdiagram->bpoly);
+    free(vdiagram);
 }
 
 
@@ -235,18 +70,6 @@ s_vdiagram *malloc_vdiagram(const s_setup *setup)
     out->vcells = malloc(sizeof(s_vcell*) * setup->N_points);
     out->bpoly = NULL;
     return out;
-}
-
-
-void initialize_ncells_counter(const s_setup *setup)
-{
-    s_ncell *current = setup->head;
-    int ii = 0;
-    while (current) {
-        current->count = ii;
-        current = current->next;
-        ii++;
-    }
 }
 
 
@@ -289,14 +112,33 @@ s_vcell *malloc_vcell(int seed_id)
     s_vcell *out = malloc(sizeof(s_vcell));
     out->seed_id = seed_id;
     out->Nv = 0;
-    out->vertices = malloc_matrix(VCELL_MAX_VERTICES, 3);
-    out->origin_vertices = malloc_matrix_int(VCELL_MAX_VERTICES, 4);
+    out->Nv_capacity = VCELL_BLOCK_VERTICES;
+    out->vertices = malloc_matrix(VCELL_BLOCK_VERTICES, 3);
+    out->origin_vertices = malloc_matrix_int(VCELL_BLOCK_VERTICES, 4);
     return out;
+}
+
+
+void increase_num_vertices_if_needed(s_vcell *vcell)
+{
+   // Check if we need to increase the capacity.
+    if (vcell->Nv + 1 >= vcell->Nv_capacity) {
+        int new_capacity = vcell->Nv_capacity + VCELL_BLOCK_VERTICES;
+
+        vcell->vertices = realloc_matrix(vcell->vertices, vcell->Nv, new_capacity, 3);
+        
+        vcell->origin_vertices = realloc_matrix_int(vcell->origin_vertices, vcell->Nv, new_capacity, 4);
+        
+        printf("DEBUG: Increased ncell capacity: old=%d, new=%d\n", vcell->Nv_capacity, new_capacity);
+        vcell->Nv_capacity = new_capacity;
+    }
 }
 
 
 int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *vcell)
 {   // Returns the index of the vertex
+    increase_num_vertices_if_needed(vcell);
+
     // First check if the vertex already exists
     for (int ii=0; ii<vcell->Nv; ii++) {
         if (vcell->origin_vertices[ii][3] == ncell->count) {
@@ -325,6 +167,8 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
 
 int add_vvertex_from_coords(double *coords, int *dt_face_vid, s_vcell *vcell)
 {   // This function assumes that the vertex does not already exist!
+    increase_num_vertices_if_needed(vcell);
+
     vcell->vertices[vcell->Nv][0] = coords[0];
     vcell->vertices[vcell->Nv][1] = coords[1];
     vcell->vertices[vcell->Nv][2] = coords[2];
@@ -342,6 +186,8 @@ int add_vvertex_from_coords(double *coords, int *dt_face_vid, s_vcell *vcell)
 
 int add_vvertex_as_extension(double *coords, int *dt_face_vid, s_vcell *vcell)
 {   // This function assumes that the vertex does not already exist!
+    increase_num_vertices_if_needed(vcell);
+
     vcell->vertices[vcell->Nv][0] = coords[0];
     vcell->vertices[vcell->Nv][1] = coords[1];
     vcell->vertices[vcell->Nv][2] = coords[2];
@@ -359,6 +205,8 @@ int add_vvertex_as_extension(double *coords, int *dt_face_vid, s_vcell *vcell)
 
 int add_vvertex_from_bpoly(const s_bound_poly *bp, int id, s_vcell *vcell)
 {
+    increase_num_vertices_if_needed(vcell);
+
     vcell->vertices[vcell->Nv][0] = bp->points[id][0];
     vcell->vertices[vcell->Nv][1] = bp->points[id][1];
     vcell->vertices[vcell->Nv][2] = bp->points[id][2];
@@ -373,7 +221,9 @@ int add_vvertex_from_bpoly(const s_bound_poly *bp, int id, s_vcell *vcell)
 
 
 int add_vvertex_from_segment(double *i1, int bp_vid_1, int bp_vid_2, int face_id, s_vcell *vcell)
-{
+{   // i1 has the coordinates of the intersection!
+    increase_num_vertices_if_needed(vcell);
+
     vcell->vertices[vcell->Nv][0] = i1[0];
     vcell->vertices[vcell->Nv][1] = i1[1];
     vcell->vertices[vcell->Nv][2] = i1[2];
@@ -385,58 +235,6 @@ int add_vvertex_from_segment(double *i1, int bp_vid_1, int bp_vid_2, int face_id
     vcell->Nv++;
 
     return vcell->Nv - 1;
-}
-
-
-
-void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **out)
-{
-    out[0][0] = bpoly->points[face[0]][0];
-    out[0][1] = bpoly->points[face[0]][1];
-    out[0][2] = bpoly->points[face[0]][2];
-
-    out[1][0] = bpoly->points[face[1]][0];
-    out[1][1] = bpoly->points[face[1]][1];
-    out[1][2] = bpoly->points[face[1]][2];
-
-    out[2][0] = bpoly->points[face[2]][0];
-    out[2][1] = bpoly->points[face[2]][1];
-    out[2][2] = bpoly->points[face[2]][2];
-}
-
-
-void find_intersection_with_bounding_poly(const s_bound_poly *bpoly, const double *origin, double *dir, double *intersection, double *extension)
-{   // in extension, we extend the intersection point in the ray direction a distance of 2*bpoly->dmax
-    normalize_inplace(dir, 3);
-
-    static double **face_v = NULL;
-    if (!face_v) face_v = malloc_matrix(3, 3);
-    double dmin = DBL_MAX;
-    int intersected = 0;
-
-    for (int ii=0; ii<bpoly->Nf; ii++) {
-        extract_vertices_face_bpoly(bpoly, &bpoly->faces[ii*3], face_v);
-        double intersection_aux[3];
-        int indicator = ray_triangle_intersection_3d(face_v, origin, dir, intersection_aux);
-        if (indicator == 1) {
-            double d = norm_difference(intersection_aux, origin, 3);
-            if (d < dmin) {
-                intersected = 1;
-                dmin = d;
-                intersection[0] = intersection_aux[0];
-                intersection[1] = intersection_aux[1];
-                intersection[2] = intersection_aux[2];
-            }
-        }
-    }
-    
-    assert(bpoly->dmax > 0.1 && "Is bpoly->dmax initialized?");
-    double s = 2;
-    extension[0] = intersection[0] + s * bpoly->dmax * dir[0];
-    extension[1] = intersection[1] + s * bpoly->dmax * dir[1];
-    extension[2] = intersection[2] + s * bpoly->dmax * dir[2];
-
-    assert(intersected != 0 && "Did not find any intersection with bounding poly.");
 }
 
 
@@ -467,36 +265,6 @@ int segment_vvertex_already_exists(const s_vcell *vcell, int p1, int p2)
 }
 
 
-void extract_face_center_and_normal(const s_setup *setup, const s_ncell *ncell, int face_localid, double *fc, double *n)
-{
-    static double **face_v = NULL;
-    if (!face_v) face_v = malloc_matrix(3, 3);
-    static double **ncell_v = NULL;
-    if (!ncell_v) ncell_v = malloc_matrix(4, 3);
-
-    extract_vertices_face(setup, ncell, &face_localid, 2, face_v);
-    extract_vertices_ncell(setup, ncell, ncell_v);
-
-    double d1[3], d2[3];
-    subtract_3d(face_v[1], face_v[0], d1);
-    subtract_3d(face_v[2], face_v[0], d2);
-    cross_3d(d1, d2, n);
-
-    double cc[3], v[3];
-    find_center_mass(face_v, 3, 3, fc);
-    find_center_mass(ncell_v, 4, 3, cc);
-    subtract_3d(fc, cc, v);
-
-    double dir_aux = dot_3d(v, n);
-    assert(dir_aux != 0 && "Vectors are perpendicular?");
-    if (dir_aux < 0) {
-        n[0] = -n[0];
-        n[1] = -n[1];
-        n[2] = -n[2];
-    } 
-}
-
-
 void extract_vface_BOUNDING(const s_vdiagram *vdiagram, const s_setup *setup, const s_ncell *ncell, int v_localid_vertex, int v_localid_2, s_vcell *vcell)
 {   
     // DIRECTION 1 OF UNCLOSED CYCLE 
@@ -522,9 +290,6 @@ void extract_vface_BOUNDING(const s_vdiagram *vdiagram, const s_setup *setup, co
 
         double intersection_A[3], extension_A[3];
         find_intersection_with_bounding_poly(vdiagram->bpoly, fc_A, n_A, intersection_A, extension_A);
-        // printf("INTERSECTION: %f, %f, %f\n", intersection_A[0], intersection_A[1], intersection_A[2]);
-        // printf("EXTENSION: %f, %f, %f\n", extension_A[0], extension_A[1], extension_A[2]);
-
         add_vvertex_from_coords(intersection_A, face_id, vcell);
         add_vvertex_as_extension(extension_A, face_id, vcell);
     }
@@ -545,17 +310,12 @@ void extract_vface_BOUNDING(const s_vdiagram *vdiagram, const s_setup *setup, co
     const s_ncell *ncell_B = current;
 
     extract_ids_face(setup, ncell_B, &v1_B, 2, face_id);
-    // printf("DEBUG: ncell_B=%d, v1=%d, v2=%d, face=%d,%d,%d\n", ncell_B->count, ncell_B->vertex_id[v1_B], ncell_B->vertex_id[v2_B], face_id[0], face_id[1], face_id[2]);
     if (!face_extension_already_exists(vcell, face_id)) {
         double fc_B[3], n_B[3];
         extract_face_center_and_normal(setup, ncell_B, v1_B, fc_B, n_B);
 
         double intersection_B[3], extension_B[3];
         find_intersection_with_bounding_poly(vdiagram->bpoly, fc_B, n_B, intersection_B, extension_B);
-        // printf("INTERSECTION: %f, %f, %f\n", intersection_B[0], intersection_B[1], intersection_B[2]);
-        // printf("EXTENSION: %f, %f, %f\n", extension_B[0], extension_B[1], extension_B[2]);
-
-        
         add_vvertex_from_coords(intersection_B, face_id, vcell);
         add_vvertex_as_extension(extension_B, face_id, vcell);
     }
@@ -573,9 +333,6 @@ void extract_vface(const s_vdiagram *vdiagram, const s_setup *setup, const s_nce
     while (v_ridge_2 == v_localid_vertex || v_ridge_2 == v_localid_2 || v_ridge_2 == v_ridge_1) {
         v_ridge_2++;
     }
-    // printf("vertex: %d, ridge: %d, v1: %d, v2: %d\n", ncell->vertex_id[v_localid_vertex], ncell->vertex_id[v_localid_2], 
-                                                    // ncell->vertex_id[v_ridge_1], ncell->vertex_id[v_ridge_2]);
-
 
     int Nv = count_cycle_ridge(setup, ncell, v_ridge_1, v_ridge_2);
     if (Nv == -1) {
@@ -613,8 +370,10 @@ void remove_artificial_extended_vertices(s_vcell *vcell)
     int kk = 0;
     for (int ii=0; ii<vcell->Nv; ii++) {
         if (vcell->origin_vertices[ii][3] != -2) {
-            vcell->vertices[ii - kk] = vcell->vertices[ii];
-            vcell->origin_vertices[ii - kk] = vcell->origin_vertices[ii];
+            copy_matrix(&vcell->vertices[ii], &vcell->vertices[ii-kk], 1, 3);
+            copy_matrix_int(&vcell->origin_vertices[ii], &vcell->origin_vertices[ii-kk], 1, 3);
+            // vcell->vertices[ii - kk] = vcell->vertices[ii];
+            // vcell->origin_vertices[ii - kk] = vcell->origin_vertices[ii];
         } else {
             kk++;
         }
@@ -625,10 +384,9 @@ void remove_artificial_extended_vertices(s_vcell *vcell)
 
 void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell)
 {   
-    int old_Nv = vcell->Nv;  // Just in case I add more points in the meantime
     const s_bound_poly *bp = vdiagram->bpoly;
     for (int ii=0; ii<bp->Np; ii++) {
-        if (is_inside_convhull(bp->points[ii], vcell->vertices, old_Nv, vcell->faces, vcell->fnormals, vcell->Nf)) {
+        if (is_inside_convhull(bp->points[ii], vcell->vertices, vcell->faces, vcell->fnormals, vcell->Nf)) {
             add_vvertex_from_bpoly(bp, ii, vcell);
         }
     }
@@ -639,7 +397,7 @@ void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell
         if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 0], bp->faces[ii*3 + 1])) {
             p0 = bp->points[bp->faces[ii*3 + 0]];
             p1 = bp->points[bp->faces[ii*3 + 1]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, old_Nv, vcell->faces, 
+            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
                                                  vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
             if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+0], bp->faces[ii*3+1], ii, vcell);
             if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+0], bp->faces[ii*3+1], ii, vcell);
@@ -648,7 +406,7 @@ void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell
         if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 0], bp->faces[ii*3 + 2])) {
             p0 = bp->points[bp->faces[ii*3 + 0]];
             p1 = bp->points[bp->faces[ii*3 + 2]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, old_Nv, vcell->faces, 
+            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
                                                  vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
             if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+0], bp->faces[ii*3+2], ii, vcell);
             if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+0], bp->faces[ii*3+2], ii, vcell);
@@ -657,7 +415,7 @@ void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell
         if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 2], bp->faces[ii*3 + 1])) {
             p0 = bp->points[bp->faces[ii*3 + 2]];
             p1 = bp->points[bp->faces[ii*3 + 1]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, old_Nv, vcell->faces, 
+            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
                                                  vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
             if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+2], bp->faces[ii*3+1], ii, vcell);
             if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+2], bp->faces[ii*3+1], ii, vcell);
@@ -671,7 +429,6 @@ void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell
 s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, int vertex_id)
 {
     // Find an ncell with this vertex
-    
     s_ncell *ncell = setup->head;
     while (!inarray(ncell->vertex_id, 4, vertex_id)) {
         ncell = ncell->next;
@@ -704,7 +461,7 @@ s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, 
         current = current->next;
     }
 
-
+    // First build convex hull of this extended vcell
     double CM[3];
     find_center_mass(vcell->vertices, vcell->Nv, 3, CM);
     int *faces, N_faces;
@@ -712,17 +469,20 @@ s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, 
     convhull_3d_build(vertices_aux, vcell->Nv, &faces, &N_faces);
     vcell->faces = faces;
     vcell->Nf = N_faces;
-    double **fnormals = extract_normals_from_ch(vertices_aux, vcell->Nv, faces, N_faces, CM);
+    double **fnormals = extract_normals_from_ch(vertices_aux, faces, N_faces, CM);
     vcell->fnormals = fnormals;
     free(vertices_aux);
-
+    
+    // Fix bounding box with bounding polyhedra and redo triangulation
     correctly_bound_with_bp_vertices(vdiagram, vcell);
+    free_matrix(vcell->fnormals, vcell->Nf);
+
     find_center_mass(vcell->vertices, vcell->Nv, 3, CM);
     vertices_aux = convert_points_to_chvertex(vcell->vertices, vcell->Nv);
     convhull_3d_build(vertices_aux, vcell->Nv, &faces, &N_faces);
     vcell->faces = faces;
     vcell->Nf = N_faces;
-    double **fnormals_2 = extract_normals_from_ch(vertices_aux, vcell->Nv, faces, N_faces, CM);
+    double **fnormals_2 = extract_normals_from_ch(vertices_aux, faces, N_faces, CM);
     vcell->fnormals = fnormals_2;  // TODO free previous normals!
     free(vertices_aux);
 
@@ -735,7 +495,6 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly)
     initialize_ncells_counter(setup);
 
     s_vdiagram *vdiagram = malloc_vdiagram(setup);
-    add_noise_to_bp(bpoly);
     vdiagram->bpoly = bpoly;
     
     for (int ii=0; ii<setup->N_points; ii++) {
@@ -863,7 +622,7 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges)
     fprintf(pipe, "set output '%s.png'\n", f_name);
     fprintf(pipe, "set pm3d depth\n");
     fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
-    fprintf(pipe, "set view 100, 10, \n");
+    fprintf(pipe, "set view 100, 10, 1.75\n");
     fprintf(pipe, "set xyplane at 0\n");
     fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
     fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
@@ -873,6 +632,7 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges)
     fprintf(pipe, "set zlabel 'z'\n");
     fflush(pipe);
 
+    // if (vdiagram->N_vcells > 30) vdiagram->N_vcells = 30;
 
     fprintf(pipe, "splot ");
     for (int jj=0; jj<vdiagram->N_vcells; jj++) {
@@ -891,28 +651,28 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges)
             fprintf(pipe, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle, ", colors[jj%8]);
 
         }
-        for (int ii=0; ii<vdiagram->bpoly->Nf; ii++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][0],
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][1], 
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][2]);
-            fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][0],
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][1], 
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][2]);
-            fprintf(pipe, "%f %f %f'\"", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][0],
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][1], 
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][2]);
-            fprintf(pipe, "w polygons fs transparent solid 0.01 fc 'black' notitle, ");
-        }
+        // for (int ii=0; ii<vdiagram->bpoly->Nf; ii++) {
+        //     fprintf(pipe, "\"<echo \'");
+        //     fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][0],
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][1], 
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][2]);
+        //     fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][0],
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][1], 
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][2]);
+        //     fprintf(pipe, "%f %f %f'\"", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][0],
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][1], 
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][2]);
+        //     fprintf(pipe, "w polygons fs transparent solid 0.01 fc 'black' notitle, ");
+        // }
 
-        fprintf(pipe, "\"<echo \'");
-        fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[jj][0], vdiagram->seeds[jj][1], vdiagram->seeds[jj][2]);
-        fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-        for (int kk=0; kk<vdiagram->bpoly->Np; kk++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\'\"", vdiagram->bpoly->points[kk][0], vdiagram->bpoly->points[kk][1], vdiagram->bpoly->points[kk][2]);
-            fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");    
-        }
+        // fprintf(pipe, "\"<echo \'");
+        // fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[jj][0], vdiagram->seeds[jj][1], vdiagram->seeds[jj][2]);
+        // fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
+        // for (int kk=0; kk<vdiagram->bpoly->Np; kk++) {
+        //     fprintf(pipe, "\"<echo \'");
+        //     fprintf(pipe, "%f %f %f\'\"", vdiagram->bpoly->points[kk][0], vdiagram->bpoly->points[kk][1], vdiagram->bpoly->points[kk][2]);
+        //     fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");    
+        // }
     }       
     fprintf(pipe, "\n");
 
@@ -943,29 +703,31 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges)
             fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[jj][0], vdiagram->seeds[jj][1], vdiagram->seeds[jj][2]);
             fprintf(pipe, "'\" pt 6 ps 2 lc rgb 'black' notitle, ");
 
-            for (int kk=0; kk<vdiagram->bpoly->Np; kk++) {
-                fprintf(pipe, "\"<echo \'");
-                fprintf(pipe, "%f %f %f\'\"", vdiagram->bpoly->points[kk][0], vdiagram->bpoly->points[kk][1], vdiagram->bpoly->points[kk][2]);
-                fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");    
-            }
+            // for (int kk=0; kk<vdiagram->bpoly->Np; kk++) {
+            //     fprintf(pipe, "\"<echo \'");
+            //     fprintf(pipe, "%f %f %f\'\"", vdiagram->bpoly->points[kk][0], vdiagram->bpoly->points[kk][1], vdiagram->bpoly->points[kk][2]);
+            //     fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");    
+            // }
 
         }
 
-        for (int ii=0; ii<vdiagram->bpoly->Nf; ii++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][0],
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][1], 
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][2]);
-            fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][0],
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][1], 
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][2]);
-            fprintf(pipe, "%f %f %f'\"", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][0],
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][1], 
-                                         vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][2]);
-            fprintf(pipe, "w polygons fs transparent solid 0.05 fc 'black' notitle, ");
-        }
+        // for (int ii=0; ii<vdiagram->bpoly->Nf; ii++) {
+        //     fprintf(pipe, "\"<echo \'");
+        //     fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][0],
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][1], 
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3]][2]);
+        //     fprintf(pipe, "%f %f %f\\n", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][0],
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][1], 
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+1]][2]);
+        //     fprintf(pipe, "%f %f %f'\"", vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][0],
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][1], 
+        //                                  vdiagram->bpoly->points[vdiagram->bpoly->faces[ii*3+2]][2]);
+        //     fprintf(pipe, "w polygons fs transparent solid 0.05 fc 'black' notitle, ");
+        // }
         fprintf(pipe, "\n");
     }
 
     pclose(pipe);
 }
+
+#endif

@@ -24,6 +24,12 @@ s_stack *stack_create(void)
 }
 
 
+void stack_free(s_stack *stack)
+{
+    free(stack->entry);
+}
+
+
 void stack_push(s_stack *stack, s_ncell *ncell)
 {
     assert(stack->size < MAX_STACK_SIZE && "Reached stack limit.");
@@ -532,7 +538,7 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
         }
     }
     
-    double *CM = malloc(sizeof(double) * dim);
+    double CM[dim]; /*  = malloc(sizeof(double) * dim); */
     find_center_mass(points, N_points, dim, CM);
     double maxd = max_distance(points, N_points, dim, CM);
 
@@ -566,7 +572,6 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
     setup->dim = dim;
     setup->N_points = N_points + dim + 1;
     setup->points = setup_points;
-    setup->CM = CM;
 
     s_ncell *big_ncell = malloc_ncell(setup);
     for (int ii=0; ii<setup->dim+1; ii++) {
@@ -673,6 +678,7 @@ void remove_big_tetra(s_setup *setup)
         }
         current = next;
     }
+    setup->points = realloc_matrix(setup->points, setup->N_points, setup->N_points-4, 3);
     setup->N_points -= 4;
 }
 
@@ -709,8 +715,8 @@ s_setup *construct_dt_3d(double **points, int N_points)
             exit(1);
         }
     }
-
+    
+    stack_free(stack);  
     remove_big_tetra(setup);
     return setup;
 }
-

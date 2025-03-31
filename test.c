@@ -13,6 +13,7 @@
 #include "simplical_complex.c"
 #include "dt_3d_incremental.c"
 #include "vd_3d.c"
+#include "bpoly.c"
 
 
 void random_points_3d(int N, double **out) 
@@ -93,6 +94,7 @@ int main(void) {
     printf("is_locally_delaunay(f4): %d\n\n", result);
 
 
+
     // WALKING, seems OK  -------------------------------------------
     double query[2] = {2, -2};
     s_ncell *selected = in_ncell_walk(&setup, query);
@@ -105,7 +107,7 @@ int main(void) {
 
     // SETUP COMPLEX  -----------------------------------------------
     s_setup *setup_test = initialize_setup(points, 5, 2);
-    (void) setup_test;
+    free_complex(setup_test);
 
 
     // CYCLIC ORDERING AROUND RIDGE  --------------------------------
@@ -138,6 +140,11 @@ int main(void) {
     print_marked(&setup);
 
 
+    free_ncell(ncell1);
+    free_ncell(ncell2);
+    free_ncell(ncell3);
+    free_ncell(ncell4);
+
     // INCREMENTAL ALGORITHM
     double **p_dt = malloc_matrix(2, 3);
     p_dt[0][0] = -1;    p_dt[0][1] = 0;      p_dt[0][2] = 0;
@@ -153,6 +160,7 @@ int main(void) {
     print_ncells(setup_dt);
 
     stack_print(stack);
+    free_complex(setup_dt);
 
 
     // INSERT_ONE_POINT
@@ -177,7 +185,7 @@ int main(void) {
     insert_one_point(setup2, 1, stack2);
     printf("After insertion, N_ncells = %d\n", setup2->N_ncells);
     print_ncells(setup2);
-
+    
     // plot_ncell_3d(setup2, setup2->head, "flip14/after2_1");
     // plot_ncell_3d(setup2, setup2->head->next, "flip14/after2_2");
     // plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after2_3");
@@ -186,6 +194,7 @@ int main(void) {
     // plot_ncell_3d(setup2, setup2->head->next->next->next->next->next, "flip14/after2_6");
     // plot_ncell_3d(setup2, setup2->head->next->next->next->next->next->next, "flip14/after2_7");
 
+    stack_free(stack2);
 
     // SEGMENT_CROSSES_TRIANGLE_3D
     double **triangle = malloc_matrix(3, 3);
@@ -196,6 +205,7 @@ int main(void) {
     double b[3] = {0.1, 0.1, -3};
     
     printf("crosses_triangle: %d\n", segment_crosses_triangle_3d(triangle, a, b));
+    free_matrix(triangle, 3);
 
 
     // FLIP23
@@ -236,6 +246,9 @@ int main(void) {
     flip32(&s2, stack, nc1, 0, 1, 2); 
     puts("\nFLIP32:");
     print_ncells(&s2);
+
+    free_ncell(nc1);
+    free_ncell(nc2);
 
     
     // FLIP44, seems ok!
@@ -301,7 +314,12 @@ int main(void) {
     // plot_ncell_3d(&s3, s3.head->next, "flip44/after2", ranges3);
     // plot_ncell_3d(&s3, s3.head->next->next, "flip44/after3", ranges3);
     // plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/after4", ranges3);
-
+    
+    free_ncell(nc1);
+    free_ncell(nc2);
+    free_ncell(nc3);
+    // NC4 IS ALREADY FREED BY THE FLIP!
+    stack_free(stack);
 
 
     // CONSTRUCT_DT_3D
@@ -387,35 +405,107 @@ int main(void) {
     // VORONOI DIAGRAM
     puts("\n\n------------- VORONOI DIAGRAM ---------------");
     // printf("VALID NCELLS: %d\n", count_valid_ncells_reduced_triangulation(dt_setup));
-    s_bound_poly *bp = malloc(sizeof(s_bound_poly));
-    bp->Np = 4;
-    // bp->Nf = 4;
-    // bp->faces = malloc_matrix_int(4, 3);
-    bp->points = malloc_matrix(4, 3);
+    double **bp_points = malloc_matrix(4, 3);
     double s = 5;
-    bp->points[0][0] = -s;     bp->points[0][1] = -s;     bp->points[0][2] = -s;
-    bp->points[1][0] = -s;     bp->points[1][1] = s;      bp->points[1][2] = s;
-    bp->points[2][0] = s;      bp->points[2][1] = -s;     bp->points[2][2] = s;
-    bp->points[3][0] = s;      bp->points[3][1] = s;      bp->points[3][2] = -s;
-    // bp->faces[0][0] = 0;     bp->faces[0][1] = 1;     bp->faces[0][2] = 2;
-    // bp->faces[1][0] = 0;     bp->faces[1][1] = 1;     bp->faces[1][2] = 3;
-    // bp->faces[2][0] = 3;     bp->faces[2][1] = 1;     bp->faces[2][2] = 2;
-    // bp->faces[3][0] = 2;     bp->faces[3][1] = 3;     bp->faces[3][2] = 0;
+    bp_points[0][0] = -s;     bp_points[0][1] = -s;     bp_points[0][2] = -s;
+    bp_points[1][0] = -s;     bp_points[1][1] = s;      bp_points[1][2] = s;
+    bp_points[2][0] = s;      bp_points[2][1] = -s;     bp_points[2][2] = s;
+    bp_points[3][0] = s;      bp_points[3][1] = s;      bp_points[3][2] = -s;
     
 
     // TESTING IS_INSIDE_CONVHULL, SEEMS OK
-    extract_dmax_bp(bp);
-    extract_convhull_bp(bp);
-    double queryp[3] = {1, 2, 1};
-    printf("IS INSIDE CONVHULL %d, expected 1\n", is_inside_convhull(queryp, bp->points, bp->Np, bp->faces, bp->fnormals, bp->Nf));
-    queryp[0] = 10*s; queryp[1] = 2*s; queryp[2] = 10*s;
-    printf("IS INSIDE CONVHULL %d, expected 0\n\n", is_inside_convhull(queryp, bp->points, bp->Np, bp->faces, bp->fnormals, bp->Nf));
+    // extract_convhull_bp(bp);
+    // double queryp[3] = {1, 2, 1};
+    // printf("IS INSIDE CONVHULL %d, expected 1\n", is_inside_convhull(queryp, bp->points, bp->faces, bp->fnormals, bp->Nf));
+    // queryp[0] = 10*s; queryp[1] = 2*s; queryp[2] = 10*s;
+    // printf("IS INSIDE CONVHULL %d, expected 0\n\n", is_inside_convhull(queryp, bp->points, bp->faces, bp->fnormals, bp->Nf));
     
+    s_bound_poly *bp = new_bpoly_from_points(bp_points, 4);
     s_vdiagram *vd = voronoi_from_delaunay_3d(dt_setup, bp);
     print_vdiagram(vd);
     
     ranges2[0] = -6; ranges2[1] = 6;
     ranges2[2] = -6; ranges2[3] = 6;
     ranges2[4] = -6; ranges2[5] = 6;
-    plot_vdiagram(vd, "vd/diagram", ranges2);
+    // plot_vdiagram(vd, "vd/diagram", ranges2);
+
+
+    // VORONOI 2
+    s_bound_poly *bp2 = new_bpoly_from_points(bp_points, 4);
+    s_vdiagram *vd2 = voronoi_from_delaunay_3d(dt_setup_2, bp2);
+    print_vdiagram(vd);
+    // plot_vdiagram(vd, "vd2/diagram", ranges2);
+
+
+    // VORONOI WITH RANDOM POINTS
+    s_bound_poly *bp3 = new_bpoly_from_points(bp_points, 4);
+    s_vdiagram *vd3 = voronoi_from_delaunay_3d(ss, bp3);
+    print_vdiagram(vd);
+    // plot_vdiagram(vd, "vd3/diagram", ranges2);
+    
+
+
+    // ------------------------------------------------------------------------------
+    // POISSON DISTRIBUTION
+    puts("NOW GENERATING POISSON DISTRIBUTION!");
+    double rmax = 2;
+    int Np_in;
+
+    s_bound_poly *bp4 = new_bpoly_from_points(bp_points, 4);
+    printf("MIN: %f, %f, %f\n", bp4->min[0], bp4->min[1], bp4->min[2]);
+    printf("MAX: %f, %f, %f\n", bp4->max[0], bp4->max[1], bp4->max[2]);
+    double **p_in = generate_poisson_dist_inside(bp4, rmax, &Np_in);
+    printf("Np inside bpoly : %d\n", Np_in);
+    plot_bpoly_with_points(bp4, p_in, Np_in, "poisson/test", ranges2);
+    
+    // VORONOI USING THIS DISTRIBUTION AS SEEDS
+    puts("Now constructin dt");
+    s_setup *ss4 = construct_dt_3d(p_in, Np_in);
+    puts("Now constructin vd");
+    s_vdiagram *vd4 = voronoi_from_delaunay_3d(ss4, bp4);
+    // puts("Now plotting vd");
+    // plot_vdiagram(vd4, "poisson/vd", ranges2);
+
+
+
+    // ------------------------------------------------------------------------------
+    int Np_LS;
+    double **LS_p;
+    s_bound_poly *bp_LS;
+    new_bpoly_from_txt("lobes/RS.txt", &LS_p, &Np_LS, &bp_LS);
+    printf("\n\n\n READING FROM TXT, NP LS: %d\n", Np_LS);
+    int Np_in_LS;
+    double **p_in_LS = generate_poisson_dist_inside(bp_LS, rmax, &Np_in_LS);
+    printf("\n\n\n POISSON INSIDE LS, NP IN LS: %d\n", Np_in_LS);
+    puts("Now constructing dt");
+    s_setup *dt_LS = construct_dt_3d(p_in_LS, Np_in_LS);
+    puts("Now constructing vd");
+    s_vdiagram *vd_LS = voronoi_from_delaunay_3d(dt_LS, bp_LS);
+    puts("Now plotting vd");
+    ranges2[0] = bp_LS->min[0];     ranges2[1] = bp_LS->max[0];
+    ranges2[2] = bp_LS->min[1];     ranges2[3] = bp_LS->max[1];
+    ranges2[4] = bp_LS->min[2];     ranges2[5] = bp_LS->max[2];
+    plot_vdiagram(vd_LS, "lobes/LS", ranges2);
+    
+
+    free_complex(setup2);
+    free_complex(ss);
+    free_complex(dt_setup);
+    free_complex(dt_setup_2);
+    free_complex(ss4);
+    free_vdiagram(vd);
+    free_vdiagram(vd2);
+    free_vdiagram(vd3);
+    free_vdiagram(vd4);
+
+    free_matrix(p, 4);
+    free_matrix(pp, 10);
+    free_matrix(points, 5);
+    free_matrix(p_dt, 2);
+    free_matrix(p2, 5);
+    free_matrix(p3, 6);
+    free_matrix(p2_2, 6);
+    free_matrix(p4, 5);
+    free_matrix(bp_points, 4);
+    
 }

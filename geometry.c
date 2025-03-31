@@ -1,8 +1,10 @@
 #ifndef GEOMETRY_C
 #define GEOMETRY_C
 
+#include <string.h>
 #include "algebra.c"
 #include "predicates.h"
+#include "convhull_3d.h"
 
 
 int orientation(double **p, double *q, int dim)
@@ -226,6 +228,154 @@ int ray_triangle_intersection_3d(double **triangle, const double *origin, const 
 
     return 1;
 }
+
+
+ch_vertex *convert_points_to_chvertex(double **points, int Np)
+{
+    ch_vertex *out = malloc(sizeof(ch_vertex) * Np);
+    for (int ii=0; ii<Np; ii++) {
+        out[ii].x = points[ii][0];
+        out[ii].y = points[ii][1];
+        out[ii].z = points[ii][2];
+    }
+    return out;
+}
+
+
+double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double *ch_CM)
+{   // Normalized normals
+    static double **vertices_face = NULL;
+    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
+
+    double **out = malloc_matrix(Nf, 3);
+    for (int ii=0; ii<Nf; ii++) {
+        ch_vertex v0 = vertices[faces[ii*3+0]];
+        ch_vertex v1 = vertices[faces[ii*3+1]];
+        ch_vertex v2 = vertices[faces[ii*3+2]];
+
+        double d1[3], d2[3];
+        d1[0] = v1.x - v0.x;
+        d1[1] = v1.y - v0.y;
+        d1[2] = v1.z - v0.z;
+        d2[0] = v2.x - v0.x;
+        d2[1] = v2.y - v0.y;
+        d2[2] = v2.z - v0.z;
+
+        double n[3];
+        cross_3d(d1, d2, n);
+        normalize_inplace(n, 3);
+        
+        vertices_face[0][0] = v0.x;     vertices_face[0][1] = v0.y;     vertices_face[0][2] = v0.z;
+        vertices_face[1][0] = v1.x;     vertices_face[1][1] = v1.y;     vertices_face[1][2] = v1.z;
+        vertices_face[2][0] = v2.x;     vertices_face[2][1] = v2.y;     vertices_face[2][2] = v2.z;
+        double fc[3], dir[3];
+        find_center_mass(vertices_face, 3, 3, fc);
+        subtract_3d(fc, ch_CM, dir);
+        double dot = dot_3d(dir, n);
+        if (dot < 0) {
+            n[0] = -n[0];
+            n[1] = -n[1];
+            n[2] = -n[2];
+            puts("DEBUG: Normal flipped! Is this normal?");
+        }
+
+        out[ii][0] = n[0];
+        out[ii][1] = n[1];
+        out[ii][2] = n[2];
+    }
+    return out;
+}
+
+
+
+int is_inside_convhull(double *query, double **pch, int *faces, double **fnormals, int Nf)
+{   
+    double *pf[3], fc[3];
+    pf[0] = pch[faces[0]];
+    pf[1] = pch[faces[1]];
+    pf[2] = pch[faces[2]];
+    find_center_mass(pf, 3, 3, fc);
+    
+    double d[3];
+    subtract_3d(fc, query, d);
+    double dot = dot_3d(d, fnormals[0]);
+    assert(dot != 0 && "parallel normal...");
+
+    int prev_sign = dot > 0 ? 1 : -1;
+
+    for (int ii=1; ii<Nf; ii++) {
+        pf[0] = pch[faces[ii*3 + 0]];
+        pf[1] = pch[faces[ii*3 + 1]];
+        pf[2] = pch[faces[ii*3 + 2]];
+        find_center_mass(pf, 3, 3, fc);
+        
+        subtract_3d(fc, query, d);
+        dot = dot_3d(d, fnormals[ii]);
+        assert(dot != 0 && "parallel normal...");
+        int sign = dot > 0 ? 1 : -1;
+        if (prev_sign * sign < 0) {// Check change in sign
+            return 0;
+        }
+
+        prev_sign = sign;
+    }
+    return 1;
+}
+
+
+int mark_inside_convhull(double **points, int Np, double **pch, int *faces, double **fnormals, int Nf, int *mark)
+{
+    memset(mark, 0, sizeof(int) * Np);
+    int count = 0;
+    for (int ii=0; ii<Np; ii++) {
+        if (is_inside_convhull(points[ii], pch, faces, fnormals, Nf)) mark[ii] = 1;
+    }
+    return count;
+}
+
+
+void segment_convex_hull_intersection(const double *p0, const double *p1, double **pch, const int *faces, 
+                                     double **fnormals, int Nf, int *ind1, double *i1, int *ind2, double *i2)
+{       // ind1 indicates if i1 is a valid intersection, simil 2
+    double tmin = 0, tmax = 1;
+
+    double p1_p0[3];
+    subtract_3d(p1, p0, p1_p0);
+
+    for (int ii=0; ii<Nf; ii++) {
+        double *n = fnormals[ii];
+        double den = dot_3d(n, p1_p0);
+        assert(fabs(den) > 1e-12 && "Perpendicular normal with segment.");
+
+        double *q = pch[faces[ii*3]];
+        double q_p0[3];     
+        subtract_3d(q, p0, q_p0);
+        double t = dot_3d(n, q_p0) / den;
+
+        if (den < 0) {
+            tmin = fmax(tmin, t);
+        } else if (den >0) {
+            tmax = fmin(tmax, t);
+        }
+    }
+    
+    *ind1 = 0;
+    *ind2 = 0;
+    double TOL = 1e-6;
+    if (tmin > TOL && tmin < tmax) {
+        *ind1 = 1;
+        i1[0] = p0[0] + tmin * p1_p0[0];  
+        i1[1] = p0[1] + tmin * p1_p0[1];  
+        i1[2] = p0[2] + tmin * p1_p0[2];  
+    }
+    if (tmax < 1-TOL && tmin < tmax) {
+        *ind2 = 1;
+        i2[0] = p0[0] + tmax * p1_p0[0];  
+        i2[1] = p0[1] + tmax * p1_p0[1];  
+        i2[2] = p0[2] + tmax * p1_p0[2];  
+    }
+}
+
 
 
 // ----------------------------------------------------------------------------------------------

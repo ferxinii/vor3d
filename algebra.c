@@ -17,6 +17,23 @@ double **malloc_matrix(int N1, int N2)
 }
 
 
+double **realloc_matrix(double **matrix, int old_rows, int new_rows, int ncols)
+{
+    if (new_rows < old_rows) {
+        for (int ii = new_rows; ii < old_rows; ii++) {
+            free(matrix[ii]);
+        }
+    }
+
+    double **new_matrix = realloc(matrix, sizeof(double*) * new_rows);
+
+    for (int ii=old_rows; ii<new_rows; ii++) {
+        new_matrix[ii] = malloc(sizeof(double) * ncols);
+    }
+    return new_matrix;
+}
+
+
 int **malloc_matrix_int(int N1, int N2)
 {
     int **array = malloc(sizeof(int*) * N1);
@@ -24,6 +41,23 @@ int **malloc_matrix_int(int N1, int N2)
         array[ii] = malloc(sizeof(int) * N2);
     }
     return array;
+}
+
+
+int **realloc_matrix_int(int **matrix, int old_rows, int new_rows, int ncols)
+{
+    if (new_rows < old_rows) {
+        for (int ii = new_rows; ii < old_rows; ii++) {
+            free(matrix[ii]);
+        }
+    }
+
+    int **new_matrix = realloc(matrix, sizeof(int*) * new_rows);
+
+    for (int ii=old_rows; ii<new_rows; ii++) {
+        new_matrix[ii] = malloc(ncols * sizeof(int));
+    }
+    return new_matrix;
 }
 
 
@@ -36,7 +70,26 @@ void free_matrix(double **array, int N1)
 }
 
 
+void free_matrix_int(int **array, int N1)
+{
+    for (int ii=0; ii<N1; ii++) {
+        free(array[ii]);
+    }
+    free(array);
+}
+
+
 void copy_matrix(double **in, double **out, int N1, int N2)
+{
+    for (int ii=0; ii<N1; ii++) {
+        for (int jj=0; jj<N2; jj++) {
+            out[ii][jj] = in[ii][jj];
+        }
+    }
+}
+
+
+void copy_matrix_int(int **in, int **out, int N1, int N2)
 {
     for (int ii=0; ii<N1; ii++) {
         for (int jj=0; jj<N2; jj++) {

@@ -13,7 +13,6 @@ typedef struct setup {
     int N_points;
     double **points;  // (n_points + dim + 1) x dim
                       // The last (dim+1) points correspond to the big n_cell
-    double *CM;  // Center of Mass
     int N_ncells;
     struct ncell *head;  // Linked list of ncells
 } s_setup;
@@ -50,6 +49,22 @@ void free_ncell(s_ncell *ncell)
 }
 
 
+void free_complex(s_setup *setup)
+{   
+    s_ncell *current = setup->head;
+    s_ncell *next = current->next;
+    free_ncell(current);
+    for (int ii=1; ii<setup->N_ncells; ii++) {
+        current = next;
+        next = current->next;
+        free_ncell(current);
+    }
+
+    free_matrix(setup->points, setup->N_points);
+    free(setup);
+}
+
+
 void print_ncell(const s_setup *setup, const s_ncell *ncell)
 {
     printf("%p, ( ", (void*)ncell);
@@ -79,6 +94,18 @@ void print_ncells(const s_setup *setup)
         current = current->next;
     }
     puts("");
+}
+
+
+void initialize_ncells_counter(const s_setup *setup)
+{
+    s_ncell *current = setup->head;
+    int ii = 0;
+    while (current) {
+        current->count = ii;
+        current = current->next;
+        ii++;
+    }
 }
 
 
@@ -150,6 +177,36 @@ void extract_vertices_face(const s_setup *setup, const s_ncell *ncell, const int
             out[ii][jj] = setup->points[face_vertex_id[ii]][jj];
         }
     }
+}
+
+
+void extract_face_center_and_normal(const s_setup *setup, const s_ncell *ncell, int face_localid, double *fc, double *n)
+{
+    static double **face_v = NULL;
+    if (!face_v) face_v = malloc_matrix(3, 3);
+    static double **ncell_v = NULL;
+    if (!ncell_v) ncell_v = malloc_matrix(4, 3);
+
+    extract_vertices_face(setup, ncell, &face_localid, 2, face_v);
+    extract_vertices_ncell(setup, ncell, ncell_v);
+
+    double d1[3], d2[3];
+    subtract_3d(face_v[1], face_v[0], d1);
+    subtract_3d(face_v[2], face_v[0], d2);
+    cross_3d(d1, d2, n);
+
+    double cc[3], v[3];
+    find_center_mass(face_v, 3, 3, fc);
+    find_center_mass(ncell_v, 4, 3, cc);
+    subtract_3d(fc, cc, v);
+
+    double dir_aux = dot_3d(v, n);
+    assert(dir_aux != 0 && "Vectors are perpendicular?");
+    if (dir_aux < 0) {
+        n[0] = -n[0];
+        n[1] = -n[1];
+        n[2] = -n[2];
+    } 
 }
 
 
