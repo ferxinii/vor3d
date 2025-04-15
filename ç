@@ -61,31 +61,6 @@ void free_vdiagram(s_vdiagram *vdiagram)
 }
 
 
-void write_vcell_file(s_vcell *vcell, FILE *file)
-{
-    for (int ii=0; ii<vcell->Nf; ii++) {
-        fprintf(file, "%f %f %f\n", vcell->vertices[vcell->faces[ii*3 + 0]][0],
-                                     vcell->vertices[vcell->faces[ii*3 + 0]][1],
-                                     vcell->vertices[vcell->faces[ii*3 + 0]][2]);
-        fprintf(file, "%f %f %f\n", vcell->vertices[vcell->faces[ii*3 + 1]][0],
-                                     vcell->vertices[vcell->faces[ii*3 + 1]][1],
-                                     vcell->vertices[vcell->faces[ii*3 + 1]][2]);
-        fprintf(file, "%f %f %f\n\n", vcell->vertices[vcell->faces[ii*3 + 2]][0],
-                                      vcell->vertices[vcell->faces[ii*3 + 2]][1],
-                                      vcell->vertices[vcell->faces[ii*3 + 2]][2]);
-    }
-}
-
-
-void write_vd_file(s_vdiagram *vd, FILE *file)
-{
-    for (int ii=0; ii<vd->N_vcells; ii++) {
-        write_vcell_file(vd->vcells[ii], file);
-        fprintf(file, "\n\n");
-    }
-}
-
-
 s_vdiagram *malloc_vdiagram(const s_setup *setup)
 {
     s_vdiagram *out = malloc(sizeof(s_vdiagram));
@@ -560,18 +535,6 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly)
 }
 
 
-int find_inside_which_vcell(s_vdiagram *vd, double *x)
-{
-    for (int ii=0; ii<vd->N_vcells; ii++) {
-        if (is_inside_convhull(x, vd->vcells[ii]->vertices, vd->vcells[ii]->faces, 
-            vd->vcells[ii]->fnormals, vd->vcells[ii]->Nf)) {
-            return ii;
-        }
-    }
-    return -1;
-}
-
-
 // ----------------------------------------------------------------------------------------------
 // --------------------------------------- PLOTS ------------------------------------------------
 // ----------------------------------------------------------------------------------------------
@@ -637,7 +600,7 @@ void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
 }
 
 
-void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_files, double **aux_points, int *N_aux)
+void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_files)
 {
     char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
         "#90ff70", "#ffee00", "#ff7000", "#ee0000", "#7f0000" };
@@ -657,40 +620,6 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
     fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
     fflush(pipe);
 
-    // PLOT POINTS
-    if (aux_points) {
-        fprintf(pipe, "set output '%s_aux_0.png'\n", f_name);
-        fprintf(pipe, "splot ");
-
-        for (int jj=0; jj<vdiagram->N_vcells; jj++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[jj][0], vdiagram->seeds[jj][1], vdiagram->seeds[jj][2]);
-            fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-        }
-
-        fprintf(pipe, "\"<echo \'");
-        for (int jj=0; jj<*N_aux; jj++) {
-            fprintf(pipe, "%f %f %f\\n", aux_points[jj][0], aux_points[jj][1], aux_points[jj][2]);
-        }
-        fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
-
-        plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
-        fprintf(pipe, "\n");
-
-        fprintf(pipe, "set output '%s_aux_1.png'\n", f_name);
-        fprintf(pipe, "set view 100, 90, 1.5\n");
-        fprintf(pipe, "replot\n");
-
-        fprintf(pipe, "set output '%s_aux_2.png'\n", f_name);
-        fprintf(pipe, "set view 100, 180, 1.5\n");
-        fprintf(pipe, "replot\n");
-
-        fprintf(pipe, "set output '%s_aux_3.png'\n", f_name);
-        fprintf(pipe, "set view 100, 270, 1.5\n");
-        fprintf(pipe, "replot\n");
-    }
-    
-
 
     // PLOT WITH ALL CELLS
     fprintf(pipe, "set output '%s_v1.png'\n", f_name);
@@ -700,16 +629,7 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
         snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[ii%8]);
         plot_add_vcell(pipe, vcell, buff);  
     }       
-    // plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
-
-    if (aux_points) {
-        fprintf(pipe, "\"<echo \'");
-        for (int jj=0; jj<*N_aux; jj++) {
-            fprintf(pipe, "%f %f %f\\n", aux_points[jj][0], aux_points[jj][1], aux_points[jj][2]);
-        }
-        fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
-    }
-
+    plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
     fprintf(pipe, "\n");
 
     fprintf(pipe, "set output '%s_v2.png'\n", f_name);
@@ -748,14 +668,6 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
         fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[ii][0], vdiagram->seeds[ii][1], vdiagram->seeds[ii][2]);
         fprintf(pipe, "'\" pt 6 ps 2 lc rgb 'black' notitle, ");
 
-        if (aux_points) {
-            fprintf(pipe, "\"<echo \'");
-            for (int jj=0; jj<*N_aux; jj++) {
-                fprintf(pipe, "%f %f %f\\n", aux_points[jj][0], aux_points[jj][1], aux_points[jj][2]);
-            }
-            fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
-    }
-
         fprintf(pipe, "\n");
     }
 
@@ -769,7 +681,7 @@ void append_volumes_to_file(s_vdiagram *vdiagram, char *fname)
     assert(f && "Could not open file to write volumes to");
 
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
-        fprintf(f, "%f, %f, %f, %f\n", vdiagram->seeds[vdiagram->vcells[ii]->seed_id][0],
+        fprintf(f, "%f, %f, %f, %f, %f\n", vdiagram->seeds[vdiagram->vcells[ii]->seed_id][0],
                                        vdiagram->seeds[vdiagram->vcells[ii]->seed_id][1], 
                                        vdiagram->seeds[vdiagram->vcells[ii]->seed_id][2], 
                                        vdiagram->vcells[ii]->volume);   

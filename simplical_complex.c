@@ -25,6 +25,7 @@ typedef struct ncell {
     struct ncell *prev;
     int mark;  // Used to mark particular ncells
     int count;
+    double volume;  // DEBUGGING
 } s_ncell;
 
 
@@ -393,9 +394,72 @@ int is_delaunay_3d(const s_setup *setup)
 }
 
 
+void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)
+{
+    // THIS IS JUST FOR DEBUGGING!!
+    double **vertices = malloc_matrix(4, 3);
+    extract_vertices_ncell(setup, ncell, vertices);
+
+
+    ch_vertex *ch_vertices = convert_points_to_chvertex(vertices, 4);
+    int *faces;
+    int N_faces;
+    convhull_3d_build(ch_vertices, 4, &faces, &N_faces);
+
+    double CM[3];
+    find_center_mass(vertices, 4, 3, CM);
+    double **fnormals = extract_normals_from_ch(ch_vertices, faces, N_faces, CM);
+    
+    ncell->volume = compute_volume_convhull(vertices, faces, fnormals, N_faces);
+
+    free(ch_vertices);
+    free_matrix(fnormals, N_faces);
+    free_matrix(vertices, 4);
+}
+
+
+double compute_volume_complex(s_setup *setup)
+{
+
+
+    ch_vertex *ch_vertices = convert_points_to_chvertex(setup->points, setup->N_points);
+    int *faces;
+    int N_faces;
+    convhull_3d_build(ch_vertices, setup->N_points, &faces, &N_faces);
+
+    double CM[3];
+    find_center_mass(setup->points, setup->N_points, 3, CM);
+    double **fnormals = extract_normals_from_ch(ch_vertices, faces, N_faces, CM);
+    
+    double volume = compute_volume_convhull(setup->points, faces, fnormals, N_faces);
+
+    free(ch_vertices);
+    free_matrix(fnormals, N_faces);
+    return volume;
+}
+
+
+
+
 // ----------------------------------------------------------------------------------------------
 // --------------------------------------- PLOTS ------------------------------------------------
 // ----------------------------------------------------------------------------------------------
+
+
+void plot_add_ncell(FILE *pipe, s_setup *setup, s_ncell *ncell, char *config)
+{
+    static double **face_vertices = NULL;
+    if (!face_vertices) face_vertices = malloc_matrix(3, 3);
+    for (int ii=0; ii<4; ii++) {
+        extract_vertices_face(setup, ncell, &ii, 2, face_vertices);
+        fprintf(pipe, "\"<echo \'");
+        fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
+        fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
+        fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
+        fprintf(pipe, "%s, ", config);
+    }
+}
+
 
 void plot_ncell_3d(s_setup *setup, s_ncell *ncell, char *f_name, double *ranges)
 {
@@ -413,23 +477,14 @@ void plot_ncell_3d(s_setup *setup, s_ncell *ncell, char *f_name, double *ranges)
     fprintf(pipe, "set zlabel 'z'\n");
     fflush(pipe);
     fprintf(pipe, "splot ");
-
-    static double **face_vertices = NULL;
-    if (!face_vertices) face_vertices = malloc_matrix(3, 3);
-    for (int ii=0; ii<4; ii++) {
-        extract_vertices_face(setup, ncell, &ii, 2, face_vertices);
-        fprintf(pipe, "\"<echo \'");
-        fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
-        fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
-        fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
-        fprintf(pipe, "w polygons fs transparent solid 0.1 notitle, ");
-    }
+    
+    plot_add_ncell(pipe, setup, ncell, "w polygons fs transparent solid 0.1 notitle");
+    
     fprintf(pipe, "\"<echo \'");
     for (int ii=0; ii<setup->N_points; ii++) {
         fprintf(pipe, "%f %f %f\\n", setup->points[ii][0], setup->points[ii][1], setup->points[ii][2]);
     }
     fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-
 
     fflush(pipe);
     fprintf(pipe, "\n");
@@ -458,22 +513,15 @@ void plot_dt_3d(s_setup *setup, char *f_name, double *ranges)
 
     s_ncell *current = setup->head;
     while (current) {
-        for (int ii=0; ii<4; ii++) {
-            extract_vertices_face(setup, current, &ii, 2, face_vertices);
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
-            fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
-            fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
-            fprintf(pipe, "w polygons fs transparent solid 0.1 notitle, ");
-        }
-        for (int ii=0; ii<4; ii++) {
-            extract_vertices_face(setup, current, &ii, 2, face_vertices);
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
-            fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
-            fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
-            fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");
-        }
+        plot_add_ncell(pipe, setup, current, "w polygons fs transparent solid 0.1 notitle");
+        // for (int ii=0; ii<4; ii++) {
+        //     extract_vertices_face(setup, current, &ii, 2, face_vertices);
+        //     fprintf(pipe, "\"<echo \'");
+        //     fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
+        //     fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
+        //     fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
+        //     fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");
+        // }
         current = current->next;
     }
 

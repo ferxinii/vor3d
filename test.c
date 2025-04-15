@@ -420,28 +420,29 @@ int main(void) {
     // queryp[0] = 10*s; queryp[1] = 2*s; queryp[2] = 10*s;
     // printf("IS INSIDE CONVHULL %d, expected 0\n\n", is_inside_convhull(queryp, bp->points, bp->faces, bp->fnormals, bp->Nf));
     
-    s_bound_poly *bp = new_bpoly_from_points(bp_points, 4);
+    int add_noise = 1;
+    s_bound_poly *bp = new_bpoly_from_points(bp_points, 4, add_noise);
     s_vdiagram *vd = voronoi_from_delaunay_3d(dt_setup, bp);
     print_vdiagram(vd);
     
     ranges2[0] = -6; ranges2[1] = 6;
     ranges2[2] = -6; ranges2[3] = 6;
     ranges2[4] = -6; ranges2[5] = 6;
-    // plot_vdiagram(vd, "vd/diagram", ranges2);
+    // plot_vdiagram(vd, "vd/diagram", ranges2, NULL, NULL);
 
 
     // VORONOI 2
-    s_bound_poly *bp2 = new_bpoly_from_points(bp_points, 4);
+    s_bound_poly *bp2 = new_bpoly_from_points(bp_points, 4, add_noise);
     s_vdiagram *vd2 = voronoi_from_delaunay_3d(dt_setup_2, bp2);
     print_vdiagram(vd);
-    // plot_vdiagram(vd, "vd2/diagram", ranges2);
+    // plot_vdiagram(vd, "vd2/diagram", ranges2, NULL, NULL);
 
 
     // VORONOI WITH RANDOM POINTS
-    s_bound_poly *bp3 = new_bpoly_from_points(bp_points, 4);
+    s_bound_poly *bp3 = new_bpoly_from_points(bp_points, 4, add_noise);
     s_vdiagram *vd3 = voronoi_from_delaunay_3d(ss, bp3);
     print_vdiagram(vd);
-    // plot_vdiagram(vd, "vd3/diagram", ranges2);
+    // plot_vdiagram(vd, "vd3/diagram", ranges2, NULL, NULL);
     
 
 
@@ -451,10 +452,10 @@ int main(void) {
     double rmax = 2;
     int Np_in;
 
-    s_bound_poly *bp4 = new_bpoly_from_points(bp_points, 4);
+    s_bound_poly *bp4 = new_bpoly_from_points(bp_points, 4, add_noise);
     printf("MIN: %f, %f, %f\n", bp4->min[0], bp4->min[1], bp4->min[2]);
     printf("MAX: %f, %f, %f\n", bp4->max[0], bp4->max[1], bp4->max[2]);
-    double **p_in = generate_poisson_dist_inside(bp4, rmax, &Np_in);
+    double **p_in = generate_uniform_poisson_dist_inside(bp4, rmax, &Np_in);
     printf("Np inside bpoly : %d\n", Np_in);
     plot_bpoly_with_points(bp4, p_in, Np_in, "poisson/test", ranges2);
     
@@ -464,7 +465,7 @@ int main(void) {
     puts("Now constructin vd");
     s_vdiagram *vd4 = voronoi_from_delaunay_3d(ss4, bp4);
     // puts("Now plotting vd");
-    // plot_vdiagram(vd4, "poisson/vd", ranges2);
+    // plot_vdiagram(vd4, "poisson/vd", ranges2, NULL, NULL);
 
 
 
@@ -472,10 +473,10 @@ int main(void) {
     int Np_LS;
     double **LS_p;
     s_bound_poly *bp_LS;
-    new_bpoly_from_txt("lobes/RS.txt", &LS_p, &Np_LS, &bp_LS);
+    new_bpoly_from_txt("lobes/RS.txt", &LS_p, &Np_LS, &bp_LS, add_noise);
     printf("\n\n\n READING FROM TXT, NP LS: %d\n", Np_LS);
     int Np_in_LS;
-    double **p_in_LS = generate_poisson_dist_inside(bp_LS, rmax, &Np_in_LS);
+    double **p_in_LS = generate_uniform_poisson_dist_inside(bp_LS, rmax, &Np_in_LS);
     printf("\n\n\n POISSON INSIDE LS, NP IN LS: %d\n", Np_in_LS);
     puts("Now constructing dt");
     s_setup *dt_LS = construct_dt_3d(p_in_LS, Np_in_LS);
@@ -485,7 +486,7 @@ int main(void) {
     ranges2[0] = bp_LS->min[0];     ranges2[1] = bp_LS->max[0];
     ranges2[2] = bp_LS->min[1];     ranges2[3] = bp_LS->max[1];
     ranges2[4] = bp_LS->min[2];     ranges2[5] = bp_LS->max[2];
-    plot_vdiagram(vd_LS, "lobes/LS", ranges2);
+    plot_vdiagram(vd_LS, "lobes/LS", ranges2, 0, NULL, NULL);
     
 
     free_complex(setup2);

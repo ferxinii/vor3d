@@ -5,6 +5,7 @@
 #include "algebra.c"
 #include "predicates.h"
 #include "convhull_3d.h"
+#include "array_operations.c"
 
 
 int orientation(double **p, double *q, int dim)
@@ -166,6 +167,14 @@ void subtract_3d(const double *u, const double *v, double *result)
 }
 
 
+double distance_squared(const double *a, const double *b)
+{
+    double diff[3];
+    subtract_3d(a, b, diff);
+    return dot_3d(diff, diff);
+}
+
+
 // double compute_signed_angle(const double *ref, const double *vec, const double *normal)
 // {  // With reference to the plane determined by normal
 //     double cross[3];
@@ -276,7 +285,8 @@ double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double
             n[0] = -n[0];
             n[1] = -n[1];
             n[2] = -n[2];
-            puts("DEBUG: Normal flipped! Is this normal?");
+            // puts("DEBUG: Normal flipped! Is this normal?");
+            // printf("%.16f\n", dot);
         }
 
         out[ii][0] = n[0];
@@ -323,6 +333,39 @@ int is_inside_convhull(double *query, double **pch, int *faces, double **fnormal
 }
 
 
+int is_in_boundary_convhull(int *faces, int Nf, int vid)
+{
+    return inarray(faces, Nf * 3, vid);
+}
+
+
+void random_point_uniform_3d(double *min, double *max, double *out)
+{
+    double ux = rand() / ((double) RAND_MAX + 1.0);
+    double uy = rand() / ((double) RAND_MAX + 1.0);
+    double uz = rand() / ((double) RAND_MAX + 1.0);
+
+    out[0] = min[0] + (max[0] - min[0]) * ux;
+    out[1] = min[1] + (max[1] - min[1]) * uy;
+    out[2] = min[2] + (max[2] - min[2]) * uz;
+}
+
+
+void random_point_inside_convhull(double **pch, int *faces, double **fnormals, int Nf, 
+                                  double *min, double *max, double *out)
+{
+    int MAX_IT = 1000;
+    int it = 0;
+    random_point_uniform_3d(min, max, out);
+    while (!is_inside_convhull(out, pch, faces, fnormals, Nf)) {
+        random_point_uniform_3d(min, max, out);
+        assert(it < MAX_IT && "Reached maximum iters looking for point inside convhull.");
+        it++;
+    }
+}
+
+
+
 int mark_inside_convhull(double **points, int Np, double **pch, int *faces, double **fnormals, int Nf, int *mark)
 {
     memset(mark, 0, sizeof(int) * Np);
@@ -331,6 +374,19 @@ int mark_inside_convhull(double **points, int Np, double **pch, int *faces, doub
         if (is_inside_convhull(points[ii], pch, faces, fnormals, Nf)) mark[ii] = 1;
     }
     return count;
+}
+
+
+double compute_volume_convhull(double **points, int *faces, double **fnormals, int Nf)
+{
+    double vol = 0;
+    for (int ii=0; ii<Nf; ii++) {
+        double Nx = fnormals[ii][0];
+        vol += Nx * (points[faces[ii*3 + 0]][0] +
+                     points[faces[ii*3 + 1]][0] +
+                     points[faces[ii*3 + 2]][0]);
+    }
+    return vol / 6;
 }
 
 
@@ -345,6 +401,7 @@ void segment_convex_hull_intersection(const double *p0, const double *p1, double
     for (int ii=0; ii<Nf; ii++) {
         double *n = fnormals[ii];
         double den = dot_3d(n, p1_p0);
+        
         assert(fabs(den) > 1e-12 && "Perpendicular normal with segment.");
 
         double *q = pch[faces[ii*3]];
@@ -361,7 +418,10 @@ void segment_convex_hull_intersection(const double *p0, const double *p1, double
     
     *ind1 = 0;
     *ind2 = 0;
-    double TOL = 1e-6;
+    double TOL = 1e-6;  // FIXME TODO DEBUG, IS THIS NECESSARY??
+                        // I think in this way i can just select the vertex of the segment
+                        // that is completely inside, and ignore the ones that are potentially
+                        // vertices already being selected by inside_conv_hull
     if (tmin > TOL && tmin < tmax) {
         *ind1 = 1;
         i1[0] = p0[0] + tmin * p1_p0[0];  

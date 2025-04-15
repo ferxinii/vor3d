@@ -562,9 +562,12 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
     
 
     // CHECKS???
-    if (dim == 3) assert(are_in_general_position_3d(setup_points, N_points+dim+1) == 1 && "setup points are not in general position.");
-    for (int ii=0; ii<N_points; ii++) {  // DEBUG 
-        assert(in_sphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
+    // if (dim == 3) assert(are_in_general_position_3d(setup_points, N_points+dim+1) == 1 && "setup points are not in general position.");
+    // THIS WAS WAY TOO SLOW !!
+    if (N_points > 4) {
+        for (int ii=0; ii<N_points; ii++) {  // DEBUG 
+            assert(in_sphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
+        }
     }
 
 
@@ -705,18 +708,25 @@ s_setup *construct_dt_3d(double **points, int N_points)
 {
     s_stack *stack = stack_create();
     s_setup *setup = initialize_setup(points, N_points, 3);
-
-    assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
-                                                                 
+    
+     assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
     for (int ii=0; ii<N_points; ii++) {
         insert_one_point(setup, ii, stack);
-        if (is_delaunay_3d(setup) != 1) {  // TODO, DEBUG
-            printf("ERROR? NOT DELAUNAY AFTER INSERTING: %d\n", ii);
-            exit(1);
-        }
+        // if (is_delaunay_3d(setup) != 1) {  // TODO, DEBUG
+        //     printf("ERROR? NOT DELAUNAY AFTER INSERTING: %d\n", ii);
+        //     exit(1);
+        // }
     }
     
     stack_free(stack);  
     remove_big_tetra(setup);
+
+    // DEBUG: COMPUTE VOLUMES!
+    s_ncell *current = setup->head;
+    while (current) {
+        add_ncell_volume_3d(setup, current);
+        current = current->next;
+    }
+
     return setup;
 }
