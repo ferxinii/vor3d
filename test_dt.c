@@ -12,7 +12,7 @@
 
 double r_fun(double *x)
 {   
-    double r0 = 2;
+    double r0 = 1;
     double z0 = -2;
     double K = 0.04;
     // printf("DEBUG R_FUN: (%f,%f,%f)  r: %f\n", x[0], x[1], x[2], r0 + K * fabs(x[2] - z0));
@@ -68,7 +68,9 @@ void check_volume(s_bound_poly *bp, s_vdiagram *vd)
     double sum_vol = 0;
     for (int ii=0; ii<vd->N_vcells; ii++) {
         sum_vol += vd->vcells[ii]->volume;
-        printf("VOL %d : %f\n", ii, vd->vcells[ii]->volume);
+        if (vd->vcells[ii]->volume <= 0) {
+            printf("VOL %d : %f\n", ii, vd->vcells[ii]->volume);
+        }
     }
     printf("V lung = %f, Diff = %f\n", bp->volume, bp->volume - sum_vol);
 
@@ -90,9 +92,13 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     int it = 0;
     while (current) {
         sum_vol += current->volume;
-        printf("vol %d: %f\n", it++, current->volume);
+        if (current->volume < 0) {
+            printf("vol dt %d: %f\n", it++, current->volume);
+        }
         current = current->next;
     }
+
+
     printf("DT, SUM VOLUMES = %f, CONVHULL VOLUME = %f\n", sum_vol, compute_volume_complex(dt));
     // double ranges_plot[6];
     // ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
@@ -145,7 +151,7 @@ int main(void) {
 
 
     FILE *ftest = fopen("lost_volume.txt", "w");
-    int Ntest = 10000;
+    int Ntest = 1000;
     double **ptest = malloc_matrix(Ntest, 3);
     for (int ii=0; ii<Ntest; ii++) {
         double x[3]; 
@@ -161,12 +167,12 @@ int main(void) {
     fclose(ftest);
 
 
-    double ranges_plot[6];
-    ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
-    ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
-    ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
-    puts("PLOTTING...");
-    plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
+    // double ranges_plot[6];
+    // ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
+    // ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
+    // ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
+    // puts("PLOTTING...");
+    // plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
 
 
 

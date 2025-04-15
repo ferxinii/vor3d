@@ -14,7 +14,7 @@
 
 double r_fun(double *x)
 {   
-    double r0 = 0.7;
+    double r0 = 0.4;
     double z0 = -30;
     double K = 0.04;
     // printf("DEBUG R_FUN: (%f,%f,%f)  r: %f\n", x[0], x[1], x[2], r0 + K * fabs(x[2] - z0));

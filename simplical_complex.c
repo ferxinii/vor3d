@@ -400,42 +400,13 @@ void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)
     double **vertices = malloc_matrix(4, 3);
     extract_vertices_ncell(setup, ncell, vertices);
 
-
-    ch_vertex *ch_vertices = convert_points_to_chvertex(vertices, 4);
-    int *faces;
-    int N_faces;
-    convhull_3d_build(ch_vertices, 4, &faces, &N_faces);
-
-    double CM[3];
-    find_center_mass(vertices, 4, 3, CM);
-    double **fnormals = extract_normals_from_ch(ch_vertices, faces, N_faces, CM);
-    
-    ncell->volume = compute_volume_convhull(vertices, faces, fnormals, N_faces);
-
-    free(ch_vertices);
-    free_matrix(fnormals, N_faces);
-    free_matrix(vertices, 4);
+    ncell->volume = compute_volume_convhull_from_points(vertices, 4);
 }
 
 
 double compute_volume_complex(s_setup *setup)
 {
-
-
-    ch_vertex *ch_vertices = convert_points_to_chvertex(setup->points, setup->N_points);
-    int *faces;
-    int N_faces;
-    convhull_3d_build(ch_vertices, setup->N_points, &faces, &N_faces);
-
-    double CM[3];
-    find_center_mass(setup->points, setup->N_points, 3, CM);
-    double **fnormals = extract_normals_from_ch(ch_vertices, faces, N_faces, CM);
-    
-    double volume = compute_volume_convhull(setup->points, faces, fnormals, N_faces);
-
-    free(ch_vertices);
-    free_matrix(fnormals, N_faces);
-    return volume;
+    return compute_volume_convhull_from_points(setup->points, setup->N_points);
 }
 
 

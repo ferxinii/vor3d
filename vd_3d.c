@@ -26,12 +26,16 @@ typedef struct vcell {
     int Nv_capacity;
     double **vertices;  // Nv x 3
     int **origin_vertices;  // Nv x 4, LAST column indicates the dual ncell if POSITIVE,
-                            // if -1: real extension. The rest of the columns indicate the delaunay indices
-                            //        of the face whose normal was extended, 
-                            // if -2: ARTIFICIAL extension
-                            // if -3: it is from the bounding polyhedron, and the first index is the point id
-                            // if -4: it comes from a segment, and the first to columns correspond to the polygon vertex ids 
-                            //        where the segment comes from, and the third column to the face id
+                            // if -1: comes from circumcenter delaunay. The rest of 
+                            //        the columns indicate the delaunay indices of the 
+                            //        face whose normal was extended, 
+                            // if -2: ARTIFICIAL extension, first column is id of face of
+                            //        convhull of setup points
+                            // if -3: it is from the bounding polyhedron, and the first 
+                            //        index is the point id 
+                            // if -4: it comes from some coords, supposedly from the ray 
+                            //        intersection with bounding convex hull, and the first
+                            //        columns correspond to face's vertex_id
     int Nf;
     int *faces;
     double **fnormals;
@@ -114,11 +118,6 @@ void print_vcell(const s_vcell *vcell)
                                vcell->origin_vertices[ii][1], vcell->origin_vertices[ii][2]);
     }
 
-    printf("Nf = %d\n", vcell->Nf);
-    printf("%d, %d, %d\n", vcell->faces[0], vcell->faces[1], vcell->faces[2]);
-    for (int ii=1; ii<vcell->Nf; ii++) {
-        printf("%d, %d, %d\n", vcell->faces[ii*3 + 0], vcell->faces[ii*3 + 1], vcell->faces[ii*3 + 2]);
-    }
     printf("\n");
 }
 
@@ -168,6 +167,7 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
     // First check if the vertex already exists
     for (int ii=0; ii<vcell->Nv; ii++) {
         if (vcell->origin_vertices[ii][3] == ncell->count) {
+            puts("DEBUG ADD_VVERTEX_FROM_NCELL: ALREADY EXISTS!");
             return ii;
         }
     }
@@ -199,7 +199,7 @@ int add_vvertex_from_coords(double *coords, int *dt_face_vid, s_vcell *vcell)
     vcell->vertices[vcell->Nv][1] = coords[1];
     vcell->vertices[vcell->Nv][2] = coords[2];
 
-    vcell->origin_vertices[vcell->Nv][3] = -1;
+    vcell->origin_vertices[vcell->Nv][3] = -4;
     vcell->origin_vertices[vcell->Nv][0] = dt_face_vid[0];
     vcell->origin_vertices[vcell->Nv][1] = dt_face_vid[1];
     vcell->origin_vertices[vcell->Nv][2] = dt_face_vid[2];
@@ -246,160 +246,13 @@ int add_vvertex_from_bpoly(const s_bound_poly *bp, int id, s_vcell *vcell)
 }
 
 
-int add_vvertex_from_segment(double *i1, int bp_vid_1, int bp_vid_2, int face_id, s_vcell *vcell)
-{   // i1 has the coordinates of the intersection!
-    increase_num_vertices_if_needed(vcell);
-
-    vcell->vertices[vcell->Nv][0] = i1[0];
-    vcell->vertices[vcell->Nv][1] = i1[1];
-    vcell->vertices[vcell->Nv][2] = i1[2];
-    vcell->origin_vertices[vcell->Nv][3] = -4;
-    vcell->origin_vertices[vcell->Nv][0] = bp_vid_1;
-    vcell->origin_vertices[vcell->Nv][1] = bp_vid_2;
-    vcell->origin_vertices[vcell->Nv][2] = face_id;
-
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
-}
-
-
-int face_extension_already_exists(const s_vcell *vcell, int *vertex_id)
-{
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (vcell->origin_vertices[ii][3] == -1 &&
-        inarray(vcell->origin_vertices[ii], 3, vertex_id[0]) &&
-        inarray(vcell->origin_vertices[ii], 3, vertex_id[1]) &&
-        inarray(vcell->origin_vertices[ii], 3, vertex_id[2])) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-
-int segment_vvertex_already_exists(const s_vcell *vcell, int p1, int p2)
-{
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (vcell->origin_vertices[ii][3] == -4 &&
-            inarray(vcell->origin_vertices[ii], 2, p1) && 
-            inarray(vcell->origin_vertices[ii], 2, p2)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-
-void extract_vface_BOUNDING(const s_vdiagram *vdiagram, const s_setup *setup, const s_ncell *ncell, int v_localid_vertex, int v_localid_2, s_vcell *vcell)
-{   
-    // DIRECTION 1 OF UNCLOSED CYCLE 
-    const s_ncell *current = ncell;
-    int v1_A = v_localid_vertex;
-    int v2_A = v_localid_2;
-    while (current->opposite[v1_A] != NULL) {
-        int new_v1_A, new_v2_A;
-        s_ncell *next = next_ncell_ridge_cycle(setup, current, v1_A, v2_A, &new_v1_A, &new_v2_A);
-        add_vvertex_from_ncell(setup, current, vcell);
-
-        current = next;
-        v1_A = new_v1_A;
-        v2_A = new_v2_A;
-    }
-    const s_ncell *ncell_A = current;
-    
-    int face_id[3];
-    extract_ids_face(setup, ncell_A, &v1_A, 2, face_id);
-    if (!face_extension_already_exists(vcell, face_id)) {
-        double fc_A[3], n_A[3];
-        extract_face_center_and_normal(setup, ncell_A, v1_A, fc_A, n_A);
-
-        double intersection_A[3], extension_A[3];
-        find_intersection_with_bounding_poly(vdiagram->bpoly, fc_A, n_A, intersection_A, extension_A);
-        add_vvertex_from_coords(intersection_A, face_id, vcell);
-        add_vvertex_as_extension(extension_A, face_id, vcell);
-    }
-    
-    // DIRECTION 2 OF UNCLOSED CYCLE 
-    current = ncell;
-    int v1_B = v_localid_2;
-    int v2_B = v_localid_vertex;
-    while (current->opposite[v1_B] != NULL) {
-        int new_v1_B, new_v2_B;
-        s_ncell *next = next_ncell_ridge_cycle(setup, current, v1_B, v2_B, &new_v1_B, &new_v2_B);
-        add_vvertex_from_ncell(setup, current, vcell);
-
-        current = next;
-        v1_B = new_v1_B;
-        v2_B = new_v2_B;
-    }
-    const s_ncell *ncell_B = current;
-
-    extract_ids_face(setup, ncell_B, &v1_B, 2, face_id);
-    if (!face_extension_already_exists(vcell, face_id)) {
-        double fc_B[3], n_B[3];
-        extract_face_center_and_normal(setup, ncell_B, v1_B, fc_B, n_B);
-
-        double intersection_B[3], extension_B[3];
-        find_intersection_with_bounding_poly(vdiagram->bpoly, fc_B, n_B, intersection_B, extension_B);
-        add_vvertex_from_coords(intersection_B, face_id, vcell);
-        add_vvertex_as_extension(extension_B, face_id, vcell);
-    }
-}
-
-
-void extract_vface(const s_vdiagram *vdiagram, const s_setup *setup, const s_ncell *ncell, int v_localid_vertex, int v_localid_2, s_vcell *vcell)
-{
-    // The ridge actually is identified with the complementary indices
-    int v_ridge_1 = 0;
-    while (v_ridge_1 == v_localid_vertex || v_ridge_1 == v_localid_2) {
-        v_ridge_1++;
-    }
-    int v_ridge_2 = 0;
-    while (v_ridge_2 == v_localid_vertex || v_ridge_2 == v_localid_2 || v_ridge_2 == v_ridge_1) {
-        v_ridge_2++;
-    }
-
-    int Nv = count_cycle_ridge(setup, ncell, v_ridge_1, v_ridge_2);
-    if (Nv == -1) {
-        extract_vface_BOUNDING(vdiagram, setup, ncell, v_ridge_1, v_ridge_2, vcell);
-    } else {
-        int new_v_ridge_1, new_v_ridge_2;
-        const s_ncell *current_ncell = ncell;
-        for (int ii=1; ii<Nv; ii++) {
-            s_ncell *next_ncell = next_ncell_ridge_cycle(setup, current_ncell, v_ridge_1, v_ridge_2, &new_v_ridge_1, &new_v_ridge_2);
-            
-            add_vvertex_from_ncell(setup, next_ncell, vcell);
-
-            v_ridge_1 = new_v_ridge_1;
-            v_ridge_2 = new_v_ridge_2;
-            current_ncell = next_ncell;
-        }
-    }
-}
-
-
-
-void extract_vfaces_from_ncell_and_vertex(const s_vdiagram *vdiagram, const s_setup *setup, s_vcell *vcell, const s_ncell *ncell, int vertex_id)
-{   // The idea is to cycle around all ridges sharing vertex_id
-    int vertex_localid = id_where_equal_int(ncell->vertex_id, 4, vertex_id);
-    for (int v_localid_2 = 0; v_localid_2 < 4; v_localid_2++) {
-        if (v_localid_2 != vertex_localid) {
-            extract_vface(vdiagram, setup, ncell, vertex_localid, v_localid_2, vcell);
-        }
-    }
-}
-
-
 void remove_artificial_extended_vertices(s_vcell *vcell)
 {
     int kk = 0;
     for (int ii=0; ii<vcell->Nv; ii++) {
         if (vcell->origin_vertices[ii][3] != -2) {
             copy_matrix(&vcell->vertices[ii], &vcell->vertices[ii-kk], 1, 3);
-            copy_matrix_int(&vcell->origin_vertices[ii], &vcell->origin_vertices[ii-kk], 1, 3);
-            // vcell->vertices[ii - kk] = vcell->vertices[ii];
-            // vcell->origin_vertices[ii - kk] = vcell->origin_vertices[ii];
+            copy_matrix_int(&vcell->origin_vertices[ii], &vcell->origin_vertices[ii-kk], 1, 4);
         } else {
             kk++;
         }
@@ -414,37 +267,6 @@ void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell
     for (int ii=0; ii<bp->Np; ii++) {
         if (is_inside_convhull(bp->points[ii], vcell->vertices, vcell->faces, vcell->fnormals, vcell->Nf)) {
             add_vvertex_from_bpoly(bp, ii, vcell);
-        }
-    }
-    for (int ii=0; ii<bp->Nf; ii++) {
-        // CHECK SEGMENT CONVHULL INTERSECTION
-        double *p0, *p1, i1[3], i2[3]; 
-        int ind1, ind2;
-        if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 0], bp->faces[ii*3 + 1])) {
-            p0 = bp->points[bp->faces[ii*3 + 0]];
-            p1 = bp->points[bp->faces[ii*3 + 1]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
-                                                 vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
-            if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+0], bp->faces[ii*3+1], ii, vcell);
-            if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+0], bp->faces[ii*3+1], ii, vcell);
-        }
-
-        if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 0], bp->faces[ii*3 + 2])) {
-            p0 = bp->points[bp->faces[ii*3 + 0]];
-            p1 = bp->points[bp->faces[ii*3 + 2]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
-                                                 vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
-            if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+0], bp->faces[ii*3+2], ii, vcell);
-            if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+0], bp->faces[ii*3+2], ii, vcell);
-        }
-
-        if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 2], bp->faces[ii*3 + 1])) {
-            p0 = bp->points[bp->faces[ii*3 + 2]];
-            p1 = bp->points[bp->faces[ii*3 + 1]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
-                                                 vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
-            if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+2], bp->faces[ii*3+1], ii, vcell);
-            if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+2], bp->faces[ii*3+1], ii, vcell);
         }
     }
 
@@ -478,42 +300,41 @@ void compute_vcell_volume(s_vcell *vcell)
 }
 
 
-s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, int vertex_id)
+void add_vvertices_extended_normals(const s_setup *setup, int *faces_ch_setup, 
+        double **fnormals, int Nf_ch_setup, int vertex_id, const s_vdiagram *vd, s_vcell *vcell)
 {
-    // Find an ncell with this vertex
-    s_ncell *ncell = setup->head;
-    while (!inarray(ncell->vertex_id, 4, vertex_id)) {
-        ncell = ncell->next;
-    }
+    for (int ii = 0; ii<Nf_ch_setup; ii++) {
+        if (inarray(&faces_ch_setup[ii*3], 3, vertex_id)) {
+            // printf("DEBUG EXTENDED: INARRAY! %d, %d, %d; %d\n", faces_ch_setup[ii*3], faces_ch_setup[ii*3 + 1], faces_ch_setup[ii*3+2], vertex_id);
+            
+            double o[3];
+            o[0] = (setup->points[faces_ch_setup[ii*3 + 0]][0] + 
+                    setup->points[faces_ch_setup[ii*3 + 1]][0] + 
+                    setup->points[faces_ch_setup[ii*3 + 2]][0]) / 3;
+            o[1] = (setup->points[faces_ch_setup[ii*3 + 0]][1] + 
+                    setup->points[faces_ch_setup[ii*3 + 1]][1] + 
+                    setup->points[faces_ch_setup[ii*3 + 2]][1]) / 3;
+            o[2] = (setup->points[faces_ch_setup[ii*3 + 0]][2] + 
+                    setup->points[faces_ch_setup[ii*3 + 1]][2] + 
+                    setup->points[faces_ch_setup[ii*3 + 2]][2]) / 3;
 
-    // Find "complementary" indices to localid
-    int v_localid = id_where_equal_int(ncell->vertex_id, 4, vertex_id);
-    int v_localid_COMP[3];
-    int kk=0;
-    for (int ii=0; ii<4; ii++) {
-        if (ii != v_localid) {
-            v_localid_COMP[kk] = ii;
-            kk++;
+            double s = vd->bpoly->dmax;
+
+            double v_coords[3] = {o[0] + s * fnormals[ii][0],
+                                  o[1] + s * fnormals[ii][1],
+                                  o[2] + s * fnormals[ii][2]};
+            add_vvertex_as_extension(v_coords, &faces_ch_setup[ii*3], vcell);
+
+            double intersection[3];
+            inside_ray_convhull_intersection(vd->bpoly->points, vd->bpoly->faces, vd->bpoly->fnormals, vd->bpoly->Nf, o, fnormals[ii], intersection);
+            add_vvertex_from_coords(intersection, &faces_ch_setup[ii*3], vcell);
         }
     }
+}
 
-    // Mark ncells incident to point (dim 0)
-    initialize_ncells_mark(setup);
-    mark_ncells_incident_face(setup, ncell, v_localid_COMP, 0);
 
-    s_vcell *vcell = malloc_vcell(vertex_id);
-    
-    // Extract vertices of voronoi cell
-    s_ncell *current = setup->head;
-    while (current) {
-        if (current->mark == 1) {
-            add_vvertex_from_ncell(setup, current, vcell);
-            extract_vfaces_from_ncell_and_vertex(vdiagram, setup, vcell, current, vertex_id);
-        }
-        current = current->next;
-    }
-
-    // First build convex hull of this extended vcell
+void add_convex_hull_vcell(s_vcell *vcell)
+{
     double CM[3];
     find_center_mass(vcell->vertices, vcell->Nv, 3, CM);
     int *faces, N_faces;
@@ -524,36 +345,97 @@ s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, 
     double **fnormals = extract_normals_from_ch(vertices_aux, faces, N_faces, CM);
     vcell->fnormals = fnormals;
     free(vertices_aux);
+}
+
+
+void bounded_extraction(const s_setup *setup, s_vcell *vcell)
+{
+    s_ncell *current = setup->head;
+    while (current) {
+        if (current->mark == 1) add_vvertex_from_ncell(setup, current, vcell);
+        current = current->next;
+    }
+    
+    add_convex_hull_vcell(vcell);
+}
+
+
+void unbounded_extraction(const s_setup *setup, const s_vdiagram *vdiagram, s_vcell *vcell, 
+        int *faces_ch_setup, double **fnormals_ch_setup, int Nf_ch_setup, int vertex_id)
+{
+    s_ncell *current = setup->head;
+    while (current) {
+        if (current->mark == 1) {
+            add_vvertex_from_ncell(setup, current, vcell);
+        }
+        current = current->next;
+    }
+    add_vvertices_extended_normals(setup, faces_ch_setup, fnormals_ch_setup, Nf_ch_setup, vertex_id, vdiagram, vcell);
+
+    // First build convex hull of this extended vcell
+    add_convex_hull_vcell(vcell);
     
     // Fix bounding box with bounding polyhedra and redo triangulation
     correctly_bound_with_bp_vertices(vdiagram, vcell);
     free_matrix(vcell->fnormals, vcell->Nf);
+    add_convex_hull_vcell(vcell);
+}
 
-    find_center_mass(vcell->vertices, vcell->Nv, 3, CM);
-    vertices_aux = convert_points_to_chvertex(vcell->vertices, vcell->Nv);
-    convhull_3d_build(vertices_aux, vcell->Nv, &faces, &N_faces);
-    vcell->faces = faces;
-    vcell->Nf = N_faces;
-    double **fnormals_2 = extract_normals_from_ch(vertices_aux, faces, N_faces, CM);
-    vcell->fnormals = fnormals_2;  // TODO free previous normals!
-    free(vertices_aux);
-    
+
+s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, 
+                              int *faces_ch_setup, double **fnormals_ch_setup,
+                              int Nf_ch_setup, int vertex_id)
+{
+    // Find an ncell with this vertex
+    s_ncell *ncell = setup->head;
+    while (!inarray(ncell->vertex_id, 4, vertex_id)) {
+        ncell = ncell->next;
+    }
+    // Find "complementary" indices to localid
+    int v_localid = id_where_equal_int(ncell->vertex_id, 4, vertex_id);
+    int v_localid_COMP[3];
+    int kk=0;
+    for (int ii=0; ii<4; ii++) {
+        if (ii != v_localid) {
+            v_localid_COMP[kk] = ii;
+            kk++;
+        }
+    }
+    // Mark incident ncells to this point
+    initialize_ncells_mark(setup);
+    mark_ncells_incident_face(setup, ncell, v_localid_COMP, 0);
+
+
+    s_vcell *vcell = malloc_vcell(vertex_id);
+    if (is_in_boundary_convhull(faces_ch_setup, Nf_ch_setup, vertex_id)) {
+        unbounded_extraction(setup, vdiagram, vcell, faces_ch_setup, fnormals_ch_setup, Nf_ch_setup, vertex_id);
+    } else {
+        bounded_extraction(setup, vcell);
+    }
+
     // Compute volume
     compute_vcell_volume(vcell);
-
     return vcell;
 }
+
 
 
 s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly)
 {
     initialize_ncells_counter(setup);
-
+    
+    // Extract faces convhull setup
+    int *faces_setup, Nf_setup;
+    double **fnormals_setup;
+    extract_faces_convhull_from_points(setup->points, setup->N_points, 
+                                       &faces_setup, &fnormals_setup, &Nf_setup);
+    
     s_vdiagram *vdiagram = malloc_vdiagram(setup);
     vdiagram->bpoly = bpoly;
     
     for (int ii=0; ii<setup->N_points; ii++) {
-        vdiagram->vcells[ii] = extract_voronoi_cell(vdiagram, setup, ii);
+        vdiagram->vcells[ii] = extract_voronoi_cell(vdiagram, setup, faces_setup,
+                                fnormals_setup, Nf_setup, ii);
     }
 
     return vdiagram;
@@ -736,7 +618,7 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
         snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[ii%8]);
         plot_add_vcell(pipe, vcell, buff);
 
-        // plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
+        plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
 
         for (int jj=0; jj<vdiagram->N_vcells; jj++) {
             fprintf(pipe, "\"<echo \'");

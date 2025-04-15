@@ -333,6 +333,39 @@ int is_inside_convhull(double *query, double **pch, int *faces, double **fnormal
 }
 
 
+void inside_ray_convhull_intersection(double **pch, int *faces, double **fnormals, int Nf, double *origin, double *dir, double *OUT)
+{   
+    static double **vertices_face = NULL;
+    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
+
+    assert(is_inside_convhull(origin, pch, faces, fnormals, Nf) && "Ray origin is not inside convhull.");
+
+    for (int ii=0; ii<Nf; ii++) {
+        vertices_face[0][0] = pch[faces[ii*3]][0];
+        vertices_face[0][1] = pch[faces[ii*3]][1];
+        vertices_face[0][2] = pch[faces[ii*3]][2];
+        vertices_face[1][0] = pch[faces[ii*3 + 1]][0];
+        vertices_face[1][1] = pch[faces[ii*3 + 1]][1];
+        vertices_face[1][2] = pch[faces[ii*3 + 1]][2];
+        vertices_face[2][0] = pch[faces[ii*3+2]][0];
+        vertices_face[2][1] = pch[faces[ii*3+2]][1];
+        vertices_face[2][2] = pch[faces[ii*3+2]][2];
+
+        double intersection[3];
+        if (ray_triangle_intersection_3d(vertices_face, origin, dir, intersection)) {
+            OUT[0] = intersection[0];
+            OUT[1] = intersection[1];
+            OUT[2] = intersection[2];
+            return;
+        }
+    }
+    puts("Did not find an intersection with convhull?");
+    exit(1);
+}
+
+
+
+
 int is_in_boundary_convhull(int *faces, int Nf, int vid)
 {
     return inarray(faces, Nf * 3, vid);
@@ -387,6 +420,39 @@ double compute_volume_convhull(double **points, int *faces, double **fnormals, i
                      points[faces[ii*3 + 2]][0]);
     }
     return vol / 6;
+}
+
+
+double compute_volume_convhull_from_points(double **points, int Np)
+{
+    ch_vertex *ch_vertices = convert_points_to_chvertex(points, Np);
+    int *faces;
+    int N_faces;
+    convhull_3d_build(ch_vertices, Np, &faces, &N_faces);
+
+    double CM[3];
+    find_center_mass(points, Np, 3, CM);
+    double **fnormals = extract_normals_from_ch(ch_vertices, faces, N_faces, CM);
+    
+    double volume = compute_volume_convhull(points, faces, fnormals, N_faces);
+
+    free(ch_vertices);
+    free(faces);
+    free_matrix(fnormals, N_faces);
+    return volume;
+}
+
+
+void extract_faces_convhull_from_points(double **points, int Np, int **faces, double ***fnormals, int *Nf)
+{
+    ch_vertex *ch_vertices = convert_points_to_chvertex(points, Np);
+    convhull_3d_build(ch_vertices, Np, faces, Nf);
+
+    double CM[3];
+    find_center_mass(points, Np, 3, CM);
+    *fnormals = extract_normals_from_ch(ch_vertices, *faces, *Nf, CM);
+
+    free(ch_vertices);
 }
 
 
