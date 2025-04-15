@@ -379,6 +379,8 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
     puts("DEBUG POISSON: Finding initial point...");
     random_point_uniform(bpoly->min, bpoly->max, &x);
     while (!is_inside_convhull(x.coords, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf)) {
+        printf("DEBUG POISSON: (%f, %f, %f) : %d\n", x.coords[0], x.coords[1], x.coords[2], 
+                is_inside_convhull(x.coords, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf));
         random_point_uniform(bpoly->min, bpoly->max, &x);
     }
     puts("DEBUG POISSON: Found!");
@@ -450,6 +452,7 @@ void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *
     fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
     fprintf(pipe, "set output '%s.png'\n", f_name);
     fprintf(pipe, "set pm3d depthorder\n");
+    fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
     fprintf(pipe, "set view 100, 60, \n");
     fprintf(pipe, "set xyplane at 0\n");
     fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
@@ -476,13 +479,20 @@ void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *
     }
 
     fprintf(pipe, "\"<echo \'");
-    for (int ii=0; ii<Np; ii++) {
-        fprintf(pipe, "%f %f %f\\n", points[ii][0], points[ii][1], points[ii][2]);
+    for (int ii=0; ii<bpoly->Np; ii++) {
+        fprintf(pipe, "%f %f %f\\n", bpoly->points[ii][0], bpoly->points[ii][1], bpoly->points[ii][2]);
     }
     fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
 
-    fprintf(pipe, "\n");
 
+    fprintf(pipe, "\"<echo \'");
+    for (int ii=0; ii<Np; ii++) {
+        fprintf(pipe, "%f %f %f\\n", points[ii][0], points[ii][1], points[ii][2]);
+    }
+    fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
+
+    fprintf(pipe, "\n");
+    pclose(pipe);
 }
 
 #endif

@@ -98,6 +98,62 @@ void print_ncells(const s_setup *setup)
 }
 
 
+void write_ncell3d_file(s_setup *setup, s_ncell *ncell, FILE *file)
+{
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[0]][0],
+                                setup->points[ncell->vertex_id[0]][1],
+                                setup->points[ncell->vertex_id[0]][2]);
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[1]][0],
+                                setup->points[ncell->vertex_id[1]][1],
+                                setup->points[ncell->vertex_id[1]][2]);
+    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[2]][0],
+                                  setup->points[ncell->vertex_id[2]][1],
+                                  setup->points[ncell->vertex_id[2]][2]);
+
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[0]][0],
+                                setup->points[ncell->vertex_id[0]][1],
+                                setup->points[ncell->vertex_id[0]][2]);
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[1]][0],
+                                setup->points[ncell->vertex_id[1]][1],
+                                setup->points[ncell->vertex_id[1]][2]);
+    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[3]][0],
+                                  setup->points[ncell->vertex_id[3]][1],
+                                  setup->points[ncell->vertex_id[3]][2]);
+
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[3]][0],
+                                setup->points[ncell->vertex_id[3]][1],
+                                setup->points[ncell->vertex_id[3]][2]);
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[1]][0],
+                                setup->points[ncell->vertex_id[1]][1],
+                                setup->points[ncell->vertex_id[1]][2]);
+    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[2]][0],
+                                  setup->points[ncell->vertex_id[2]][1],
+                                  setup->points[ncell->vertex_id[2]][2]);
+
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[0]][0],
+                                setup->points[ncell->vertex_id[0]][1],
+                                setup->points[ncell->vertex_id[0]][2]);
+    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[3]][0],
+                                setup->points[ncell->vertex_id[3]][1],
+                                setup->points[ncell->vertex_id[3]][2]);
+    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[2]][0],
+                                  setup->points[ncell->vertex_id[2]][1],
+                                  setup->points[ncell->vertex_id[2]][2]);
+}
+
+
+void write_dt3d_file(s_setup *setup, FILE *file)
+{
+    s_ncell *current = setup->head;
+    while (current) {
+        write_ncell3d_file(setup, current, file);
+        fprintf(file, "\n\n");
+        current = current->next;
+    }
+}
+
+
+
 void initialize_ncells_counter(const s_setup *setup)
 {
     s_ncell *current = setup->head;
@@ -395,12 +451,26 @@ int is_delaunay_3d(const s_setup *setup)
 
 
 void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)
-{
-    // THIS IS JUST FOR DEBUGGING!!
-    double **vertices = malloc_matrix(4, 3);
-    extract_vertices_ncell(setup, ncell, vertices);
-
-    ncell->volume = compute_volume_convhull_from_points(vertices, 4);
+{   // THIS IS JUST FOR DEBUGGING!!
+    
+    ncell->volume = fabs(1.0/6.0 * 
+                         orient3d(setup->points[ncell->vertex_id[0]], 
+                                  setup->points[ncell->vertex_id[1]],
+                                  setup->points[ncell->vertex_id[2]],
+                                  setup->points[ncell->vertex_id[3]]));
+    // static double **vertices = NULL;
+    // if (!vertices) vertices = malloc_matrix(4, 3);
+    //
+    // extract_vertices_ncell(setup, ncell, vertices);
+    //
+    // // ncell->volume = compute_volume_convhull_from_points(vertices, 4);
+    // double aux_vol = compute_volume_convhull_from_points(vertices, 4);
+    // printf("DEBUG VOLUME NCELL: %f, %f\n", ncell->volume, aux_vol);
+    // if (ncell->volume < 0) {
+    //     printf("DEBUG ADD_NCELL_VOLUME: vol = %f, vertices = (%d, %d, %d, %d)\n", 
+    //             ncell->volume, ncell->vertex_id[0], ncell->vertex_id[1], 
+    //             ncell->vertex_id[2], ncell->vertex_id[3]);
+    // }
 }
 
 
@@ -436,39 +506,39 @@ void plot_ncell_3d(s_setup *setup, s_ncell *ncell, char *f_name, double *ranges)
 {
     FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
     fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
-    fprintf(pipe, "set output '%s.png'\n", f_name);
     fprintf(pipe, "set pm3d depthorder\n");
+    fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
     fprintf(pipe, "set view 100, 60, \n");
     fprintf(pipe, "set xyplane at 0\n");
-    fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-    fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-    fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+    if (ranges) {
+        fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
+        fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
+        fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+    }
     fprintf(pipe, "set xlabel 'x'\n");
     fprintf(pipe, "set ylabel 'y'\n");
     fprintf(pipe, "set zlabel 'z'\n");
     fflush(pipe);
-    fprintf(pipe, "splot ");
-    
-    plot_add_ncell(pipe, setup, ncell, "w polygons fs transparent solid 0.1 notitle");
-    
-    fprintf(pipe, "\"<echo \'");
-    for (int ii=0; ii<setup->N_points; ii++) {
-        fprintf(pipe, "%f %f %f\\n", setup->points[ii][0], setup->points[ii][1], setup->points[ii][2]);
-    }
-    fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
 
-    fflush(pipe);
+    fprintf(pipe, "set output '%s.png'\n", f_name);
+    fprintf(pipe, "splot ");
+    plot_add_ncell(pipe, setup, ncell, "w polygons fs transparent solid 0.2 fc rgb '#000090' notitle");
+
     fprintf(pipe, "\n");
     pclose(pipe);
 }
 
 
-void plot_dt_3d(s_setup *setup, char *f_name, double *ranges)
+void plot_dt_3d(s_setup *setup, char *f_name, double *ranges, int max_files)
 {
+    char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
+        "#90ff70", "#ffee00", "#ff7000", "#ee0000", "#7f0000" };
+    char buff[1024];
+
     FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
     fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
-    fprintf(pipe, "set output '%s.png'\n", f_name);
     fprintf(pipe, "set pm3d depthorder\n");
+    fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
     fprintf(pipe, "set view 100, 60, \n");
     fprintf(pipe, "set xyplane at 0\n");
     fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
@@ -478,26 +548,61 @@ void plot_dt_3d(s_setup *setup, char *f_name, double *ranges)
     fprintf(pipe, "set ylabel 'y'\n");
     fprintf(pipe, "set zlabel 'z'\n");
     fflush(pipe);
-    fprintf(pipe, "splot ");
-    static double **face_vertices = NULL;
-    if (!face_vertices) face_vertices = malloc_matrix(3, 3);
 
+
+    // PLOT ALL CELLS
+    fprintf(pipe, "set output '%s_v1.png'\n", f_name);
+    fprintf(pipe, "splot ");
+
+    int it = 0;
     s_ncell *current = setup->head;
     while (current) {
-        plot_add_ncell(pipe, setup, current, "w polygons fs transparent solid 0.1 notitle");
-        // for (int ii=0; ii<4; ii++) {
-        //     extract_vertices_face(setup, current, &ii, 2, face_vertices);
-        //     fprintf(pipe, "\"<echo \'");
-        //     fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
-        //     fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
-        //     fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
-        //     fprintf(pipe, "pt 7 lc rgb 'black' notitle, ");
-        // }
+        snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[it%8]);
+        plot_add_ncell(pipe, setup, current, buff);
+        current = current->next;
+        it++;
+    }
+    fprintf(pipe, "\n");
+
+    fprintf(pipe, "set output '%s_v2.png'\n", f_name);
+    fprintf(pipe, "set view 100, 90, 1.5\n");
+    fprintf(pipe, "replot\n");
+
+    fprintf(pipe, "set output '%s_v3.png'\n", f_name);
+    fprintf(pipe, "set view 100, 180, 1.5\n");
+    fprintf(pipe, "replot\n");
+
+    fprintf(pipe, "set output '%s_v4.png'\n", f_name);
+    fprintf(pipe, "set view 100, 270, 1.5\n");
+    fprintf(pipe, "replot\n");
+
+
+
+    // A NEW PLOT FOR EACH CELL (UNTIL MAX_FILES)
+    it = 0;
+    current = setup->head;
+    while (current) {
+        if (max_files != 0 && it > max_files) break;
+
+        fprintf(pipe, "set output '%s_%d.png'\n", f_name, it);
+        fprintf(pipe, "splot ");
+        
+        snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[it%8]);
+        plot_add_ncell(pipe, setup, current, buff);
+
+        for (int jj=0; jj<setup->N_points; jj++) {
+            fprintf(pipe, "\"<echo \'");
+            fprintf(pipe, "%f %f %f\\n", setup->points[jj][0], setup->points[jj][1], setup->points[jj][2]);
+            fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
+        }
+        fprintf(pipe, "\n");
+
+        it++;
         current = current->next;
     }
 
-    fflush(pipe);
-    fprintf(pipe, "\n");
+
+
     pclose(pipe);
 }
 

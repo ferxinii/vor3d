@@ -168,7 +168,7 @@ int main(void) {
     s_setup *setup2 = initialize_setup(p_dt, 2, 3);
     print_matrix(setup2->points, 6, 3);
 
-    // plot_ncell_3d(setup2, setup2->head, "flip14/before");
+    plot_ncell_3d(setup2, setup2->head, "flip14/before", NULL);
 
     printf("Before insertion, N_ncells = %d, dim = %d\n", setup2->N_ncells, setup2->dim);
     puts("\nInserting 0:");
@@ -176,23 +176,23 @@ int main(void) {
     printf("After insertion, N_ncells = %d\n", setup2->N_ncells);
     print_ncells(setup2);
 
-    // plot_ncell_3d(setup2, setup2->head, "flip14/after1_1");
-    // plot_ncell_3d(setup2, setup2->head->next, "flip14/after1_2");
-    // plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after1_3");
-    // plot_ncell_3d(setup2, setup2->head->next->next->next, "flip14/after1_4");
+    plot_ncell_3d(setup2, setup2->head, "flip14/after1_1", NULL);
+    plot_ncell_3d(setup2, setup2->head->next, "flip14/after1_2", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after1_3", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next->next, "flip14/after1_4", NULL);
 
     puts("\nInserting 1:");
     insert_one_point(setup2, 1, stack2);
     printf("After insertion, N_ncells = %d\n", setup2->N_ncells);
     print_ncells(setup2);
     
-    // plot_ncell_3d(setup2, setup2->head, "flip14/after2_1");
-    // plot_ncell_3d(setup2, setup2->head->next, "flip14/after2_2");
-    // plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after2_3");
-    // plot_ncell_3d(setup2, setup2->head->next->next->next, "flip14/after2_4");
-    // plot_ncell_3d(setup2, setup2->head->next->next->next->next, "flip14/after2_5");
-    // plot_ncell_3d(setup2, setup2->head->next->next->next->next->next, "flip14/after2_6");
-    // plot_ncell_3d(setup2, setup2->head->next->next->next->next->next->next, "flip14/after2_7");
+    plot_ncell_3d(setup2, setup2->head, "flip14/after2_1", NULL);
+    plot_ncell_3d(setup2, setup2->head->next, "flip14/after2_2", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next, "flip14/after2_3", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next->next, "flip14/after2_4", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next->next->next, "flip14/after2_5", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next->next->next->next, "flip14/after2_6", NULL);
+    plot_ncell_3d(setup2, setup2->head->next->next->next->next->next->next, "flip14/after2_7", NULL);
 
     stack_free(stack2);
 
@@ -233,15 +233,15 @@ int main(void) {
     nc2->opposite[2] = NULL;    nc2->opposite[3] = nc1;
 
     print_ncells(&s2);
-    // plot_ncell_3d(&s2, s2.head, "flip23/before1");
-    // plot_ncell_3d(&s2, s2.head->next, "flip23/before2");
+    plot_ncell_3d(&s2, s2.head, "flip23/before1", NULL);
+    plot_ncell_3d(&s2, s2.head->next, "flip23/before2", NULL);
 
     flip23(&s2, stack, nc1, 3, 3);
     puts("\nFLIP23:");
     print_ncells(&s2);
-    // plot_ncell_3d(&s2, s2.head, "flip23/after1");
-    // plot_ncell_3d(&s2, s2.head->next, "flip23/after2");
-    // plot_ncell_3d(&s2, s2.head->next->next, "flip23/after3");
+    plot_ncell_3d(&s2, s2.head, "flip23/after1", NULL);
+    plot_ncell_3d(&s2, s2.head->next, "flip23/after2", NULL);
+    plot_ncell_3d(&s2, s2.head->next->next, "flip23/after3", NULL);
 
     flip32(&s2, stack, nc1, 0, 1, 2); 
     puts("\nFLIP32:");
@@ -299,21 +299,21 @@ int main(void) {
 
     puts("\nFLIP44\nbefore:");
     print_ncells(&s3);
-    // double ranges3[6] = {-2, 2, -2, 2, -2, 2};
-    // plot_ncell_3d(&s3, s3.head, "flip44/1", ranges3);
-    // plot_ncell_3d(&s3, s3.head->next, "flip44/2", ranges3);
-    // plot_ncell_3d(&s3, s3.head->next->next, "flip44/3", ranges3);
-    // plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/4", ranges3);
-    // plot_dt_3d(&s3, "flip44/before", ranges3);
+    double ranges3[6] = {-2, 2, -2, 2, -2, 2};
+    plot_ncell_3d(&s3, s3.head, "flip44/1", ranges3);
+    plot_ncell_3d(&s3, s3.head->next, "flip44/2", ranges3);
+    plot_ncell_3d(&s3, s3.head->next->next, "flip44/3", ranges3);
+    plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/4", ranges3);
+    plot_dt_3d(&s3, "flip44/before", ranges3, 0);
     
     flip44(&s3, stack, nc1, 0, 2);
     puts("after:");
     print_ncells(&s3);
-    // plot_dt_3d(&s3, "flip44/after", ranges3);
-    // plot_ncell_3d(&s3, s3.head, "flip44/after1", ranges3);
-    // plot_ncell_3d(&s3, s3.head->next, "flip44/after2", ranges3);
-    // plot_ncell_3d(&s3, s3.head->next->next, "flip44/after3", ranges3);
-    // plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/after4", ranges3);
+    plot_dt_3d(&s3, "flip44/after", ranges3, 0);
+    plot_ncell_3d(&s3, s3.head, "flip44/after1", ranges3);
+    plot_ncell_3d(&s3, s3.head->next, "flip44/after2", ranges3);
+    plot_ncell_3d(&s3, s3.head->next->next, "flip44/after3", ranges3);
+    plot_ncell_3d(&s3, s3.head->next->next->next, "flip44/after4", ranges3);
     
     free_ncell(nc1);
     free_ncell(nc2);
@@ -331,12 +331,12 @@ int main(void) {
     printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt_setup));
     printf("N POINTS : %d\n", dt_setup->N_points);
     
-    // double ranges[6] = {-1.5, 1.5, -1.5, 1.5, -1.5, 1.5};
-    // plot_ncell_3d(dt_setup, dt_setup->head, "toy/test", ranges);
-    // plot_ncell_3d(dt_setup, dt_setup->head->next, "toy/test_1", ranges);
-    // plot_ncell_3d(dt_setup, dt_setup->head->next->next, "toy/test_2", ranges);
-    // plot_dt_3d(dt_setup,  "toy/test_3", ranges);
-    //
+    double ranges[6] = {-1.5, 1.5, -1.5, 1.5, -1.5, 1.5};
+    plot_ncell_3d(dt_setup, dt_setup->head, "toy/test", ranges);
+    plot_ncell_3d(dt_setup, dt_setup->head->next, "toy/test_1", ranges);
+    plot_ncell_3d(dt_setup, dt_setup->head->next->next, "toy/test_2", ranges);
+    plot_dt_3d(dt_setup,  "toy/test_3", ranges, 0);
+
 
     // TODO!! STILL CANNOT TRIANGULATE SETS THAT ARE NOT IN GENERAL POSITION
     // puts("\n-------------- TESTING DT 2 ---------------");
@@ -370,14 +370,14 @@ int main(void) {
     print_ncells(dt_setup_2);
     printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt_setup_2));
 
-    // double ranges_2[6] = {-2.5, 2.5, -2.5, 2.5, -2.5, 2.5};
-    // plot_dt_3d(dt_setup_2,  "toy2/test", ranges_2);
-    // plot_ncell_3d(dt_setup_2, dt_setup_2->head, "toy2/test_1", ranges_2);
-    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next,  "toy2/test_2", ranges_2);
-    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next, "toy2/test_3", ranges_2);
-    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next, "toy2/test_4", ranges_2);
-    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next->next, "toy2/test_5", ranges_2);
-    // plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next->next->next, "toy2/test_6", ranges_2);
+    double ranges_2[6] = {-2.5, 2.5, -2.5, 2.5, -2.5, 2.5};
+    plot_dt_3d(dt_setup_2,  "toy2/test", ranges_2, 0);
+    plot_ncell_3d(dt_setup_2, dt_setup_2->head, "toy2/test_1", ranges_2);
+    plot_ncell_3d(dt_setup_2, dt_setup_2->head->next,  "toy2/test_2", ranges_2);
+    plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next, "toy2/test_3", ranges_2);
+    plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next, "toy2/test_4", ranges_2);
+    plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next->next, "toy2/test_5", ranges_2);
+    plot_ncell_3d(dt_setup_2, dt_setup_2->head->next->next->next->next->next, "toy2/test_6", ranges_2);
     
     puts("--------------------------------------\n");
 
@@ -399,9 +399,13 @@ int main(void) {
     s_setup *ss = construct_dt_3d(pp, N);
     printf("RANDOM SET OF POINTS, IS DELAUNAY: %d\n", is_delaunay_3d(ss));
     double ranges2[6] = {0, 1, 0, 1, 0, 1};
-    plot_dt_3d(ss, "random_example/out", ranges2);
+    // plot_dt_3d(ss, "random_example/out", ranges2);
     
 
+
+
+
+    exit(1);
     // VORONOI DIAGRAM
     puts("\n\n------------- VORONOI DIAGRAM ---------------");
     // printf("VALID NCELLS: %d\n", count_valid_ncells_reduced_triangulation(dt_setup));

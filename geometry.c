@@ -297,6 +297,45 @@ double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double
 }
 
 
+double **extract_normals_from_ch_UNNORMALIZED(ch_vertex *vertices, int *faces, int Nf, double *ch_CM)
+{ 
+    static double **vertices_face = NULL;
+    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
+    double **out = malloc_matrix(Nf, 3);
+    for (int ii=0; ii<Nf; ii++) {
+        ch_vertex v0 = vertices[faces[ii*3+0]];
+        ch_vertex v1 = vertices[faces[ii*3+1]];
+        ch_vertex v2 = vertices[faces[ii*3+2]];
+
+        double d1[3], d2[3];
+        d1[0] = v1.x - v0.x; d1[1] = v1.y - v0.y; d1[2] = v1.z - v0.z;
+        d2[0] = v2.x - v0.x; d2[1] = v2.y - v0.y; d2[2] = v2.z - v0.z;
+
+        double n[3];
+        cross_3d(d1, d2, n);
+        
+        vertices_face[0][0] = v0.x; vertices_face[0][1] = v0.y; vertices_face[0][2] = v0.z;
+        vertices_face[1][0] = v1.x; vertices_face[1][1] = v1.y; vertices_face[1][2] = v1.z;
+        vertices_face[2][0] = v2.x; vertices_face[2][1] = v2.y; vertices_face[2][2] = v2.z;
+
+        double fc[3], dir[3];
+        find_center_mass(vertices_face, 3, 3, fc);
+        subtract_3d(fc, ch_CM, dir);
+        double dot = dot_3d(dir, n);
+        if (dot < 0) {
+            n[0] = -n[0];
+            n[1] = -n[1];
+            n[2] = -n[2];
+        }
+
+        out[ii][0] = n[0];
+        out[ii][1] = n[1];
+        out[ii][2] = n[2];
+    }
+    return out;
+}
+
+
 
 int is_inside_convhull(double *query, double **pch, int *faces, double **fnormals, int Nf)
 {   
@@ -432,7 +471,7 @@ double compute_volume_convhull_from_points(double **points, int Np)
 
     double CM[3];
     find_center_mass(points, Np, 3, CM);
-    double **fnormals = extract_normals_from_ch(ch_vertices, faces, N_faces, CM);
+    double **fnormals = extract_normals_from_ch_UNNORMALIZED(ch_vertices, faces, N_faces, CM);
     
     double volume = compute_volume_convhull(points, faces, fnormals, N_faces);
 
@@ -484,21 +523,41 @@ void segment_convex_hull_intersection(const double *p0, const double *p1, double
     
     *ind1 = 0;
     *ind2 = 0;
-    double TOL = 1e-6;  // FIXME TODO DEBUG, IS THIS NECESSARY??
+    // double TOL = 1e-10;  // FIXME TODO DEBUG, IS THIS NECESSARY??
                         // I think in this way i can just select the vertex of the segment
                         // that is completely inside, and ignore the ones that are potentially
                         // vertices already being selected by inside_conv_hull
-    if (tmin > TOL && tmin < tmax) {
+    // if (tmin > TOL && tmin < tmax) {
+    //     *ind1 = 1;
+    //     i1[0] = p0[0] + tmin * p1_p0[0];  
+    //     i1[1] = p0[1] + tmin * p1_p0[1];  
+    //     i1[2] = p0[2] + tmin * p1_p0[2];  
+    // }
+    // if (tmax < 1-TOL && tmin < tmax) {
+    //     *ind2 = 1;
+    //     i2[0] = p0[0] + tmax * p1_p0[0];  
+    //     i2[1] = p0[1] + tmax * p1_p0[1];  
+    //     i2[2] = p0[2] + tmax * p1_p0[2];  
+    // }
+    //
+
+    if (tmin < 0) {
+        printf("WAGNING! tmin < 0\n");
+        tmin = 0;
+    }
+    if (tmax > 0) {
+        printf("WAGNING! tmax > 0\n");
+        tmax = 1;
+    }
+    if (tmin < tmax) {
         *ind1 = 1;
         i1[0] = p0[0] + tmin * p1_p0[0];  
         i1[1] = p0[1] + tmin * p1_p0[1];  
-        i1[2] = p0[2] + tmin * p1_p0[2];  
-    }
-    if (tmax < 1-TOL && tmin < tmax) {
-        *ind2 = 1;
+        i1[2] = p0[2] + tmin * p1_p0[2];
+
         i2[0] = p0[0] + tmax * p1_p0[0];  
         i2[1] = p0[1] + tmax * p1_p0[1];  
-        i2[2] = p0[2] + tmax * p1_p0[2];  
+        i2[2] = p0[2] + tmax * p1_p0[2];
     }
 }
 

@@ -21,12 +21,118 @@ double r_fun(double *x)
 }
 
 
+void write_cube_points(int n, const char *filename) {
+    if(n < 1) {
+        fprintf(stderr, "n must be at least 1.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    double s = 1;
+    double min[3] = {-s, -s, -s};
+    double max[3] = {s, s, s};
+
+    // Compute total unique points on the cube surface.
+    // Using the derivation:
+    //  - 2 faces at constant x: 2*(n+1)² points.
+    //  - 2 faces at constant y (excluding x boundaries): 2*(n+1)*(n-1) points.
+    //  - 2 faces at constant z (excluding x and y boundaries): 2*(n-1)² points.
+    int total_points = 2 * ((n + 1) * (n + 1)) + 2 * ((n + 1) * (n - 1)) + 2 * ((n - 1) * (n - 1));
+
+    // Allocate an array to hold all points (each point has 3 coordinates).
+    double **points = malloc_matrix(total_points, 3);
+    
+    int index = 0;
+    double dx = (max[0] - min[0]) / n;
+    double dy = (max[1] - min[1]) / n;
+    double dz = (max[2] - min[2]) / n;
+
+    for (int j = 0; j <= n; j++) {
+        double y = min[1] + j * dy;
+        for (int k = 0; k <= n; k++) {
+            double z = min[2] + k * dz;
+            points[index][0] = min[0];
+            points[index][1] = y;
+            points[index][2] = z;
+            index++;
+        }
+    }
+
+    for (int j = 0; j <= n; j++) {
+        double y = min[1] + j * dy;
+        for (int k = 0; k <= n; k++) {
+            double z = min[2] + k * dz;
+            points[index][0] = max[0];
+            points[index][1] = y;
+            points[index][2] = z;
+            index++;
+        }
+    }
+
+    // Here, x varies from min[0]+dx to max[0]-dx, so i = 1 to n-1.
+    for (int i = 1; i < n; i++) {
+        double x = min[0] + i * dx;
+        for (int k = 0; k <= n; k++) {
+            double z = min[2] + k * dz;
+            points[index][0] = x;
+            points[index][1] = min[1];
+            points[index][2] = z;
+            index++;
+        }
+    }
+
+    // Face 4: y = max[1] (exclude x boundaries)
+    for (int i = 1; i < n; i++) {
+        double x = min[0] + i * dx;
+        for (int k = 0; k <= n; k++) {
+            double z = min[2] + k * dz;
+            points[index][0] = x;
+            points[index][1] = max[1];
+            points[index][2] = z;
+            index++;
+        }
+    }
+
+    for (int i = 1; i < n; i++) {
+        double x = min[0] + i * dx;
+        for (int j = 1; j < n; j++) {
+            double y = min[1] + j * dy;
+            points[index][0] = x;
+            points[index][1] = y;
+            points[index][2] = min[2];
+            index++;
+        }
+    }
+
+    for (int i = 1; i < n; i++) {
+        double x = min[0] + i * dx;
+        for (int j = 1; j < n; j++) {
+            double y = min[1] + j * dy;
+            points[index][0] = x;
+            points[index][1] = y;
+            points[index][2] = max[2];
+            index++;
+        }
+    }
+
+    assert(index == total_points);
+
+    // Write the points to the output file.
+    FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%d\n\n", total_points);
+    for (int i = 0; i < total_points; i++) {
+        fprintf(fp, "%f, %f, %f\n", points[i][0], points[i][1], points[i][2]);
+    }
+    free_matrix(points, total_points);
+    fclose(fp);
+}
+
+
 void write_sphere_txt(void)
 {
     // Parameters for the sphere
     double radius = 2;
-    int nTheta = 18; // Number of steps in the polar angle (θ)
-    int nPhi = 36;   // Number of steps in the azimuthal angle (φ)
+    int nTheta = 3; //18; // Number of steps in the polar angle (θ)
+    int nPhi = 3; //36;   // Number of steps in the azimuthal angle (φ)
 
     // Open the file for writing coordinates
     FILE *fp = fopen(FILE_COORDS_SPHERE, "w");
@@ -79,13 +185,26 @@ void check_volume(s_bound_poly *bp, s_vdiagram *vd)
 
 s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
 {
+
     int N_points_poiss;
     puts("Now generating poisson inside, nonuniform");
     double **points_poiss = generate_nonuniform_poisson_dist_inside(bp, &r_fun, &N_points_poiss);
+    // double rmax = 1.5;
+    // double **points_poiss = generate_uniform_poisson_dist_inside(bp, rmax, &N_points_poiss);
     printf("NPOINTS: %d\n", N_points_poiss);
 
-    // puts("Constructing dt...");
+    puts("Constructing dt...");
     s_setup *dt = construct_dt_3d(points_poiss, N_points_poiss);
+
+    puts("Plotting dt...");
+    double ranges_plot[6];
+    ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
+    ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
+    ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
+    plot_dt_3d(dt, "plot_sphere/dt", ranges_plot, 0);
+    FILE *f = fopen("test_ncells.txt", "w");
+    write_dt3d_file(dt, f);
+    fclose(f);
 
     double sum_vol = 0;
     s_ncell *current = dt->head;
@@ -93,7 +212,7 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     while (current) {
         sum_vol += current->volume;
         if (current->volume < 0) {
-            printf("vol dt %d: %f\n", it++, current->volume);
+            printf("vol dt %d / %d: %f\n", it++, dt->N_ncells, current->volume);
         }
         current = current->next;
     }
@@ -117,13 +236,21 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
 int main(void) {
     srand(time(NULL));
     fopen(FILE_VOLS_SPHERE, "w");
+    system("rm -f plot_sphere/*");
 
     // READ BP AND STORE THEM IN A POINTER, THAT I WILL COPY EACH TIME I CREATE A NEW VD
     double **points_bp_L;
     int N_points_bp_L;
     s_bound_poly *bp_L;
-    write_sphere_txt();
+    write_cube_points(1, FILE_COORDS_SPHERE);
+    // write_sphere_txt();
     new_bpoly_from_txt(FILE_COORDS_SPHERE, &points_bp_L, &N_points_bp_L, &bp_L, 0); 
+
+    double ranges_plot[6];
+    ranges_plot[0] = bp_L->min[0];     ranges_plot[1] = bp_L->max[0];
+    ranges_plot[2] = bp_L->min[1];     ranges_plot[3] = bp_L->max[1];
+    ranges_plot[4] = bp_L->min[2];     ranges_plot[5] = bp_L->max[2];
+    plot_bpoly_with_points(bp_L, NULL, 0, "bpoly_test", ranges_plot);
 
     
 
@@ -167,12 +294,8 @@ int main(void) {
     fclose(ftest);
 
 
-    // double ranges_plot[6];
-    // ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
-    // ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
-    // ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
-    // puts("PLOTTING...");
-    // plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
+    puts("PLOTTING...");
+    plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
 
 
 
