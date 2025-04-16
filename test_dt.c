@@ -21,108 +21,21 @@ double r_fun(double *x)
 }
 
 
-void write_cube_points(int n, const char *filename) {
-    if(n < 1) {
-        fprintf(stderr, "n must be at least 1.\n");
-        exit(EXIT_FAILURE);
-    }
-
+void write_cube_points(const char *filename)
+{
     double s = 1;
-    double min[3] = {-s, -s, -s};
-    double max[3] = {s, s, s};
-
-    // Compute total unique points on the cube surface.
-    // Using the derivation:
-    //  - 2 faces at constant x: 2*(n+1)² points.
-    //  - 2 faces at constant y (excluding x boundaries): 2*(n+1)*(n-1) points.
-    //  - 2 faces at constant z (excluding x and y boundaries): 2*(n-1)² points.
-    int total_points = 2 * ((n + 1) * (n + 1)) + 2 * ((n + 1) * (n - 1)) + 2 * ((n - 1) * (n - 1));
-
-    // Allocate an array to hold all points (each point has 3 coordinates).
-    double **points = malloc_matrix(total_points, 3);
     
-    int index = 0;
-    double dx = (max[0] - min[0]) / n;
-    double dy = (max[1] - min[1]) / n;
-    double dz = (max[2] - min[2]) / n;
-
-    for (int j = 0; j <= n; j++) {
-        double y = min[1] + j * dy;
-        for (int k = 0; k <= n; k++) {
-            double z = min[2] + k * dz;
-            points[index][0] = min[0];
-            points[index][1] = y;
-            points[index][2] = z;
-            index++;
-        }
-    }
-
-    for (int j = 0; j <= n; j++) {
-        double y = min[1] + j * dy;
-        for (int k = 0; k <= n; k++) {
-            double z = min[2] + k * dz;
-            points[index][0] = max[0];
-            points[index][1] = y;
-            points[index][2] = z;
-            index++;
-        }
-    }
-
-    // Here, x varies from min[0]+dx to max[0]-dx, so i = 1 to n-1.
-    for (int i = 1; i < n; i++) {
-        double x = min[0] + i * dx;
-        for (int k = 0; k <= n; k++) {
-            double z = min[2] + k * dz;
-            points[index][0] = x;
-            points[index][1] = min[1];
-            points[index][2] = z;
-            index++;
-        }
-    }
-
-    // Face 4: y = max[1] (exclude x boundaries)
-    for (int i = 1; i < n; i++) {
-        double x = min[0] + i * dx;
-        for (int k = 0; k <= n; k++) {
-            double z = min[2] + k * dz;
-            points[index][0] = x;
-            points[index][1] = max[1];
-            points[index][2] = z;
-            index++;
-        }
-    }
-
-    for (int i = 1; i < n; i++) {
-        double x = min[0] + i * dx;
-        for (int j = 1; j < n; j++) {
-            double y = min[1] + j * dy;
-            points[index][0] = x;
-            points[index][1] = y;
-            points[index][2] = min[2];
-            index++;
-        }
-    }
-
-    for (int i = 1; i < n; i++) {
-        double x = min[0] + i * dx;
-        for (int j = 1; j < n; j++) {
-            double y = min[1] + j * dy;
-            points[index][0] = x;
-            points[index][1] = y;
-            points[index][2] = max[2];
-            index++;
-        }
-    }
-
-    assert(index == total_points);
-
     // Write the points to the output file.
     FILE *fp = fopen(filename, "w");
-    fprintf(fp, "%d\n\n", total_points);
-    for (int i = 0; i < total_points; i++) {
-        fprintf(fp, "%f, %f, %f\n", points[i][0], points[i][1], points[i][2]);
-    }
-    free_matrix(points, total_points);
+    fprintf(fp, "%d\n\n", 8);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, s);
+    fprintf(fp, "%f, %f, %f\n", s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, s, s);
     fclose(fp);
 }
 
@@ -139,8 +52,8 @@ void write_sphere_txt(void)
     fprintf(fp, "%d\n\n", 2 + nPhi * (nTheta-1));
 
     // Generate coordinates on the surface of the sphere
-    // θ: angle from the positive z-axis (0 to PI)
-    // φ: angle in the x-y plane (0 to 2*PI)
+    // theta: angle from the positive z-axis (0 to PI)
+    // phi: angle in the x-y plane (0 to 2*PI)
         // Loop over theta (0 to PI)
     for (int i = 0; i <= nTheta; i++) {
         double theta = M_PI * i / nTheta;
@@ -242,7 +155,7 @@ int main(void) {
     double **points_bp_L;
     int N_points_bp_L;
     s_bound_poly *bp_L;
-    write_cube_points(1, FILE_COORDS_SPHERE);
+    write_cube_points(FILE_COORDS_SPHERE);
     // write_sphere_txt();
     new_bpoly_from_txt(FILE_COORDS_SPHERE, &points_bp_L, &N_points_bp_L, &bp_L, 0); 
 
@@ -277,24 +190,25 @@ int main(void) {
 
 
 
-    FILE *ftest = fopen("lost_volume.txt", "w");
+    // FILE *ftest = fopen("lost_volume.txt", "w");
     int Ntest = 1000;
     double **ptest = malloc_matrix(Ntest, 3);
-    for (int ii=0; ii<Ntest; ii++) {
-        double x[3]; 
-        random_point_inside_convhull(bp->points, bp->faces, bp->fnormals, bp->Nf, bp->min, bp->max, x);
-        while (find_inside_which_vcell(vd, x) != -1) {
-            random_point_inside_convhull(bp->points, bp->faces, bp->fnormals, bp->Nf, bp->min, bp->max, x);
-        }
-        ptest[ii][0] = x[0];
-        ptest[ii][1] = x[1];
-        ptest[ii][2] = x[2];
-        fprintf(ftest, "%f, %f, %f\n", x[0], x[1], x[2]);
-    }
-    fclose(ftest);
-
+    // for (int ii=0; ii<Ntest; ii++) {
+    //     double x[3]; 
+    //     random_point_inside_convhull(bp->points, bp->faces, bp->fnormals, bp->Nf, bp->min, bp->max, x);
+    //     while (find_inside_which_vcell(vd, x) != -1) {
+    //         random_point_inside_convhull(bp->points, bp->faces, bp->fnormals, bp->Nf, bp->min, bp->max, x);
+    //     }
+    //     ptest[ii][0] = x[0];
+    //     ptest[ii][1] = x[1];
+    //     ptest[ii][2] = x[2];
+    //     fprintf(ftest, "%f, %f, %f\n", x[0], x[1], x[2]);
+    // }
+    // fclose(ftest);
+    //
 
     puts("PLOTTING...");
+    ptest = NULL;
     plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
 
 

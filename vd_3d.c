@@ -9,6 +9,19 @@
 #include "bpoly.c"
 
 #define VCELL_BLOCK_VERTICES 1000
+#define MAX_PLANES 1000
+
+
+typedef struct plane {
+    double A[3];
+    double b;
+} s_plane;
+
+typedef struct planes_poly {
+    s_plane planes[MAX_PLANES];
+    int id[MAX_PLANES];
+    int Nplanes;
+} s_planes_poly;
 
 
 typedef struct vdiagram {
@@ -17,7 +30,6 @@ typedef struct vdiagram {
     const struct bound_poly *bpoly;
     double **seeds;
 } s_vdiagram;
-
 
 typedef struct vcell {
     int seed_id;
@@ -40,6 +52,7 @@ typedef struct vcell {
     int *faces;
     double **fnormals;
     double volume;
+    s_planes_poly *planes_poly;
 } s_vcell;
 
 
@@ -106,8 +119,7 @@ s_vdiagram *malloc_vdiagram(const s_setup *setup)
 void print_vcell(const s_vcell *vcell)
 {
     puts("VCELL");
-    printf("Seed: %d\n", vcell->seed_id);
-    printf("Nv = %d\n", vcell->Nv);
+    printf("Seed: %d, Nv = %d, vol = %f\n", vcell->seed_id, vcell->Nv, vcell->volume);
     printf("%f, %f, %f; %d, %d, %d, %d\n", vcell->vertices[0][0], vcell->vertices[0][1],
                             vcell->vertices[0][2], vcell->origin_vertices[0][3],
                             vcell->origin_vertices[0][0], vcell->origin_vertices[0][1], 
@@ -191,150 +203,30 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
 }
 
 
-int add_vvertex_from_coords(double *coords, int *dt_face_vid, s_vcell *vcell)
-{   // This function assumes that the vertex does not already exist!
-    increase_num_vertices_if_needed(vcell);
-
-    vcell->vertices[vcell->Nv][0] = coords[0];
-    vcell->vertices[vcell->Nv][1] = coords[1];
-    vcell->vertices[vcell->Nv][2] = coords[2];
-
-    vcell->origin_vertices[vcell->Nv][3] = -4;
-    vcell->origin_vertices[vcell->Nv][0] = dt_face_vid[0];
-    vcell->origin_vertices[vcell->Nv][1] = dt_face_vid[1];
-    vcell->origin_vertices[vcell->Nv][2] = dt_face_vid[2];
-
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
-}
-
-
-int add_vvertex_from_segment(double *i1, int bp_vid_1, int bp_vid_2, int face_id, s_vcell *vcell)
-{   // i1 has the coordinates of the intersection!
-    increase_num_vertices_if_needed(vcell);
-
-    vcell->vertices[vcell->Nv][0] = i1[0];
-    vcell->vertices[vcell->Nv][1] = i1[1];
-    vcell->vertices[vcell->Nv][2] = i1[2];
-    vcell->origin_vertices[vcell->Nv][3] = -4;
-    vcell->origin_vertices[vcell->Nv][0] = bp_vid_1;
-    vcell->origin_vertices[vcell->Nv][1] = bp_vid_2;
-    vcell->origin_vertices[vcell->Nv][2] = face_id;
-
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
-}
-
-
-int segment_vvertex_already_exists(const s_vcell *vcell, int p1, int p2)
-{
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (vcell->origin_vertices[ii][3] == -4 &&
-            inarray(vcell->origin_vertices[ii], 2, p1) && 
-            inarray(vcell->origin_vertices[ii], 2, p2)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-
-int add_vvertex_as_extension(double *coords, int *dt_face_vid, s_vcell *vcell)
-{   // This function assumes that the vertex does not already exist!
-    increase_num_vertices_if_needed(vcell);
-
-    vcell->vertices[vcell->Nv][0] = coords[0];
-    vcell->vertices[vcell->Nv][1] = coords[1];
-    vcell->vertices[vcell->Nv][2] = coords[2];
-
-    vcell->origin_vertices[vcell->Nv][3] = -2;
-    vcell->origin_vertices[vcell->Nv][0] = dt_face_vid[0];
-    vcell->origin_vertices[vcell->Nv][1] = dt_face_vid[1];
-    vcell->origin_vertices[vcell->Nv][2] = dt_face_vid[2];
-
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
-}
-
-
-int add_vvertex_from_bpoly(const s_bound_poly *bp, int id, s_vcell *vcell)
-{
-    increase_num_vertices_if_needed(vcell);
-
-    vcell->vertices[vcell->Nv][0] = bp->points[id][0];
-    vcell->vertices[vcell->Nv][1] = bp->points[id][1];
-    vcell->vertices[vcell->Nv][2] = bp->points[id][2];
-
-    vcell->origin_vertices[vcell->Nv][3] = -3;
-    vcell->origin_vertices[vcell->Nv][0] = id;
-
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
-}
-
-
-void remove_artificial_extended_vertices(s_vcell *vcell)
-{
-    int kk = 0;
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (vcell->origin_vertices[ii][3] != -2) {
-            copy_matrix(&vcell->vertices[ii], &vcell->vertices[ii-kk], 1, 3);
-            copy_matrix_int(&vcell->origin_vertices[ii], &vcell->origin_vertices[ii-kk], 1, 4);
-        } else {
-            kk++;
-        }
-    }
-    vcell->Nv = vcell->Nv - kk;
-}
-
-
-void correctly_bound_with_bp_vertices(const s_vdiagram *vdiagram, s_vcell *vcell)
+int add_vvertex_from_coords_if_unique(double *coords, int *dt_face_vid, s_vcell *vcell)
 {   
-    const s_bound_poly *bp = vdiagram->bpoly;
-    for (int ii=0; ii<bp->Np; ii++) {
-        if (is_inside_convhull(bp->points[ii], vcell->vertices, vcell->faces, vcell->fnormals, vcell->Nf)) {
-            add_vvertex_from_bpoly(bp, ii, vcell);
+    double EPS = 1e-9;
+    for (int ii=0; ii<vcell->Nv; ii++) {
+        if (norm_difference(coords, vcell->vertices[ii], 3) < EPS) {
+            // printf("DEBUG ADD_VV_COORDS: Already exists! (%f, %f, %f) (%f, %f, %f)\n", 
+                    // coords[0], coords[1], coords[2], vcell->vertices[ii][0], vcell->vertices[ii][1], vcell->vertices[ii][2]);
+            return -1;
         }
     }
+    increase_num_vertices_if_needed(vcell);
 
-    for (int ii=0; ii<bp->Nf; ii++) {
-        // CHECK SEGMENT CONVHULL INTERSECTION
-        double *p0, *p1, i1[3], i2[3]; 
-        int ind1, ind2;
-        if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 0], bp->faces[ii*3 + 1])) {
-            p0 = bp->points[bp->faces[ii*3 + 0]];
-            p1 = bp->points[bp->faces[ii*3 + 1]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
-                                                 vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
-            if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+0], bp->faces[ii*3+1], ii, vcell);
-            if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+0], bp->faces[ii*3+1], ii, vcell);
-        }
+    vcell->vertices[vcell->Nv][0] = coords[0];
+    vcell->vertices[vcell->Nv][1] = coords[1];
+    vcell->vertices[vcell->Nv][2] = coords[2];
 
-        if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 0], bp->faces[ii*3 + 2])) {
-            p0 = bp->points[bp->faces[ii*3 + 0]];
-            p1 = bp->points[bp->faces[ii*3 + 2]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
-                                                 vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
-            if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+0], bp->faces[ii*3+2], ii, vcell);
-            if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+0], bp->faces[ii*3+2], ii, vcell);
-        }
+    vcell->origin_vertices[vcell->Nv][3] = -4;
+    vcell->origin_vertices[vcell->Nv][0] = dt_face_vid[0];
+    vcell->origin_vertices[vcell->Nv][1] = dt_face_vid[1];
+    vcell->origin_vertices[vcell->Nv][2] = dt_face_vid[2];
 
-        if (!segment_vvertex_already_exists(vcell, bp->faces[ii*3 + 2], bp->faces[ii*3 + 1])) {
-            p0 = bp->points[bp->faces[ii*3 + 2]];
-            p1 = bp->points[bp->faces[ii*3 + 1]];
-            segment_convex_hull_intersection(p0, p1, vcell->vertices, vcell->faces, 
-                                                 vcell->fnormals, vcell->Nf, &ind1, i1, &ind2, i2);
-            if (ind1) add_vvertex_from_segment(i1, bp->faces[ii*3+2], bp->faces[ii*3+1], ii, vcell);
-            if (ind2) add_vvertex_from_segment(i2, bp->faces[ii*3+2], bp->faces[ii*3+1], ii, vcell);
-        }
-    }
+    vcell->Nv++;
 
-
-    remove_artificial_extended_vertices(vcell);
+    return vcell->Nv - 1;
 }
 
 
@@ -364,39 +256,6 @@ void compute_vcell_volume(s_vcell *vcell)
 }
 
 
-void add_vvertices_extended_normals(const s_setup *setup, int *faces_ch_setup, 
-        double **fnormals, int Nf_ch_setup, int vertex_id, const s_vdiagram *vd, s_vcell *vcell)
-{
-    for (int ii = 0; ii<Nf_ch_setup; ii++) {
-        if (inarray(&faces_ch_setup[ii*3], 3, vertex_id)) {
-            // printf("DEBUG EXTENDED: INARRAY! %d, %d, %d; %d\n", faces_ch_setup[ii*3], faces_ch_setup[ii*3 + 1], faces_ch_setup[ii*3+2], vertex_id);
-            
-            double o[3];
-            o[0] = (setup->points[faces_ch_setup[ii*3 + 0]][0] + 
-                    setup->points[faces_ch_setup[ii*3 + 1]][0] + 
-                    setup->points[faces_ch_setup[ii*3 + 2]][0]) / 3;
-            o[1] = (setup->points[faces_ch_setup[ii*3 + 0]][1] + 
-                    setup->points[faces_ch_setup[ii*3 + 1]][1] + 
-                    setup->points[faces_ch_setup[ii*3 + 2]][1]) / 3;
-            o[2] = (setup->points[faces_ch_setup[ii*3 + 0]][2] + 
-                    setup->points[faces_ch_setup[ii*3 + 1]][2] + 
-                    setup->points[faces_ch_setup[ii*3 + 2]][2]) / 3;
-
-            double s = vd->bpoly->dmax;
-
-            double v_coords[3] = {o[0] + s * fnormals[ii][0],
-                                  o[1] + s * fnormals[ii][1],
-                                  o[2] + s * fnormals[ii][2]};
-            add_vvertex_as_extension(v_coords, &faces_ch_setup[ii*3], vcell);
-
-            double intersection[3];
-            inside_ray_convhull_intersection(vd->bpoly->points, vd->bpoly->faces, vd->bpoly->fnormals, vd->bpoly->Nf, o, fnormals[ii], intersection);
-            add_vvertex_from_coords(intersection, &faces_ch_setup[ii*3], vcell);
-        }
-    }
-}
-
-
 void add_convex_hull_vcell(s_vcell *vcell)
 {
     double CM[3];
@@ -419,36 +278,176 @@ void bounded_extraction(const s_setup *setup, s_vcell *vcell)
         if (current->mark == 1) add_vvertex_from_ncell(setup, current, vcell);
         current = current->next;
     }
-    
     add_convex_hull_vcell(vcell);
 }
 
 
-void unbounded_extraction(const s_setup *setup, const s_vdiagram *vdiagram, s_vcell *vcell, 
-        int *faces_ch_setup, double **fnormals_ch_setup, int Nf_ch_setup, int vertex_id)
+void add_plane_from_site(const s_setup *setup, int vertex_id1, int vertex_id2, s_vcell *vcell)
 {
+    double A[3], b;
+   A[0] = setup->points[vertex_id1][0] - setup->points[vertex_id2][0];
+   A[1] = setup->points[vertex_id1][1] - setup->points[vertex_id2][1];
+   A[2] = setup->points[vertex_id1][2] - setup->points[vertex_id2][2];
+   b = 0.5 * (norm_squared(setup->points[vertex_id1], 3) - 
+              norm_squared(setup->points[vertex_id2], 3));
+
+   vcell->planes_poly->planes[vcell->planes_poly->Nplanes].A[0] = A[0];
+   vcell->planes_poly->planes[vcell->planes_poly->Nplanes].A[1] = A[1];
+   vcell->planes_poly->planes[vcell->planes_poly->Nplanes].A[2] = A[2];
+   vcell->planes_poly->planes[vcell->planes_poly->Nplanes].b = b;
+   // vcell->planes_poly->id[vcell->planes_poly->Nplanes] = ncell->vertex_id[ii];
+   vcell->planes_poly->Nplanes++;
+   assert(vcell->planes_poly->Nplanes <= MAX_PLANES && "Max planes in vcell");
+
+
+}
+
+
+void add_planes_from_ncell(const s_setup *setup, s_ncell *ncell, int vertex_id, s_vcell *vcell, 
+                           int *faces_ch_setup, int Nf_ch_setup)
+{
+    for (int ii=0; ii<4; ii++) {
+        if (ncell->vertex_id[ii] != vertex_id && 
+            is_in_boundary_convhull(faces_ch_setup, Nf_ch_setup, ncell->vertex_id[ii]) &&
+            !inarray(vcell->planes_poly->id, vcell->planes_poly->Nplanes, ncell->vertex_id[ii])) {
+
+            double A[3], b;
+            A[0] = setup->points[ncell->vertex_id[ii]][0] - setup->points[vertex_id][0];
+            A[1] = setup->points[ncell->vertex_id[ii]][1] - setup->points[vertex_id][1];
+            A[2] = setup->points[ncell->vertex_id[ii]][2] - setup->points[vertex_id][2];
+            b = 0.5 * (norm_squared(setup->points[ncell->vertex_id[ii]], 3) - 
+                       norm_squared(setup->points[vertex_id], 3));
+
+            vcell->planes_poly->planes[vcell->planes_poly->Nplanes].A[0] = A[0];
+            vcell->planes_poly->planes[vcell->planes_poly->Nplanes].A[1] = A[1];
+            vcell->planes_poly->planes[vcell->planes_poly->Nplanes].A[2] = A[2];
+            vcell->planes_poly->planes[vcell->planes_poly->Nplanes].b = b;
+            vcell->planes_poly->id[vcell->planes_poly->Nplanes] = ncell->vertex_id[ii];
+            vcell->planes_poly->Nplanes++;
+            assert(vcell->planes_poly->Nplanes <= MAX_PLANES && "Max planes in vcell");
+        }
+    }
+}
+
+
+int satisfies_all_other_inequalities(const s_plane *tot_planes, int Ntot, const double *x, 
+                                     int i1, int i2, int i3)
+{
+    double EPS = 1e-6;
+    for (int ii=0; ii<Ntot; ii++) {
+        if (ii != i1 && ii != i2 && ii != i3 &&
+            !(dot_3d(tot_planes[ii].A, x) <= tot_planes[ii].b + EPS)) {
+            // printf("DEBUG INEQUALITIES: does not satisfy! %f, %f\n", dot_3d(tot_planes[ii].A, x), tot_planes[ii].b);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+
+void intersect_planes_with_bp(const s_vdiagram *vd, s_vcell *vcell)
+{
+    int Ntot = vcell->planes_poly->Nplanes + vd->bpoly->Nf;
+    s_plane tot_planes[Ntot];
+
+    int kk=0; 
+    for (int ii=0; ii<vcell->planes_poly->Nplanes; ii++) {
+        tot_planes[kk++] = vcell->planes_poly->planes[ii];
+    }
+    for (int ii=0; ii<vd->bpoly->Nf; ii++) {
+        tot_planes[kk].A[0] = vd->bpoly->fnormals[ii][0];
+        tot_planes[kk].A[1] = vd->bpoly->fnormals[ii][1];
+        tot_planes[kk].A[2] = vd->bpoly->fnormals[ii][2];
+        tot_planes[kk].b = dot_3d(vd->bpoly->fnormals[ii], 
+                                  vd->bpoly->points[vd->bpoly->faces[ii*3]]);
+        kk++;
+    }
+    
+    assert(Ntot > 3);
+    for (int ii=0; ii<Ntot-2; ii++) {
+    for (int jj=ii+1; jj<Ntot-1; jj++) {
+    for (int kk=jj+1; kk<Ntot; kk++) {
+        double A[3][3], b[3];
+        A[0][0] = tot_planes[ii].A[0];  A[0][1] = tot_planes[ii].A[1];  A[0][2] = tot_planes[ii].A[2];
+        A[1][0] = tot_planes[jj].A[0];  A[1][1] = tot_planes[jj].A[1];  A[1][2] = tot_planes[jj].A[2];
+        A[2][0] = tot_planes[kk].A[0];  A[2][1] = tot_planes[kk].A[1];  A[2][2] = tot_planes[kk].A[2];
+        b[0] = tot_planes[ii].b;        b[1] = tot_planes[jj].b;        b[2] = tot_planes[kk].b;
+         
+        double x[3];
+        if (solve3x3(A, b, x)) {
+            if (satisfies_all_other_inequalities(tot_planes, Ntot, x, ii, jj, kk)) {
+                int id[3] = {ii, jj, kk};
+                add_vvertex_from_coords_if_unique(x, id, vcell);
+            }
+        }
+    }
+    }
+    }
+}
+
+
+int is_vvertex_correct(const s_setup *setup, int vertex_id, double *real_vertex, double *query) 
+{
+    double d1[3], d2[3];
+    subtract_3d(setup->points[vertex_id], real_vertex, d1);
+    subtract_3d(setup->points[vertex_id], query, d2);
+    
+    double dot = dot_3d(d1, d2);
+    assert(dot != 0);
+    if ( dot < 0) return 1;
+    return 0;
+}
+
+
+void remove_incorrect_vvertices(const s_setup *setup, int vertex_id, s_vcell *vcell, double *real_vertex)
+{   // real vertex can be the coordinates of a vertex coming from an ncell
+    // This function remove all additional intersections of planes with bp "outside" the real vcell
+    int kk = 0;
+    for (int ii=0; ii<vcell->Nv; ii++) {
+        if (vcell->origin_vertices[ii][3] != -4 || 
+            is_vvertex_correct(setup, vertex_id, real_vertex, vcell->vertices[ii])) {
+            copy_matrix(&vcell->vertices[ii], &vcell->vertices[ii-kk], 1, 3);
+            copy_matrix_int(&vcell->origin_vertices[ii], &vcell->origin_vertices[ii-kk], 1, 3);
+        } else {
+            kk++;
+        }
+    }
+    vcell->Nv = vcell->Nv - kk;
+
+}
+
+
+void unbounded_extraction(const s_setup *setup, const s_vdiagram *vdiagram, s_vcell *vcell, int vertex_id,
+                          int *faces_ch_setup, int Nf_ch_setup)
+{   
+    vcell->planes_poly = malloc(sizeof(s_planes_poly));
+    vcell->planes_poly->Nplanes = 0;
+
+    double correct_vvertex[3];
     s_ncell *current = setup->head;
     while (current) {
         if (current->mark == 1) {
+            add_planes_from_ncell(setup, current, vertex_id, vcell, faces_ch_setup, Nf_ch_setup);
             add_vvertex_from_ncell(setup, current, vcell);
+            correct_vvertex[0] = vcell->vertices[vcell->Nv-1][0];
+            correct_vvertex[1] = vcell->vertices[vcell->Nv-1][1];
+            correct_vvertex[2] = vcell->vertices[vcell->Nv-1][2];
         }
         current = current->next;
     }
-    add_vvertices_extended_normals(setup, faces_ch_setup, fnormals_ch_setup, Nf_ch_setup, vertex_id, vdiagram, vcell);
 
-    // First build convex hull of this extended vcell
-    add_convex_hull_vcell(vcell);
+    intersect_planes_with_bp(vdiagram, vcell);
+    remove_incorrect_vvertices(setup, vertex_id, vcell, correct_vvertex);
     
-    // Fix bounding box with bounding polyhedra and redo triangulation
-    correctly_bound_with_bp_vertices(vdiagram, vcell);
-    free_matrix(vcell->fnormals, vcell->Nf);
     add_convex_hull_vcell(vcell);
+    print_vcell(vcell);
+    assert(vcell->Nv > 3); 
+    free(vcell->planes_poly);
 }
 
 
 s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup, 
-                              int *faces_ch_setup, double **fnormals_ch_setup,
-                              int Nf_ch_setup, int vertex_id)
+                              int *faces_ch_setup, int Nf_ch_setup, int vertex_id)
 {
     // Find an ncell with this vertex
     s_ncell *ncell = setup->head;
@@ -472,7 +471,7 @@ s_vcell *extract_voronoi_cell(const s_vdiagram *vdiagram, const s_setup *setup,
 
     s_vcell *vcell = malloc_vcell(vertex_id);
     if (is_in_boundary_convhull(faces_ch_setup, Nf_ch_setup, vertex_id)) {
-        unbounded_extraction(setup, vdiagram, vcell, faces_ch_setup, fnormals_ch_setup, Nf_ch_setup, vertex_id);
+        unbounded_extraction(setup, vdiagram, vcell, vertex_id, faces_ch_setup, Nf_ch_setup);
     } else {
         bounded_extraction(setup, vcell);
     }
@@ -490,17 +489,19 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly)
     
     // Extract faces convhull setup
     int *faces_setup, Nf_setup;
-    double **fnormals_setup;
     extract_faces_convhull_from_points(setup->points, setup->N_points, 
-                                       &faces_setup, &fnormals_setup, &Nf_setup);
+                                       &faces_setup, NULL, &Nf_setup);
     
     s_vdiagram *vdiagram = malloc_vdiagram(setup);
     vdiagram->bpoly = bpoly;
     
     for (int ii=0; ii<setup->N_points; ii++) {
-        vdiagram->vcells[ii] = extract_voronoi_cell(vdiagram, setup, faces_setup,
-                                fnormals_setup, Nf_setup, ii);
+        vdiagram->vcells[ii] = extract_voronoi_cell(vdiagram, setup, faces_setup, Nf_setup, ii);
     }
+
+    free(faces_setup);
+
+    print_vdiagram(vdiagram);
 
     return vdiagram;
 }

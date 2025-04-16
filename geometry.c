@@ -487,9 +487,11 @@ void extract_faces_convhull_from_points(double **points, int Np, int **faces, do
     ch_vertex *ch_vertices = convert_points_to_chvertex(points, Np);
     convhull_3d_build(ch_vertices, Np, faces, Nf);
 
-    double CM[3];
-    find_center_mass(points, Np, 3, CM);
-    *fnormals = extract_normals_from_ch(ch_vertices, *faces, *Nf, CM);
+    if (fnormals) {
+        double CM[3];
+        find_center_mass(points, Np, 3, CM);
+        *fnormals = extract_normals_from_ch(ch_vertices, *faces, *Nf, CM);
+    }
 
     free(ch_vertices);
 }
