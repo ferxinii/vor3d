@@ -44,8 +44,8 @@ void write_sphere_txt(void)
 {
     // Parameters for the sphere
     double radius = 2;
-    int nTheta = 3; //18; // Number of steps in the polar angle (θ)
-    int nPhi = 3; //36;   // Number of steps in the azimuthal angle (φ)
+    int nTheta = 6; //18; // Number of steps in the polar angle (θ)
+    int nPhi = 5; //36;   // Number of steps in the azimuthal angle (φ)
 
     // Open the file for writing coordinates
     FILE *fp = fopen(FILE_COORDS_SPHERE, "w");
@@ -80,8 +80,6 @@ void write_sphere_txt(void)
 }
 
 
-
-
 void check_volume(s_bound_poly *bp, s_vdiagram *vd)
 {
     double sum_vol = 0;
@@ -104,11 +102,14 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     double **points_poiss = generate_nonuniform_poisson_dist_inside(bp, &r_fun, &N_points_poiss);
     // double rmax = 1.5;
     // double **points_poiss = generate_uniform_poisson_dist_inside(bp, rmax, &N_points_poiss);
-    printf("NPOINTS: %d\n", N_points_poiss);
+
+    int N_new = extend_sites_mirroring(bp, &points_poiss, N_points_poiss);
+    printf("NPOINTS: %d, EXTENDED: %d\n", N_points_poiss, N_new);
 
     puts("Constructing dt...");
     s_setup *dt = construct_dt_3d(points_poiss, N_points_poiss);
 
+    exit(1);
     puts("Plotting dt...");
     double ranges_plot[6];
     ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];

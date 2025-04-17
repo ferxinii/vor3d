@@ -317,6 +317,60 @@ double **generate_uniform_poisson_dist_inside(s_bound_poly *bpoly, double rmax, 
 }
 
 
+int is_plane_saved(double **planes, int N, double *n, double d)
+{
+    double EPS = 1e-9;
+    for (int ii=0; ii<N; ii++) {
+        if (norm_difference(planes[ii], n, 3) < EPS && 
+            fabs(planes[ii][3] - d) < EPS)
+            return 1;
+    }
+    return 0;
+}
+
+
+int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
+{
+    double **out = malloc_matrix(Ns*(1+bp->Nf), 3);
+    for (int ii=0; ii<Ns; ii++) {
+        out[ii][0] = (*s)[ii][0];
+        out[ii][1] = (*s)[ii][1];
+        out[ii][2] = (*s)[ii][2];
+    }
+    
+    double **stored_planes = malloc_matrix(bp->Nf, 4);
+    int kk = Ns, Np_unique = 0;
+    for (int ii=0; ii<bp->Nf; ii++) {
+        double ni[3] = {bp->fnormals[ii][0],
+                        bp->fnormals[ii][1],
+                        bp->fnormals[ii][2]};
+        double di = dot_3d(bp->fnormals[ii], 
+                           bp->points[bp->faces[ii*3]]);
+
+        assert(fabs(norm_squared(ni, 3) - 1) < 1e-9);
+        if (!is_plane_saved(stored_planes, Np_unique, ni, di)) {
+            stored_planes[Np_unique][0] = ni[0];
+            stored_planes[Np_unique][1] = ni[1];
+            stored_planes[Np_unique][2] = ni[2];
+            stored_planes[Np_unique][3] = di;
+            Np_unique++;
+            for (int jj=0; jj<Ns; jj++) {
+                double factor = 2 * (di - dot_3d(ni, (*s)[jj]));
+                out[kk][0] = (*s)[jj][0] +  factor * ni[0];
+                out[kk][1] = (*s)[jj][1] +  factor * ni[1];
+                out[kk][2] = (*s)[jj][2] +  factor * ni[2];
+                kk++;
+            }
+        }
+    }
+
+    free_matrix(*s, Ns);
+    free_matrix(stored_planes, bp->Nf);
+    *s = realloc_matrix(out, Ns*(1+bp->Nf), kk, 3);
+    return kk;
+}
+
+
 
 // MY IMPLEMENTATION FOR POISSON DISK SAMPLING WITH WEIGHT FUNCTION
 

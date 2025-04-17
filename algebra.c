@@ -116,7 +116,7 @@ double norm_squared(const double *v, int dim)
     for (int ii=0; ii<dim; ii++) {
         out += v[ii] * v[ii];
     }
-    return sqrt(out);
+    return out;
 }
 
 
