@@ -330,16 +330,22 @@ void add_planes_from_ncell(const s_setup *setup, s_ncell *ncell, int vertex_id, 
 }
 
 
-int satisfies_all_other_inequalities(const s_plane *tot_planes, int Ntot, const double *x, 
-                                     int i1, int i2, int i3)
+int point_satisfies_ineq(s_plane plane, double *x) 
 {
-    double EPS = 1e-6;
-    for (int ii=0; ii<Ntot; ii++) {
-        if (ii != i1 && ii != i2 && ii != i3 &&
-            !(dot_3d(tot_planes[ii].A, x) <= tot_planes[ii].b + EPS)) {
-            // printf("DEBUG INEQUALITIES: does not satisfy! %f, %f\n", dot_3d(tot_planes[ii].A, x), tot_planes[ii].b);
-            return 0;
-        }
+    double EPS = 1e-9;
+    if (dot_3d(plane.A, x) <= plane.b + EPS) return 1;
+    else return 0;
+}
+
+
+int satisfies_all_other_inequalities(double *x, s_vcell *vcell, int iv, s_plane *planes_bp, 
+                                     int N_bp, int jb, int kb)
+{
+    for (int ii=0; ii<vcell->planes_poly->Nplanes; ii++) {
+        if (ii != iv && !point_satisfies_ineq(vcell->planes_poly->planes[ii], x)) return 0;
+    }
+    for (int ii=0; ii<N_bp; ii++) {
+        if (ii != jb && ii != kb && !point_satisfies_ineq(planes_bp[ii], x)) return 0;
     }
     return 1;
 }
@@ -347,41 +353,63 @@ int satisfies_all_other_inequalities(const s_plane *tot_planes, int Ntot, const 
 
 void intersect_planes_with_bp(const s_vdiagram *vd, s_vcell *vcell)
 {
-    int Ntot = vcell->planes_poly->Nplanes + vd->bpoly->Nf;
-    s_plane tot_planes[Ntot];
+    s_plane planes_bp[vd->bpoly->Nf];
 
-    int kk=0; 
-    for (int ii=0; ii<vcell->planes_poly->Nplanes; ii++) {
-        tot_planes[kk++] = vcell->planes_poly->planes[ii];
-    }
     for (int ii=0; ii<vd->bpoly->Nf; ii++) {
-        tot_planes[kk].A[0] = vd->bpoly->fnormals[ii][0];
-        tot_planes[kk].A[1] = vd->bpoly->fnormals[ii][1];
-        tot_planes[kk].A[2] = vd->bpoly->fnormals[ii][2];
-        tot_planes[kk].b = dot_3d(vd->bpoly->fnormals[ii], 
+        planes_bp[ii].A[0] = vd->bpoly->fnormals[ii][0];
+        planes_bp[ii].A[1] = vd->bpoly->fnormals[ii][1];
+        planes_bp[ii].A[2] = vd->bpoly->fnormals[ii][2];
+        planes_bp[ii].b = dot_3d(vd->bpoly->fnormals[ii], 
                                   vd->bpoly->points[vd->bpoly->faces[ii*3]]);
-        kk++;
     }
     
-    assert(Ntot > 3);
-    for (int ii=0; ii<Ntot-2; ii++) {
-    for (int jj=ii+1; jj<Ntot-1; jj++) {
-    for (int kk=jj+1; kk<Ntot; kk++) {
+    for (int iv=0; iv<vcell->planes_poly->Nplanes; iv++) {
+    for (int jb=0; jb<vd->bpoly->Nf-1; jb++) {
+    for (int kb=jb+1; kb<vd->bpoly->Nf; kb++) {
         double A[3][3], b[3];
-        A[0][0] = tot_planes[ii].A[0];  A[0][1] = tot_planes[ii].A[1];  A[0][2] = tot_planes[ii].A[2];
-        A[1][0] = tot_planes[jj].A[0];  A[1][1] = tot_planes[jj].A[1];  A[1][2] = tot_planes[jj].A[2];
-        A[2][0] = tot_planes[kk].A[0];  A[2][1] = tot_planes[kk].A[1];  A[2][2] = tot_planes[kk].A[2];
-        b[0] = tot_planes[ii].b;        b[1] = tot_planes[jj].b;        b[2] = tot_planes[kk].b;
+        A[0][0] = vcell->planes_poly->planes[iv].A[0];
+        A[0][1] = vcell->planes_poly->planes[iv].A[1];
+        A[0][2] = vcell->planes_poly->planes[iv].A[2];
+        b[0] = vcell->planes_poly->planes[iv].b;        
+
+        A[1][0] = planes_bp[jb].A[0];  A[1][1] = planes_bp[jb].A[1];  A[1][2] = planes_bp[jb].A[2];
+        b[1] = planes_bp[jb].b;        
+
+        A[2][0] = planes_bp[kb].A[0];  A[2][1] = planes_bp[kb].A[1];  A[2][2] = planes_bp[kb].A[2];
+        b[2] = planes_bp[kb].b;
          
         double x[3];
         if (solve3x3(A, b, x)) {
-            if (satisfies_all_other_inequalities(tot_planes, Ntot, x, ii, jj, kk)) {
-                int id[3] = {ii, jj, kk};
+            if (satisfies_all_other_inequalities(x, vcell, iv, planes_bp, vd->bpoly->Nf, jb, kb)) {
+                int id[3] = {iv, jb, kb};
                 add_vvertex_from_coords_if_unique(x, id, vcell);
             }
         }
     }
     }
+    }
+}
+
+
+void add_vvertex_from_bp(const s_vdiagram *vd, s_vcell *vcell) 
+{
+    for (int ii=0; ii<vd->bpoly->Np; ii++) {
+        int indicator = 1;
+        for (int jj=0; jj<vcell->planes_poly->Nplanes; jj++) {
+            if (!point_satisfies_ineq(vcell->planes_poly->planes[jj], vd->bpoly->points[ii])) {
+                indicator = 0;
+                break;
+            }
+        }
+        if (indicator == 1) {
+            increase_num_vertices_if_needed(vcell);
+            vcell->vertices[vcell->Nv][0] = vd->bpoly->points[ii][0];
+            vcell->vertices[vcell->Nv][1] = vd->bpoly->points[ii][1];
+            vcell->vertices[vcell->Nv][2] = vd->bpoly->points[ii][2];
+            vcell->origin_vertices[vcell->Nv][3] = -3;
+            vcell->origin_vertices[vcell->Nv][0] = ii;
+            vcell->Nv++;
+        }
     }
 }
 
@@ -436,8 +464,10 @@ void unbounded_extraction(const s_setup *setup, const s_vdiagram *vdiagram, s_vc
         current = current->next;
     }
 
+    add_vvertex_from_bp(vdiagram, vcell);
     intersect_planes_with_bp(vdiagram, vcell);
     remove_incorrect_vvertices(setup, vertex_id, vcell, correct_vvertex);
+
     
     add_convex_hull_vcell(vcell);
     print_vcell(vcell);
