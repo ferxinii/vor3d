@@ -136,7 +136,7 @@ void write_ncell3d_file(s_setup *setup, s_ncell *ncell, FILE *file)
     fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[3]][0],
                                 setup->points[ncell->vertex_id[3]][1],
                                 setup->points[ncell->vertex_id[3]][2]);
-    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[2]][0],
+    fprintf(file, "%f %f %f\n\n\n", setup->points[ncell->vertex_id[2]][0],
                                   setup->points[ncell->vertex_id[2]][1],
                                   setup->points[ncell->vertex_id[2]][2]);
 }
@@ -384,6 +384,26 @@ int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell, int id_oppo
 }
 
 
+int point_in_tetra(s_setup *setup, double *x, s_ncell *ncell)
+{
+    assert(setup->dim == 3 && "next test not implemented, just in 3D.");
+
+    static double **facet_vertices = NULL;
+    if (!facet_vertices) facet_vertices = malloc_matrix(3, 3);
+
+    for (int ii=0; ii<4; ii++) {
+        double *opposite_vertex = setup->points[ncell->vertex_id[ii]];
+        extract_vertices_face(setup, ncell, &ii, setup->dim-1, facet_vertices);
+
+        int o1 = orientation(facet_vertices, opposite_vertex, 3);
+        int o2 = orientation(facet_vertices, x, 3);
+        assert(o1 != 0);
+        if (o2 != 0 && o1 * o2 < 0) return 0;
+    }
+    return 1;
+}
+
+
 s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)
 {
     s_ncell *current = setup->head;
@@ -412,8 +432,11 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
 
             int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
             int o2 = orientation(facet_vertices, p, setup->dim);
-            assert(o1 != 0 && o2 != 0 && "Could not walk. p inside a facet?");
-            if (o1 != o2) {
+            assert(o1 != 0);
+            if (o2 == 0) {
+                if (point_in_tetra(setup, p, current)) return current;
+                // if (point_in_tetra(setup, p, next)) return next;
+            } else if (o1 != o2) {
                 current = next;
                 goto STEP;
             }
@@ -541,9 +564,11 @@ void plot_dt_3d(s_setup *setup, char *f_name, double *ranges, int max_files)
     fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
     fprintf(pipe, "set view 100, 60, \n");
     fprintf(pipe, "set xyplane at 0\n");
-    fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-    fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-    fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+    if (ranges) {
+        fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
+        fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
+        fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+    }
     fprintf(pipe, "set xlabel 'x'\n");
     fprintf(pipe, "set ylabel 'y'\n");
     fprintf(pipe, "set zlabel 'z'\n");

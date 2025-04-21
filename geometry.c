@@ -85,6 +85,26 @@ int segment_crosses_triangle_3d(double **triangle, double *a, double *b)
 }
 
 
+
+int segments_intersect_2d(double *A, double *B, double *p, double *d)
+{
+  double *aux[2];
+  aux[0] = A;
+  aux[1] = B;
+  int o1 = orientation(aux, p, 2);
+  int o2 = orientation(aux, d, 2);
+  if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+
+  aux[0] = p;
+  aux[1] = d;
+  o1 = orientation(aux, A, 2);
+  o2 = orientation(aux, B, 2);
+  if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+
+  return 1;
+}
+
+
 int are_in_general_position_3d(double **points, int N)
 {
     static double **aux1 = NULL;

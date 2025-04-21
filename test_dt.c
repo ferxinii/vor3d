@@ -12,7 +12,7 @@
 
 double r_fun(double *x)
 {   
-    double r0 = 1;
+    double r0 = 1.3;
     double z0 = -2;
     double K = 0.04;
     // printf("DEBUG R_FUN: (%f,%f,%f)  r: %f\n", x[0], x[1], x[2], r0 + K * fabs(x[2] - z0));
@@ -107,15 +107,16 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     printf("NPOINTS: %d, EXTENDED: %d\n", N_points_poiss, N_new);
 
     puts("Constructing dt...");
-    s_setup *dt = construct_dt_3d(points_poiss, N_points_poiss);
+    s_setup *dt = construct_dt_3d(points_poiss, N_new);
+    printf("RESULTING SETUP NPOINTS: %d, NNCELLS: %d\n", dt->N_points, dt->N_ncells);
+    printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt));
 
-    exit(1);
     puts("Plotting dt...");
-    double ranges_plot[6];
-    ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
-    ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
-    ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
-    plot_dt_3d(dt, "plot_sphere/dt", ranges_plot, 0);
+    // double ranges_plot[6];
+    // ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
+    // ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
+    // ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
+    plot_dt_3d(dt, "plot_sphere/dt", NULL, 0);
     FILE *f = fopen("test_ncells.txt", "w");
     write_dt3d_file(dt, f);
     fclose(f);
@@ -138,9 +139,27 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     // ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
     // ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
     // plot_dt_3d(dt, "test_dt.png", ranges_plot);
+    
+
+    int count[N_new];
+    for (int ii=0; ii<N_new; ii++) count[ii] = 0;
+    current = dt->head;
+    while (current) {
+        count[current->vertex_id[0]]++;
+        count[current->vertex_id[1]]++;
+        count[current->vertex_id[2]]++;
+        count[current->vertex_id[3]]++;
+        current = current->next;
+    } 
+    for (int ii=0; ii<N_new; ii++) {
+        if (count[ii] == 0) {
+            printf("DEBUG: ATTENTION! COUNT = 0 IN %d\n", ii);
+            exit(1);
+        }
+    }
 
     // puts("Constructing vd...");
-    s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp);
+    s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp, N_points_poiss);
 
     free_complex(dt);
     return vd;
