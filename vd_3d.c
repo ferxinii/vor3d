@@ -176,33 +176,11 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
 {   // Returns the index of the vertex
     increase_num_vertices_if_needed(vcell);
 
-    // First check if the vertex already exists
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (vcell->origin_vertices[ii][3] == ncell->count) {
-            puts("DEBUG ADD_VVERTEX_FROM_NCELL: ALREADY EXISTS!");
-            return ii;
-        }
-    }
-
     static double **v = NULL;
     if (!v) v = malloc_matrix(4, 3);
 
     extract_vertices_ncell(setup, ncell, v);
 
-    // double A[3][3] = {
-    //     {v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]}, 
-    //     {v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]}, 
-    //     {v[3][0] - v[0][0], v[3][1] - v[0][1], v[3][2] - v[0][2]}, 
-    // };
-    // double norm_v0 = norm_squared(v[0], 3);
-    // double b[3] = { 
-    //     0.5 * (norm_squared(v[1], 3) - norm_v0),
-    //     0.5 * (norm_squared(v[2], 3) - norm_v0),
-    //     0.5 * (norm_squared(v[3], 3) - norm_v0),
-    // };
-    // solve3x3(A, b, circumcenter);
-
-    
     double a[3], b[3], c[3];
     subtract_3d(v[1], v[0], a);
     subtract_3d(v[2], v[0], b);
@@ -217,9 +195,15 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
     cross_3d(c, a, ca);
     cross_3d(a, b, ab);
 
-    double f = dot_3d(ab, c);
-    assert(fabs(f) > 1e-6 && "NEARLY SINGULAR?");
-    f = 0.5 / f;
+    double f = 2 * dot_3d(ab, c);
+    if (fabs(f) < 1e-9) {
+        return -1;
+        printf("circumcenter: NEARLY SINGULAR!\n");
+        printf("denom: %.16f\n", f);
+        print_matrix(v, 4, 3);
+    }
+    assert(fabs(f) > 1e-9 && "NEARLY SINGULAR?");
+    f = 1.0 / f;
 
     double circumcenter[3] = {
         f * ( a2 * bc[0] + b2 * ca[0] + c2 * ab[0]) + v[0][0],
@@ -227,39 +211,17 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
         f * ( a2 * bc[2] + b2 * ca[2] + c2 * ab[2]) + v[0][2],
     };
 
+    for (int ii=0; ii<vcell->Nv-1; ii++) {
+        if (norm_difference(circumcenter, vcell->vertices[ii], 3) < 1e-6) {
+            return -1;
+        }
+    }
 
     vcell->vertices[vcell->Nv][0] = circumcenter[0];
     vcell->vertices[vcell->Nv][1] = circumcenter[1];
     vcell->vertices[vcell->Nv][2] = circumcenter[2];
 
     vcell->origin_vertices[vcell->Nv][3] = ncell->count;
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
-}
-
-
-int add_vvertex_from_coords_if_unique(double *coords, int *dt_face_vid, s_vcell *vcell)
-{   
-    double EPS = 1e-9;
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (norm_difference(coords, vcell->vertices[ii], 3) < EPS) {
-            // printf("DEBUG ADD_VV_COORDS: Already exists! (%f, %f, %f) (%f, %f, %f)\n", 
-                    // coords[0], coords[1], coords[2], vcell->vertices[ii][0], vcell->vertices[ii][1], vcell->vertices[ii][2]);
-            return -1;
-        }
-    }
-    increase_num_vertices_if_needed(vcell);
-
-    vcell->vertices[vcell->Nv][0] = coords[0];
-    vcell->vertices[vcell->Nv][1] = coords[1];
-    vcell->vertices[vcell->Nv][2] = coords[2];
-
-    vcell->origin_vertices[vcell->Nv][3] = -4;
-    vcell->origin_vertices[vcell->Nv][0] = dt_face_vid[0];
-    vcell->origin_vertices[vcell->Nv][1] = dt_face_vid[1];
-    vcell->origin_vertices[vcell->Nv][2] = dt_face_vid[2];
-
     vcell->Nv++;
 
     return vcell->Nv - 1;

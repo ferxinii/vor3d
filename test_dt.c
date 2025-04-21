@@ -40,6 +40,21 @@ void write_cube_points(const char *filename)
 }
 
 
+void write_triangle_points(const char *filename)
+{
+    double s = 2;
+    
+    // Write the points to the output file.
+    FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%d\n\n", 4);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, s, s);
+    fclose(fp);
+}
+
+
 void write_sphere_txt(void)
 {
     // Parameters for the sphere
@@ -175,7 +190,8 @@ int main(void) {
     double **points_bp_L;
     int N_points_bp_L;
     s_bound_poly *bp_L;
-    write_cube_points(FILE_COORDS_SPHERE);
+    write_triangle_points(FILE_COORDS_SPHERE);
+    // write_cube_points(FILE_COORDS_SPHERE);
     // write_sphere_txt();
     new_bpoly_from_txt(FILE_COORDS_SPHERE, &points_bp_L, &N_points_bp_L, &bp_L, 0); 
 
@@ -211,8 +227,8 @@ int main(void) {
 
 
     // FILE *ftest = fopen("lost_volume.txt", "w");
-    int Ntest = 1000;
-    double **ptest = malloc_matrix(Ntest, 3);
+    // int Ntest = 1000;
+    // double **ptest = malloc_matrix(Ntest, 3);
     // for (int ii=0; ii<Ntest; ii++) {
     //     double x[3]; 
     //     random_point_inside_convhull(bp->points, bp->faces, bp->fnormals, bp->Nf, bp->min, bp->max, x);
@@ -228,8 +244,8 @@ int main(void) {
     //
 
     puts("PLOTTING...");
-    ptest = NULL;
-    plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
+    // ptest = NULL;
+    // plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
 
 
 

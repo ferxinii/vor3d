@@ -383,6 +383,125 @@ int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int 
 }
 
 
+// int pd_intersects_face(double *s1, double *s2, double *p, double *d, int drop_coord)
+// {
+//     int i1, i2;
+//     if (drop_coord == 0) {
+//         i1 = 1;     i2 = 2;
+//     } else if (drop_coord == 1) {
+//         i1 = 2;     i2 = 0;
+//     } else {
+//         i1 = 0;     i2 = 1;
+//     }
+//
+//     double A[2], B[2], paux[2], daux[2];
+//     A[0] = s1[i1];    A[1] = s1[i1];
+//     B[0] = s2[i1];    B[1] = s2[i2];
+//     paux[0] = p[i1];  paux[1] = p[i2];
+//     daux[0] = d[i1];  daux[1] = d[i2];
+//     
+//     // printf("A: (%f, %f), B: (%f, %f), p: (%f, %f), d: (%f, %f)\n", A[0], A[1], B[0], B[1], p[0], p[1], d[0], d[1]);
+//     assert(!(p[0] == d[0] && p[1] == d[1]));
+//     assert(!(A[0] == B[0] && A[1] == B[1]));
+//     return segments_intersect_2d(A, B, paux, daux);
+// }
+//
+//
+// int point_in_face(double **vertices_face, double *p, double *d) 
+// {
+//     double n[3], d1[3], d2[3];
+//     d1[0] = vertices_face[1][0] - vertices_face[0][0];
+//     d1[1] = vertices_face[1][1] - vertices_face[0][1];
+//     d1[2] = vertices_face[1][2] - vertices_face[0][2];
+//     d2[0] = vertices_face[2][0] - vertices_face[0][0];
+//     d2[1] = vertices_face[2][1] - vertices_face[0][1];
+//     d2[2] = vertices_face[2][2] - vertices_face[0][2];
+//     cross_3d(d1, d2, n);
+//
+//     int drop_coord = 2;
+//     if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) drop_coord = 0;
+//     else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) drop_coord = 1;
+//
+//     double *aux[3];
+//     aux[0] = p; 
+//
+//     aux[1] = vertices_face[0];
+//     aux[2] = vertices_face[1];
+//     if (orientation(aux, d, 3) == 0 &&
+//         pd_intersects_face(vertices_face[0], vertices_face[1], p, d, drop_coord)) return 1;
+//
+//     aux[1] = vertices_face[1];
+//     aux[2] = vertices_face[2];
+//     if (orientation(aux, d, 3) == 0 &&
+//         pd_intersects_face(vertices_face[1], vertices_face[2], p, d, drop_coord)) return 1;
+//
+//     aux[1] = vertices_face[0];
+//     aux[2] = vertices_face[2];
+//     if (orientation(aux, d, 3) == 0 &&
+//         pd_intersects_face(vertices_face[0], vertices_face[2], p, d, drop_coord)) return 1;
+//     
+//     return 0;
+// }
+
+
+int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
+{
+    int o1 = orient2d(v1, v2, p);
+    int o2 = orient2d(v2, v3, p);
+    int o3 = orient2d(v3, v1, p);
+    
+    // Find reference sign (non-zero)
+    int signs[3] = {o1, o2, o3};
+    int ref_sign = 0;
+    for (int ii=0; ii<3; ii++) {
+        if (signs[ii] != 0) {
+            ref_sign = signs[ii];
+            break;
+        }
+    }
+
+    for (int ii=0; ii<4; ii++) {
+        if (signs[ii] != 0 && signs[ii] != ref_sign) return 0;
+    }
+    return 1;
+}
+
+
+int point_in_face(double **vertices_face, double *p)
+{
+    double n[3], d1[3], d2[3];
+    d1[0] = vertices_face[1][0] - vertices_face[0][0];
+    d1[1] = vertices_face[1][1] - vertices_face[0][1];
+    d1[2] = vertices_face[1][2] - vertices_face[0][2];
+    d2[0] = vertices_face[2][0] - vertices_face[0][0];
+    d2[1] = vertices_face[2][1] - vertices_face[0][1];
+    d2[2] = vertices_face[2][2] - vertices_face[0][2];
+    cross_3d(d1, d2, n);
+
+    int drop_coord = 2;
+    if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) drop_coord = 0;
+    else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) drop_coord = 1;
+
+    if (orientation(vertices_face, p, 3) != 0) return 0;
+    
+
+    int i1, i2;
+    if (drop_coord == 0) {
+        i1 = 1;     i2 = 2;
+    } else if (drop_coord == 1) {
+        i1 = 2;     i2 = 0;
+    } else {
+        i1 = 0;     i2 = 1;
+    }
+    double v1[2] = {vertices_face[0][i1], vertices_face[0][i2]},
+           v2[2] = {vertices_face[1][i1], vertices_face[1][i2]},
+           v3[2] = {vertices_face[2][i1], vertices_face[2][i2]},
+           paux[2] = {p[i1], p[i2]};
+
+    return point_in_triangle_2d(v1, v2, v3, paux);
+}
+
+
 int point_in_tetra(s_setup *setup, double *x, s_ncell *ncell)
 {
     assert(setup->dim == 3 && "next test not implemented, just in 3D.");
@@ -396,10 +515,84 @@ int point_in_tetra(s_setup *setup, double *x, s_ncell *ncell)
 
         int o1 = orientation(facet_vertices, opposite_vertex, 3);
         int o2 = orientation(facet_vertices, x, 3);
-        assert(o1 != 0);
+        if (o1 == 0) {
+            if (point_in_face(facet_vertices, x)) return 1;
+            else continue;
+        }
         if (o2 != 0 && o1 * o2 < 0) return 0;
     }
     return 1;
+}
+
+
+s_ncell *bruteforce_find_ncell_containing(s_setup *setup, double *p)
+{
+    s_ncell *current = setup->head;
+    while (current) {
+        if (point_in_tetra(setup, p, current)) return current;
+        current = current->next;
+    }
+    puts("DID NOT FIND CONTAINER NCELL!");
+    exit(1);
+}
+
+
+s_ncell *in_ncell_walk_NEW(s_setup *setup, double *p)
+{
+    // return bruteforce_find_ncell_containing(setup, p);
+
+    s_ncell *current = setup->head;
+    assert(setup->N_ncells >= 1 && "N_ncells < 1");
+    int randi = (rand() % setup->N_ncells);
+    for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
+        current = current->next;
+    }
+
+    // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
+    static int prev_dim = 0;
+    static double **facet_vertices = NULL;
+    if (setup->dim != prev_dim) {
+        if (facet_vertices) free_matrix(facet_vertices, prev_dim);
+        prev_dim = setup->dim;
+        facet_vertices = malloc_matrix(setup->dim, setup->dim);
+    }
+
+    int steps = 0;
+    int max_steps = 1000;
+    while (steps++ < max_steps) {
+        int moved = 0;
+        for (int ii=0; ii<setup->dim+1; ii++) {
+            double *opposite_vertex = setup->points[current->vertex_id[ii]];
+            
+            s_ncell *next = current->opposite[ii];
+            if (next) {
+                extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
+
+                int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
+                int o2 = orientation(facet_vertices, p, setup->dim);
+
+                if (o1 == 0 && o2 == 0) {  // p in plane of flat tetrahedron
+                    puts("P in plane of flat tetrahedron.");
+                    exit(1);
+                } else if (o1 == 0) { // Tetrahedron is flat
+                    printf("\n\nDEBUG WALK: tetrahedron is flat. current = %p, next = %p\n\n", (void*)current, (void*)next);
+                    exit(1);
+                } else if (o2 == 0) {  // p in face's plane
+                    printf("DEBUG WALK: p in plane of face. o1 = %d, o2 = %d. INTETRA = %d\n", o1, o2, point_in_tetra(setup, p, current));
+                    if (point_in_tetra(setup, p, current)) return current;
+                    else continue;
+                } else if (o1 != o2) {
+                    current = next;
+                    moved = 1;
+                    break;
+                }
+            }
+        }
+        if (!moved) break;
+    }
+    assert(steps < max_steps);
+    assert(point_in_tetra(setup, p, current)); // DEBUG TODO FIXME, REMOVE, TESTING
+    return current;
 }
 
 
@@ -446,6 +639,7 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is
 }
 
 
+
 int is_delaunay_3d(const s_setup *setup)
 {
     static double **vertices_ncell = NULL;
@@ -460,9 +654,12 @@ int is_delaunay_3d(const s_setup *setup)
                 if (!inarray(current->vertex_id, 4, query->vertex_id[ii])) {
                     int in_sph = in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3);
                     if (in_sph == 1) {
-                        printf("CONFLICT: (%d, %d, %d, %d) and %d, in_sphere: %d\n", current->vertex_id[0], current->vertex_id[1], 
-                                           current->vertex_id[2], current->vertex_id[3], query->vertex_id[ii], in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3));
-                    return 0;
+                        printf("CONFLICT: (%d, %d, %d, %d) and %d, in_sphere: %d\n", 
+                                current->vertex_id[0], current->vertex_id[1], 
+                                current->vertex_id[2], current->vertex_id[3], 
+                                query->vertex_id[ii], in_sphere(vertices_ncell, 
+                                setup->points[query->vertex_id[ii]], 3));
+                        return 0;
                     }
                 }
             }

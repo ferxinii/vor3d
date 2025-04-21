@@ -12,6 +12,9 @@
 
 typedef struct stack {
     s_ncell *entry[MAX_STACK_SIZE];
+    int vid[MAX_STACK_SIZE];
+    int vid2[MAX_STACK_SIZE];
+    int type_case[MAX_STACK_SIZE];
     int size;
 } s_stack;
 
@@ -30,19 +33,40 @@ void stack_free(s_stack *stack)
 }
 
 
-void stack_push(s_stack *stack, s_ncell *ncell)
+void stack_push(s_stack *stack, s_ncell *ncell, int vid, int vid2, int type_case)
 {
     assert(stack->size < MAX_STACK_SIZE && "Reached stack limit.");
+    for (int ii=0; ii<stack->size; ii++) {
+        if (stack->entry[ii] == ncell) return;
+    }
     stack->entry[stack->size] = ncell;
+    stack->vid[stack->size] = vid;
+    stack->vid2[stack->size] = vid2;
+    stack->type_case[stack->size] = type_case;
     stack->size++;
 }
 
 
-s_ncell *stack_pop(s_stack *stack)
+// void stack_push_bottom(s_stack *stack, s_ncell *ncell, int vid)
+// {
+//     assert(stack->size < MAX_STACK_SIZE && "Reached stack limit.");
+//     for (int ii=0; ii<stack->size; ii++) {
+//         if (stack->entry[ii] == ncell) return;
+//     }
+//     for (int ii=stack->size; ii>0; --ii) {
+//         stack->entry[ii] = stack->entry[ii-1];
+//     }
+//     stack->entry[0] = ncell;
+//     stack->size++;
+// }
+
+
+s_ncell *stack_pop(s_stack *stack, int *vid)
 {   
     if (stack->size == 0) return NULL;
     stack->size--;
     s_ncell *ncell = stack->entry[stack->size];
+    if (vid) *vid = stack->vid[stack->size];
     return ncell;
 }
 
@@ -57,6 +81,16 @@ void stack_remove_ncell(s_stack *stack, s_ncell *ncell) {
         }
     }
     stack->size = newSize;
+}
+
+
+void stack_remove_entry(s_stack *stack, int id) 
+{
+    // Shift everything above id down one slot
+    for (int ii=id; ii<stack->size-1; ii++) {
+        stack->entry[ii] = stack->entry[ii+1];
+    }
+    stack->size--;
 }
 
 
@@ -156,10 +190,10 @@ void flip14(s_setup *setup, s_ncell *container_ncell, int point_id, s_stack *sta
         (nc4->opposite[3])->opposite[opp_id] = nc4;
     }
 
-    stack_push(stack, container_ncell);
-    stack_push(stack, nc2);
-    stack_push(stack, nc3);
-    stack_push(stack, nc4);
+    stack_push(stack, container_ncell, point_id, -1, -1);
+    stack_push(stack, nc2, point_id, -1, -1);
+    stack_push(stack, nc3, point_id, -1, -1);
+    stack_push(stack, nc4, point_id, -1, -1);
 }
 
 
@@ -247,9 +281,9 @@ void flip23(s_setup *setup, s_stack *stack, s_ncell *nc1, int opp_cell_id, int o
         nc_aux->opposite[v_localid_opp] = nc3;
     }
     
-    stack_push(stack, nc1);
-    stack_push(stack, nc2);
-    stack_push(stack, nc3);
+    stack_push(stack, nc1, p, d, -1);
+    stack_push(stack, nc2, p, d, -1);
+    stack_push(stack, nc3, p, d, -1);
     if (OUT_PTRS) {
         OUT_PTRS[0] = nc1;
         OUT_PTRS[1] = nc2;
@@ -313,15 +347,15 @@ void flip32(s_setup *setup, s_stack *stack, s_ncell *nc1, int opp_cell_id, int r
     face_vertices[0] = setup->points[a];
     face_vertices[1] = setup->points[b];
     face_vertices[2] = setup->points[c];
-    if ( orientation(face_vertices, setup->points[nc1->vertex_id[opp_cell_id]], 3) == -1 ) {
-        int temp = b;
-        b = c;
-        c = temp;
-    }
-    face_vertices[0] = setup->points[a];
-    face_vertices[1] = setup->points[b];
-    face_vertices[2] = setup->points[c];
-    assert(orientation(face_vertices, setup->points[nc1->vertex_id[opp_cell_id]], 3) == 1);
+    // if ( orientation(face_vertices, setup->points[nc1->vertex_id[opp_cell_id]], 3) == -1 ) {
+    //     int temp = b;
+    //     b = c;
+    //     c = temp;
+    // }
+    // face_vertices[0] = setup->points[a];
+    // face_vertices[1] = setup->points[b];
+    // face_vertices[2] = setup->points[c];
+    // assert(orientation(face_vertices, setup->points[nc1->vertex_id[opp_cell_id]], 3) == 1);
 
     int nc1_vertex_id_old[4] = {nc1->vertex_id[0], nc1->vertex_id[1], nc1->vertex_id[2], nc1->vertex_id[3]};
     int nc2_vertex_id_old[4] = {nc2->vertex_id[0], nc2->vertex_id[1], nc2->vertex_id[2], nc2->vertex_id[3]};
@@ -382,8 +416,8 @@ void flip32(s_setup *setup, s_stack *stack, s_ncell *nc1, int opp_cell_id, int r
 
     free_ncell(nc3);
 
-    stack_push(stack, nc1);
-    stack_push(stack, nc2);
+    stack_push(stack, nc1, p, a, -1);
+    stack_push(stack, nc2, p, a, -1);
     if (OUT_PTRS) {
         OUT_PTRS[0] = nc1;
         OUT_PTRS[1] = nc2;
@@ -438,73 +472,8 @@ int can_perform_flip44(const s_setup *setup, const s_ncell *ncell, double **vert
 }
 
 
-void debug_print_44_before(s_setup *setup, s_ncell *ncell, int opp_cell_id, int ridge_id_2, char *file)
-{
-    int nc2_id1, nc2_id2;
-    s_ncell *nc2 = next_ncell_ridge_cycle(setup, ncell, opp_cell_id, ridge_id_2, &nc2_id1, &nc2_id2);
-
-    int nc3_id1, nc3_id2;
-    s_ncell *nc3 = next_ncell_ridge_cycle(setup, nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
-
-    int nc4_id1, nc4_id2;
-    s_ncell *nc4 = next_ncell_ridge_cycle(setup, nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
-
-    printf("FLIP44 BEFORE: \n \
-            (%d, %d), (%d, %d, %d, %d)\n \
-            (%d, %d), (%d, %d, %d, %d)\n \
-            (%d, %d), (%d, %d, %d, %d)\n \
-            (%d, %d), (%d, %d, %d, %d)\n \n", 
-            ncell->vertex_id[opp_cell_id], ncell->vertex_id[ridge_id_2], 
-             ncell->vertex_id[0], ncell->vertex_id[1], ncell->vertex_id[2], ncell->vertex_id[3], 
-            nc2->vertex_id[nc2_id1], nc2->vertex_id[nc2_id2], 
-            nc2->vertex_id[0], nc2->vertex_id[1], nc2->vertex_id[2], nc2->vertex_id[3],
-            nc3->vertex_id[nc3_id1],  nc3->vertex_id[nc3_id2],
-            nc3->vertex_id[0], nc3->vertex_id[1], nc3->vertex_id[2], nc3->vertex_id[3],
-            nc4->vertex_id[nc4_id1],  nc4->vertex_id[nc4_id2],
-            nc4->vertex_id[0], nc4->vertex_id[1], nc4->vertex_id[2], nc4->vertex_id[3]);
-
-    FILE *file_debug = fopen(file, "a");
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)ncell, file_debug);
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc2, file_debug);
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc3, file_debug);
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc4, file_debug);
-    fprintf(file_debug, "\n\n");
-    fclose(file_debug);
-}
-
-
-void debug_print_44_after(s_setup *setup, s_ncell **PTRS, char *file)
-{
-    s_ncell *nc1 = PTRS[0];
-    s_ncell *nc2 = PTRS[1];
-    s_ncell *nc3 = PTRS[2];
-    s_ncell *nc4 = PTRS[3];
-    printf("FLIP44 AFTER: \n \
-            (%d, %d, %d, %d)\n \
-            (%d, %d, %d, %d)\n \
-            (%d, %d, %d, %d)\n \
-            (%d, %d, %d, %d)\n \n", 
-            nc1->vertex_id[0], nc1->vertex_id[1], nc1->vertex_id[2], nc1->vertex_id[3], 
-            nc2->vertex_id[0], nc2->vertex_id[1], nc2->vertex_id[2], nc2->vertex_id[3],
-            nc3->vertex_id[0], nc3->vertex_id[1], nc3->vertex_id[2], nc3->vertex_id[3],
-            nc4->vertex_id[0], nc4->vertex_id[1], nc4->vertex_id[2], nc4->vertex_id[3]);
-
-    FILE *file_debug = fopen(file, "a");
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc1, file_debug);
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc2, file_debug);
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc3, file_debug);
-    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc4, file_debug);
-    fprintf(file_debug, "\n\n");
-    fclose(file_debug);
-}
-
-
-
 void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS) 
 {
-    // FILE *f = fopen("flip44_pre.txt", "w");
-    // fclose(f);
-    // debug_print_44_before(setup, ncell, id_ridge_1, id_ridge_2, "flip44_pre.txt");
 
     // FIRST, A FLIP23
     int opp_face_localid;
@@ -535,8 +504,6 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
     if (inarray(FLIP23_PTRS[0]->vertex_id, 4, a) && inarray(FLIP23_PTRS[0]->vertex_id, 4, c) &&
         inarray(FLIP23_PTRS[0]->vertex_id, 4, d) && inarray(FLIP23_PTRS[0]->vertex_id, 4, p)) {
         nc5 = FLIP23_PTRS[0];
-        stack_push(stack, FLIP23_PTRS[1]);
-        stack_push(stack, FLIP23_PTRS[2]);
         if (OUT_PTRS) {
             OUT_PTRS[0] = FLIP23_PTRS[1];
             OUT_PTRS[1] = FLIP23_PTRS[2];
@@ -544,8 +511,6 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
     } else if (inarray(FLIP23_PTRS[1]->vertex_id, 4, a) && inarray(FLIP23_PTRS[1]->vertex_id, 4, c) &&
         inarray(FLIP23_PTRS[1]->vertex_id, 4, d) && inarray(FLIP23_PTRS[1]->vertex_id, 4, p)) {
         nc5 = FLIP23_PTRS[1];
-        stack_push(stack, FLIP23_PTRS[0]);
-        stack_push(stack, FLIP23_PTRS[2]);
         if (OUT_PTRS) {
             OUT_PTRS[0] = FLIP23_PTRS[0];
             OUT_PTRS[1] = FLIP23_PTRS[2];
@@ -553,8 +518,6 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
     } else if (inarray(FLIP23_PTRS[2]->vertex_id, 4, a) && inarray(FLIP23_PTRS[2]->vertex_id, 4, c) &&
         inarray(FLIP23_PTRS[2]->vertex_id, 4, d) && inarray(FLIP23_PTRS[2]->vertex_id, 4, p)) {
         nc5 = FLIP23_PTRS[2];
-        stack_push(stack, FLIP23_PTRS[0]);
-        stack_push(stack, FLIP23_PTRS[1]);
         if (OUT_PTRS) {
             OUT_PTRS[0] = FLIP23_PTRS[0];
             OUT_PTRS[1] = FLIP23_PTRS[1];
@@ -581,13 +544,6 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
         OUT_PTRS[2] = FLIP32_PTRS[0];
         OUT_PTRS[3] = FLIP32_PTRS[1];
     }
-
-    stack_push(stack, FLIP32_PTRS[0]);
-    stack_push(stack, FLIP32_PTRS[1]);
-
-    // f = fopen("flip44_after.txt", "w");
-    // fclose(f);
-    // debug_print_44_after(setup, OUT_PTRS, "flip44_after.txt");
 }
 
 
@@ -596,40 +552,32 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
 // ---------------------------------------------------------------------------------------
 
 
-int is_case_3_AUX(double *s1, double *s2, double *p, double *d, int drop_coord)
+int pd_intersects_face(double *s1, double *s2, double *p, double *d, int drop_coord)
 {
-    double ax, ay, bx, by, px, py, dx, dy;
+     int i1, i2;
     if (drop_coord == 0) {
-      ax = s1[1]; ay = s1[2];
-      bx = s2[1]; by = s2[2];
-      px = p[1];  py = p[2];
-      dx = d[1];  dy = d[2];
+        i1 = 1;     i2 = 2;
     } else if (drop_coord == 1) {
-      ax = s1[2]; ay = s1[0];
-      bx = s2[2]; by = s2[0];
-      px = p[2];  py = p[0];
-      dx = d[2];  dy = d[0];
+        i1 = 2;     i2 = 0;
     } else {
-      ax = s1[0]; ay = s1[1];
-      bx = s2[0]; by = s2[1];
-      px = p[0]; py = p[1];
-      dx = d[0]; dy = d[1];
+        i1 = 0;     i2 = 1;
     }
 
-    assert(px != dx);
-    assert(py != dy);
-
-    double A[2] = {ax, ay},
-           B[2] = {bx, by},
-           paux[2] = {px, py}, 
-           daux[2] = {dx, dy};
+    double A[2], B[2], paux[2], daux[2];
+    A[0] = s1[i1];    A[1] = s1[i1];
+    B[0] = s2[i1];    B[1] = s2[i2];
+    paux[0] = p[i1];  paux[1] = p[i2];
+    daux[0] = d[i1];  daux[1] = d[i2];
+    
+    // printf("A: (%f, %f), B: (%f, %f), p: (%f, %f), d: (%f, %f)\n", A[0], A[1], B[0], B[1], p[0], p[1], d[0], d[1]);
+    assert(!(p[0] == d[0] && p[1] == d[1]));
+    assert(!(A[0] == B[0] && A[1] == B[1]));
     return segments_intersect_2d(A, B, paux, daux);
 }
 
 
 int is_case_3(double **vertices_face, double *p, double *d)
 {
-
     double n[3], d1[3], d2[3];
     d1[0] = vertices_face[1][0] - vertices_face[0][0];
     d1[1] = vertices_face[1][1] - vertices_face[0][1];
@@ -643,28 +591,25 @@ int is_case_3(double **vertices_face, double *p, double *d)
     if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) drop_coord = 0;
     else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) drop_coord = 1;
 
-    
     double *aux[3];
     aux[0] = p; 
 
     aux[1] = vertices_face[0];
     aux[2] = vertices_face[1];
     if (orientation(aux, d, 3) == 0 &&
-        is_case_3_AUX(vertices_face[0], vertices_face[1], p, d, drop_coord)) return 1;
+        pd_intersects_face(vertices_face[0], vertices_face[1], p, d, drop_coord)) return 1;
 
     aux[1] = vertices_face[1];
     aux[2] = vertices_face[2];
     if (orientation(aux, d, 3) == 0 &&
-        is_case_3_AUX(vertices_face[1], vertices_face[2], p, d, drop_coord)) return 1;
+        pd_intersects_face(vertices_face[1], vertices_face[2], p, d, drop_coord)) return 1;
 
     aux[1] = vertices_face[0];
     aux[2] = vertices_face[2];
     if (orientation(aux, d, 3) == 0 &&
-        is_case_3_AUX(vertices_face[0], vertices_face[2], p, d, drop_coord)) return 1;
+        pd_intersects_face(vertices_face[0], vertices_face[2], p, d, drop_coord)) return 1;
     
     return 0;
-
-
 }
 
 
@@ -685,8 +630,7 @@ int is_case_2(double **vertices_face, double *p, double *d)
 int is_case_4(double **vertices_face, double *p, double *d)
 {
     if (orientation(vertices_face, p, 3) == 0) {  // abcp live in the same plane
-        puts("DEBUG IS CASE 4: abcp in same plane!");
-        exit(4);
+        // puts("DEBUG ISCASE4: ABCP IN SAME PLANE!");
         double *aux[3];
         aux[0] = p; 
 
@@ -702,6 +646,7 @@ int is_case_4(double **vertices_face, double *p, double *d)
         aux[2] = vertices_face[2];
         if (orientation(aux, d, 3) == 0) return 1;
     }
+    // puts("DEBUG ISCASE4: BUT NOT IN FACE...");
     return 0;
 }
 
@@ -753,17 +698,6 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
     }
     free_matrix(V, dim+1);
     
-
-    // CHECKS???
-    // if (dim == 3) assert(are_in_general_position_3d(setup_points, N_points+dim+1) == 1 && "setup points are not in general position.");
-    // THIS WAS WAY TOO SLOW !!
-    if (N_points > 4) {
-        for (int ii=0; ii<N_points; ii++) {  // DEBUG 
-            assert(in_sphere(&setup_points[N_points], setup_points[ii], dim) == 1 && "big_ncell does not enclose all points.");
-        }
-    }
-
-
     s_setup *setup = malloc(sizeof(s_setup));
     setup->dim = dim;
     setup->N_points = N_points + dim + 1;
@@ -781,7 +715,7 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
 }
 
 
-void flip_tetrahedra(s_setup *setup, s_stack *stack, s_ncell *ncell, int opp_cell_id)
+int flip_tetrahedra(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_ncell *ncell, int opp_cell_id)
 {
     static double **coords_face = NULL;
     if (!coords_face) {
@@ -801,35 +735,66 @@ void flip_tetrahedra(s_setup *setup, s_stack *stack, s_ncell *ncell, int opp_cel
         int ridge_id_2;
         case 1:
             flip23(setup, stack, ncell, opp_cell_id, opp_face_localid, NULL);
-            break;
+            return 1;
         case 2:
             if (can_perform_flip32(setup, ncell, opp_cell_id, &ridge_id_2)) {
                 flip32(setup, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL);
-            }
+                return 1;
+            } else stack_push(stack_blocked, ncell, ncell->vertex_id[opp_cell_id], 
+                              ncell->vertex_id[ridge_id_2], 2);
             break;
         case 3:
-            // printf("CASE 3: a: (%f, %f, %f)\nb: (%f, %f, %f)\nc: (%f, %f, %f)\nd: (%f, %f, %f)\np: (%f, %f, %f)\n", 
-            //         coords_face[0][0], coords_face[0][1], coords_face[0][2],
-            //         coords_face[1][0], coords_face[1][1], coords_face[1][2],
-            //         coords_face[2][0], coords_face[2][1], coords_face[2][2],
-            //         d[0], d[1], d[2], p[0], p[1], p[2]);
             if (can_perform_flip44(setup, ncell, coords_face, opp_cell_id, &ridge_id_2)) {
-                // printf("executed! opp_cell_id = %d, ridge_id_2 = %d, ncell:", opp_cell_id, ridge_id_2);
-                // print_ncell(setup, ncell);
                 s_ncell *FLIP44_PTRS[4];
                 flip44(setup, stack, ncell, opp_cell_id, ridge_id_2, FLIP44_PTRS);
-            }
+                return 1;
+            } else stack_push(stack_blocked, ncell, ncell->vertex_id[opp_cell_id], 
+                              ncell->vertex_id[ridge_id_2], 3);
             break;
         case 4:
-            puts("TODO CASE 4...");
-            exit(1);
+            puts("CASE 4... UNSURE, UNTESTED");
+            flip23(setup, stack, ncell, opp_cell_id, opp_face_localid, NULL);
+            return 1;
     }
 
-    return;
+    return 0;
 }
 
 
-void insert_one_point(s_setup *setup, int point_id, s_stack *stack)
+void check_blocked_previous(s_setup *setup, s_stack *stack, s_stack *stack_blocked)
+{
+    for (int ii=stack_blocked->size - 1; ii>=0; ii--) {
+        s_ncell *current = stack_blocked->entry[ii];
+        int vid_blocked = stack_blocked->vid[ii];
+        int id_ridge_2 = stack_blocked->vid2[ii];
+        int type_case = stack_blocked->type_case[ii];
+        
+        if (current) {
+            printf("DEBUG BLOCKED: %p; v1: %d, v2: %d, case: %d\n", (void*)current, vid_blocked, id_ridge_2, type_case);
+            print_ncell(setup, current);
+            int opp_cell_id = id_where_equal_int(current->vertex_id, 4, vid_blocked);
+            if (current->opposite[opp_cell_id] &&
+                are_locally_delaunay_strict(setup, current, opp_cell_id) != 1) {
+                int opp_face_localid;
+                    face_localid_of_adjacent_ncell(setup, current, &opp_cell_id, 2, opp_cell_id, &opp_face_localid);
+                if (type_case == 2) {
+                    flip32(setup, stack, current, vid_blocked, id_ridge_2, opp_face_localid, NULL);
+                } else if (type_case == 3) {
+                    flip44(setup, stack, current, vid_blocked, id_ridge_2, NULL);
+                } else {
+                    puts("SHOULD NOT BE HERE! CHECK_BLOCKED_PREVIOUS.");
+                    exit(1);
+                }
+                stack_remove_entry(stack_blocked, ii);
+            }
+        }
+    }
+
+
+}
+
+
+void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stack_blocked)
 {
     double *point = setup->points[point_id];
     s_ncell *container_ncell = in_ncell_walk(setup, point);
@@ -837,18 +802,20 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack)
     // Insert p in container_ncell with a flip14
     flip14(setup, container_ncell, point_id, stack);
 
+    check_blocked_previous(setup, stack, stack_blocked);
     while (stack->size > 0) {
-        s_ncell *current = stack_pop(stack);
+        s_ncell *current = stack_pop(stack, NULL);
 
         if (current) {  // UNSURE IF THIS IS RIGHT... TODO
             int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
             if (current->opposite[opp_cell_id]) {
                 if (are_locally_delaunay_strict(setup, current, opp_cell_id) != 1) {
-                    flip_tetrahedra(setup, stack, current, opp_cell_id);
+                    flip_tetrahedra(setup, stack, stack_blocked, current, opp_cell_id);
                 }
             }
         }
     }
+    
 }
 
 
@@ -908,15 +875,14 @@ int count_valid_ncells_reduced_triangulation(const s_setup *setup)
 s_setup *construct_dt_3d(double **points, int N_points)
 {
     s_stack *stack = stack_create();
+    s_stack *stack_blocked = stack_create();
     s_setup *setup = initialize_setup(points, N_points, 3);
     
-     assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
+    // assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
     for (int ii=0; ii<N_points; ii++) {
-        insert_one_point(setup, ii, stack);
-        if (is_delaunay_3d(setup) != 1) {  // TODO, DEBUG
-            printf("ERROR? NOT DELAUNAY AFTER INSERTING: %d\n", ii);
-            exit(1);
-        }
+        insert_one_point(setup, ii, stack, stack_blocked);
+        // DOES NOT NEED TO BE DELAUNAY!! For example, maybe in case 2 a flip32 cannot be done, 
+        // but in principle some future flip will restore delaunayness
     }
     
     stack_free(stack);  

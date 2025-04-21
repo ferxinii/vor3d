@@ -150,62 +150,62 @@ void normalize_inplace(double *v, int dim)
 }
 
 
-int solve3x3(const double A[3][3], const double b[3], double x[3])
-{
-    double TOL = 1e-9;
-    // Create an augmented matrix M of size 3x4
-    double M[3][4];
-    for (int i=0; i<3; i++) {
-        for (int j=0; j<3; j++) {
-            M[i][j] = A[i][j];
-        }
-        M[i][3] = b[i];
-    }
-    
-    // Forward elimination with partial pivoting
-    for (int i=0; i<3; i++) {
-        // Find pivot: the row with the maximum absolute value in column i
-        int maxRow = i;
-        for (int k=i+1; k<3; k++) {
-            if (fabs(M[k][i]) > fabs(M[maxRow][i])) {
-                maxRow = k;
-            }
-        }
-        // If the pivot element is nearly 0, the matrix is singular
-        if (fabs(M[maxRow][i]) < TOL) {
-            return 0; // no unique solution
-        }
-        // Swap the current row with the pivot row if necessary
-        if (maxRow != i) {
-            for (int j=i; j<4; j++) {
-                double tmp = M[i][j];
-                M[i][j] = M[maxRow][j];
-                M[maxRow][j] = tmp;
-            }
-        }
-        // Eliminate entries below the pivot
-        for (int k=i+1; k<3; k++) {
-            double factor = M[k][i] / M[i][i];
-            for (int j=i; j<3; j++) {
-                M[k][j] -= factor * M[i][j];
-            }
-        }
-    }
-    
-    // Back substitution to solve for x
-    for (int i=2; i>=0; i--) {
-        if (fabs(M[i][i]) < TOL) {
-            return 0; // Should not occur here because we checked during elimination
-        }
-        x[i] = M[i][3] / M[i][i];
-        for (int k = i - 1; k >= 0; k--) {
-            M[k][3] -= M[k][i] * x[i];
-        }
-    }
-    return 1; // solution found
-}
-
-
+// int solve3x3(const double A[3][3], const double b[3], double x[3])
+// {   // I AM NOT SURE THIS WORKS CORRECTLY??
+//     double TOL = 1e-9;
+//     // Create an augmented matrix M of size 3x4
+//     double M[3][4];
+//     for (int i=0; i<3; i++) {
+//         for (int j=0; j<3; j++) {
+//             M[i][j] = A[i][j];
+//         }
+//         M[i][3] = b[i];
+//     }
+//     
+//     // Forward elimination with partial pivoting
+//     for (int i=0; i<3; i++) {
+//         // Find pivot: the row with the maximum absolute value in column i
+//         int maxRow = i;
+//         for (int k=i+1; k<3; k++) {
+//             if (fabs(M[k][i]) > fabs(M[maxRow][i])) {
+//                 maxRow = k;
+//             }
+//         }
+//         // If the pivot element is nearly 0, the matrix is singular
+//         if (fabs(M[maxRow][i]) < TOL) {
+//             return 0; // no unique solution
+//         }
+//         // Swap the current row with the pivot row if necessary
+//         if (maxRow != i) {
+//             for (int j=i; j<4; j++) {
+//                 double tmp = M[i][j];
+//                 M[i][j] = M[maxRow][j];
+//                 M[maxRow][j] = tmp;
+//             }
+//         }
+//         // Eliminate entries below the pivot
+//         for (int k=i+1; k<3; k++) {
+//             double factor = M[k][i] / M[i][i];
+//             for (int j=i; j<3; j++) {
+//                 M[k][j] -= factor * M[i][j];
+//             }
+//         }
+//     }
+//     
+//     // Back substitution to solve for x
+//     for (int i=2; i>=0; i--) {
+//         if (fabs(M[i][i]) < TOL) {
+//             return 0; // Should not occur here because we checked during elimination
+//         }
+//         x[i] = M[i][3] / M[i][i];
+//         for (int k = i - 1; k >= 0; k--) {
+//             M[k][3] -= M[k][i] * x[i];
+//         }
+//     }
+//     return 1; // solution found
+// }
+//
+//
 // int PLU_inplace(double **A, int N, double tol, int *P, int *num_permut) 
 // {
 //     *num_permut = 0;
