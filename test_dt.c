@@ -116,7 +116,7 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     // ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
     // ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
     // ranges_plot[4] = bp->min[2];     ranges_plot[5] = bp->max[2];
-    plot_dt_3d(dt, "plot_sphere/dt", NULL, 0);
+    // plot_dt_3d(dt, "plot_sphere/dt", NULL, 0);
     FILE *f = fopen("test_ncells.txt", "w");
     write_dt3d_file(dt, f);
     fclose(f);

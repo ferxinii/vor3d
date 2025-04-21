@@ -354,7 +354,7 @@ void mark_ncells_incident_face(const s_setup *setup, s_ncell *ncell, const int *
 }
 
 
-int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell, int id_opposite)
+int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int id_opposite)
 {   
     // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
     static int prev_dim = 0;
@@ -374,13 +374,12 @@ int are_locally_delaunay(const s_setup *setup, const s_ncell *ncell, int id_oppo
     int opp_face_localid;
     face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
-
-    if (in_sphere(coords1, setup->points[opp_face_vertex_id], setup->dim) == -1 &&
-        in_sphere(coords2, setup->points[ncell->vertex_id[id_opposite]], setup->dim) == -1) {
-        return 1;
-    } else {
-        return 0;
-    }
+    
+    int in1 = in_sphere(coords1, setup->points[opp_face_vertex_id], setup->dim);
+    // in_sphere(coords2, setup->points[ncell->vertex_id[id_opposite]], setup->dim) == -1)
+    // if (in1 == 0) puts("DEBUG: ARE_LOCALLY_DELAUNAY_STRICT IS CIRCUMSCRIBED");
+    if (in1 == -1) return 1;
+    else return 0;
 }
 
 
@@ -458,11 +457,13 @@ int is_delaunay_3d(const s_setup *setup)
         s_ncell *query = current->next;
         while (query) {
             for (int ii=0; ii<4; ii++) {
-                if (!inarray(current->vertex_id, 4, query->vertex_id[ii]) && 
-                    in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3) != -1) {
-                    printf("CONFLICT: (%d, %d, %d, %d) and %d\n", current->vertex_id[0], current->vertex_id[1], 
-                                           current->vertex_id[2], current->vertex_id[3], query->vertex_id[ii]);
+                if (!inarray(current->vertex_id, 4, query->vertex_id[ii])) {
+                    int in_sph = in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3);
+                    if (in_sph == 1) {
+                        printf("CONFLICT: (%d, %d, %d, %d) and %d, in_sphere: %d\n", current->vertex_id[0], current->vertex_id[1], 
+                                           current->vertex_id[2], current->vertex_id[3], query->vertex_id[ii], in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3));
                     return 0;
+                    }
                 }
             }
             query = query->next;

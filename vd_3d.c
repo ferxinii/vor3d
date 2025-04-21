@@ -184,17 +184,53 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
         }
     }
 
-    static double **vertices_ncell = NULL;
-    if (!vertices_ncell) vertices_ncell = malloc_matrix(4, 3);
+    static double **v = NULL;
+    if (!v) v = malloc_matrix(4, 3);
 
-    extract_vertices_ncell(setup, ncell, vertices_ncell);
+    extract_vertices_ncell(setup, ncell, v);
 
-    double CM[3];
-    find_center_mass(vertices_ncell, 4, 3, CM);
+    // double A[3][3] = {
+    //     {v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]}, 
+    //     {v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]}, 
+    //     {v[3][0] - v[0][0], v[3][1] - v[0][1], v[3][2] - v[0][2]}, 
+    // };
+    // double norm_v0 = norm_squared(v[0], 3);
+    // double b[3] = { 
+    //     0.5 * (norm_squared(v[1], 3) - norm_v0),
+    //     0.5 * (norm_squared(v[2], 3) - norm_v0),
+    //     0.5 * (norm_squared(v[3], 3) - norm_v0),
+    // };
+    // solve3x3(A, b, circumcenter);
 
-    vcell->vertices[vcell->Nv][0] = CM[0];
-    vcell->vertices[vcell->Nv][1] = CM[1];
-    vcell->vertices[vcell->Nv][2] = CM[2];
+    
+    double a[3], b[3], c[3];
+    subtract_3d(v[1], v[0], a);
+    subtract_3d(v[2], v[0], b);
+    subtract_3d(v[3], v[0], c);
+
+    double a2 = norm_squared(a, 3);
+    double b2 = norm_squared(b, 3);
+    double c2 = norm_squared(c, 3);
+    
+    double bc[3], ca[3], ab[3];
+    cross_3d(b, c, bc);
+    cross_3d(c, a, ca);
+    cross_3d(a, b, ab);
+
+    double f = dot_3d(ab, c);
+    assert(fabs(f) > 1e-6 && "NEARLY SINGULAR?");
+    f = 0.5 / f;
+
+    double circumcenter[3] = {
+        f * ( a2 * bc[0] + b2 * ca[0] + c2 * ab[0]) + v[0][0],
+        f * ( a2 * bc[1] + b2 * ca[1] + c2 * ab[1]) + v[0][1],
+        f * ( a2 * bc[2] + b2 * ca[2] + c2 * ab[2]) + v[0][2],
+    };
+
+
+    vcell->vertices[vcell->Nv][0] = circumcenter[0];
+    vcell->vertices[vcell->Nv][1] = circumcenter[1];
+    vcell->vertices[vcell->Nv][2] = circumcenter[2];
 
     vcell->origin_vertices[vcell->Nv][3] = ncell->count;
     vcell->Nv++;
@@ -231,7 +267,7 @@ int add_vvertex_from_coords_if_unique(double *coords, int *dt_face_vid, s_vcell 
 
 
 void compute_vcell_volume(s_vcell *vcell)
-{   // TODO??
+{
     double vol = 0;
     for (int ii=0; ii<vcell->Nf; ii++) {
         int i0 = 0;
@@ -325,7 +361,6 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, 
         vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii);
     }
 
-    print_vdiagram(vdiagram);
     return vdiagram;
 }
 

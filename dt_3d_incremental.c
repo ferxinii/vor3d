@@ -438,7 +438,7 @@ int can_perform_flip44(const s_setup *setup, const s_ncell *ncell, double **vert
 }
 
 
-void debug_print_44(s_setup *setup, s_ncell *ncell, int opp_cell_id, int ridge_id_2, char *file)
+void debug_print_44_before(s_setup *setup, s_ncell *ncell, int opp_cell_id, int ridge_id_2, char *file)
 {
     int nc2_id1, nc2_id2;
     s_ncell *nc2 = next_ncell_ridge_cycle(setup, ncell, opp_cell_id, ridge_id_2, &nc2_id1, &nc2_id2);
@@ -449,7 +449,7 @@ void debug_print_44(s_setup *setup, s_ncell *ncell, int opp_cell_id, int ridge_i
     int nc4_id1, nc4_id2;
     s_ncell *nc4 = next_ncell_ridge_cycle(setup, nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
 
-    printf("FLIP44: \n \
+    printf("FLIP44 BEFORE: \n \
             (%d, %d), (%d, %d, %d, %d)\n \
             (%d, %d), (%d, %d, %d, %d)\n \
             (%d, %d), (%d, %d, %d, %d)\n \
@@ -473,38 +473,43 @@ void debug_print_44(s_setup *setup, s_ncell *ncell, int opp_cell_id, int ridge_i
 }
 
 
-void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2) 
+void debug_print_44_after(s_setup *setup, s_ncell **PTRS, char *file)
 {
-    plot_dt_3d(setup, "case3_pre", NULL, 1);
-    FILE *f = fopen("case_3_pre.txt", "w");
-    fclose(f);
-    print_ncell(setup, ncell);
-    debug_print_44(setup, ncell, id_ridge_1, id_ridge_2, "case_3_pre.txt");
+    s_ncell *nc1 = PTRS[0];
+    s_ncell *nc2 = PTRS[1];
+    s_ncell *nc3 = PTRS[2];
+    s_ncell *nc4 = PTRS[3];
+    printf("FLIP44 AFTER: \n \
+            (%d, %d, %d, %d)\n \
+            (%d, %d, %d, %d)\n \
+            (%d, %d, %d, %d)\n \
+            (%d, %d, %d, %d)\n \n", 
+            nc1->vertex_id[0], nc1->vertex_id[1], nc1->vertex_id[2], nc1->vertex_id[3], 
+            nc2->vertex_id[0], nc2->vertex_id[1], nc2->vertex_id[2], nc2->vertex_id[3],
+            nc3->vertex_id[0], nc3->vertex_id[1], nc3->vertex_id[2], nc3->vertex_id[3],
+            nc4->vertex_id[0], nc4->vertex_id[1], nc4->vertex_id[2], nc4->vertex_id[3]);
+
+    FILE *file_debug = fopen(file, "a");
+    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc1, file_debug);
+    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc2, file_debug);
+    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc3, file_debug);
+    write_ncell3d_file((s_setup*)setup, (s_ncell*)nc4, file_debug);
+    fprintf(file_debug, "\n\n");
+    fclose(file_debug);
+}
 
 
-    // The ordering of ridges is somewhat strange, bear with it with a drawing
-    
-    // FIRST THIS FLIP IS TO ENSURE THAT ALL FINAL CELLS ARE INCIDENT TO P
-    // int nc1_id_1, nc1_id_2;
-    // s_ncell *nc1 = next_ncell_ridge_cycle(setup, ncell, id_ridge_1, id_ridge_2, &nc1_id_1, &nc1_id_2);
-    // id_ridge_1 = nc1_id_1;
-    // id_ridge_2 = nc1_id_2;
-    // ncell = nc1;
 
-    // int opp_face_localid;
-    // face_localid_of_adjacent_ncell(setup, ncell, &id_ridge_2, 2, id_ridge_2, &opp_face_localid);
-    //
-    // int nc2_id1, nc2_id2, opp2_face_localid;
-    // s_ncell *nc2 = next_ncell_ridge_cycle(setup, ncell, id_ridge_1, id_ridge_2, &nc2_id1, &nc2_id2);
-    // face_localid_of_adjacent_ncell(setup, nc2, &nc2_id1, 2, nc2_id1, &opp2_face_localid);
-    
-    // s_ncell *nc5 = flip23(setup, stack, nc1, id_ridge_2, opp_face_localid);  // TOWARDS NC4
+void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS) 
+{
+    // FILE *f = fopen("flip44_pre.txt", "w");
+    // fclose(f);
+    // debug_print_44_before(setup, ncell, id_ridge_1, id_ridge_2, "flip44_pre.txt");
 
+    // FIRST, A FLIP23
     int opp_face_localid;
     face_localid_of_adjacent_ncell(setup, ncell, &id_ridge_1, 2, id_ridge_1, &opp_face_localid);
     int opp_face_vertexid = ncell->opposite[id_ridge_1]->vertex_id[opp_face_localid];  // Store before flip23!
-    printf("nc1: (%d, %d, %d, %d); nc2: (%d, %d, %d, %d), opp_face_vid = %d\n", ncell->vertex_id[0], ncell->vertex_id[1], ncell->vertex_id[2], ncell->vertex_id[3], ncell->opposite[id_ridge_1]->vertex_id[0], ncell->opposite[id_ridge_1]->vertex_id[1], ncell->opposite[id_ridge_1]->vertex_id[2], ncell->opposite[id_ridge_1]->vertex_id[3], ncell->opposite[id_ridge_1]->vertex_id[opp_face_localid]);
-    
 
     int id_a, id_c;
     for (int ii=0; ; ii++) {
@@ -520,7 +525,6 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
         }
     }
     int p = ncell->vertex_id[id_ridge_1];
-    // int b = ncell->vertex_id[id_ridge_2];
     int a = ncell->vertex_id[id_a];
     int c = ncell->vertex_id[id_c];
     int d = opp_face_vertexid;
@@ -531,26 +535,37 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
     if (inarray(FLIP23_PTRS[0]->vertex_id, 4, a) && inarray(FLIP23_PTRS[0]->vertex_id, 4, c) &&
         inarray(FLIP23_PTRS[0]->vertex_id, 4, d) && inarray(FLIP23_PTRS[0]->vertex_id, 4, p)) {
         nc5 = FLIP23_PTRS[0];
-        puts("DEBUG FLIP44: NC5 IS 0");
+        stack_push(stack, FLIP23_PTRS[1]);
+        stack_push(stack, FLIP23_PTRS[2]);
+        if (OUT_PTRS) {
+            OUT_PTRS[0] = FLIP23_PTRS[1];
+            OUT_PTRS[1] = FLIP23_PTRS[2];
+        }
     } else if (inarray(FLIP23_PTRS[1]->vertex_id, 4, a) && inarray(FLIP23_PTRS[1]->vertex_id, 4, c) &&
         inarray(FLIP23_PTRS[1]->vertex_id, 4, d) && inarray(FLIP23_PTRS[1]->vertex_id, 4, p)) {
         nc5 = FLIP23_PTRS[1];
-        puts("DEBUG FLIP44: NC5 IS 1");
+        stack_push(stack, FLIP23_PTRS[0]);
+        stack_push(stack, FLIP23_PTRS[2]);
+        if (OUT_PTRS) {
+            OUT_PTRS[0] = FLIP23_PTRS[0];
+            OUT_PTRS[1] = FLIP23_PTRS[2];
+        }
     } else if (inarray(FLIP23_PTRS[2]->vertex_id, 4, a) && inarray(FLIP23_PTRS[2]->vertex_id, 4, c) &&
         inarray(FLIP23_PTRS[2]->vertex_id, 4, d) && inarray(FLIP23_PTRS[2]->vertex_id, 4, p)) {
         nc5 = FLIP23_PTRS[2];
-        puts("DEBUG FLIP44: NC5 IS 2");
+        stack_push(stack, FLIP23_PTRS[0]);
+        stack_push(stack, FLIP23_PTRS[1]);
+        if (OUT_PTRS) {
+            OUT_PTRS[0] = FLIP23_PTRS[0];
+            OUT_PTRS[1] = FLIP23_PTRS[1];
+        }
     } else { 
-        exit(33);
+        puts("SHOULD NOT BE HERE! FLIP44 COULD NOT FIND NC5");
+        exit(1);
     }
 
-
-
-
-    printf("nc5: "); print_ncell(setup, nc5);
+    // NEXT, A FLIP32
     int nc5_p = id_where_equal_int(nc5->vertex_id, 4, ncell->vertex_id[id_ridge_1]);
-    printf("nc3: (%d, %d, %d, %d)\n", nc5->opposite[nc5_p]->vertex_id[0], nc5->opposite[nc5_p]->vertex_id[1], nc5->opposite[nc5_p]->vertex_id[2], nc5->opposite[nc5_p]->vertex_id[3]); 
-    // printf("nc5_p = %d, nc5: ", nc5_p); print_ncell(setup, nc5);
     
     s_ncell *nc3 = nc5->opposite[id_where_equal_int(nc5->vertex_id, 4, ncell->vertex_id[id_ridge_1])];
     int nc3_id1 = id_where_equal_int(nc3->vertex_id, 4, opp_face_vertexid);
@@ -558,17 +573,21 @@ void flip44(s_setup *setup, s_stack *stack, s_ncell *ncell, int id_ridge_1, int 
     face_localid_of_adjacent_ncell(setup, nc5, &nc5_p, 2, nc5_p, &nc3_id2);
     int nc3_opp_face_localid;
     face_localid_of_adjacent_ncell(setup, nc3, &nc3_id1, 2, nc3_id1, &nc3_opp_face_localid);
-    printf("NC3: nc1_opp_face_vertexid = %d, ridge_1 : %d, ridge_2 : %d, ridge_3 : %d\n", opp_face_vertexid, nc3->vertex_id[nc3_id1], nc3->vertex_id[nc3_id2], nc3->opposite[nc3_id1]->vertex_id[nc3_opp_face_localid]);
-    printf("nc4: "); print_ncell(setup, nc3->opposite[nc3_id1]);
 
     s_ncell *FLIP32_PTRS[2];
     flip32(setup, stack, nc3, nc3_id1, nc3_id2, nc3_opp_face_localid, FLIP32_PTRS);
-    print_ncell(setup, FLIP32_PTRS[0]);
-    print_ncell(setup, FLIP32_PTRS[1]);
 
+    if (OUT_PTRS) {
+        OUT_PTRS[2] = FLIP32_PTRS[0];
+        OUT_PTRS[3] = FLIP32_PTRS[1];
+    }
 
-    // flip32(setup, stack, nc2, nc2_id1, nc2_id2, opp2_face_localid);  // NC2 TOWARDS NC3
-    
+    stack_push(stack, FLIP32_PTRS[0]);
+    stack_push(stack, FLIP32_PTRS[1]);
+
+    // f = fopen("flip44_after.txt", "w");
+    // fclose(f);
+    // debug_print_44_after(setup, OUT_PTRS, "flip44_after.txt");
 }
 
 
@@ -789,15 +808,16 @@ void flip_tetrahedra(s_setup *setup, s_stack *stack, s_ncell *ncell, int opp_cel
             }
             break;
         case 3:
-            printf("CASE 3: a: (%f, %f, %f)\nb: (%f, %f, %f)\nc: (%f, %f, %f)\nd: (%f, %f, %f)\np: (%f, %f, %f)\n", 
-                    coords_face[0][0], coords_face[0][1], coords_face[0][2],
-                    coords_face[1][0], coords_face[1][1], coords_face[1][2],
-                    coords_face[2][0], coords_face[2][1], coords_face[2][2],
-                    d[0], d[1], d[2], p[0], p[1], p[2]);
+            // printf("CASE 3: a: (%f, %f, %f)\nb: (%f, %f, %f)\nc: (%f, %f, %f)\nd: (%f, %f, %f)\np: (%f, %f, %f)\n", 
+            //         coords_face[0][0], coords_face[0][1], coords_face[0][2],
+            //         coords_face[1][0], coords_face[1][1], coords_face[1][2],
+            //         coords_face[2][0], coords_face[2][1], coords_face[2][2],
+            //         d[0], d[1], d[2], p[0], p[1], p[2]);
             if (can_perform_flip44(setup, ncell, coords_face, opp_cell_id, &ridge_id_2)) {
-                printf("executed! opp_cell_id = %d, ridge_id_2 = %d, ncell:", opp_cell_id, ridge_id_2);
-                print_ncell(setup, ncell);
-                flip44(setup, stack, ncell, opp_cell_id, ridge_id_2);
+                // printf("executed! opp_cell_id = %d, ridge_id_2 = %d, ncell:", opp_cell_id, ridge_id_2);
+                // print_ncell(setup, ncell);
+                s_ncell *FLIP44_PTRS[4];
+                flip44(setup, stack, ncell, opp_cell_id, ridge_id_2, FLIP44_PTRS);
             }
             break;
         case 4:
@@ -823,7 +843,7 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack)
         if (current) {  // UNSURE IF THIS IS RIGHT... TODO
             int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
             if (current->opposite[opp_cell_id]) {
-                if (are_locally_delaunay(setup, current, opp_cell_id) != 1) {
+                if (are_locally_delaunay_strict(setup, current, opp_cell_id) != 1) {
                     flip_tetrahedra(setup, stack, current, opp_cell_id);
                 }
             }
