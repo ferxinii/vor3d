@@ -85,23 +85,79 @@ int segment_crosses_triangle_3d(double **triangle, double *a, double *b)
 }
 
 
+int between_1d(double x, double a, double b, double eps)
+{
+    // returns 1 if x lies between [a,b]
+    if (a > b) { double t=a; a=b; b=t; }
+    return (x + eps >= a && x - eps <= b);
+}
+
 
 int segments_intersect_2d(double *A, double *B, double *p, double *d)
 {
-  double *aux[2];
-  aux[0] = A;
-  aux[1] = B;
-  int o1 = orientation(aux, p, 2);
-  int o2 = orientation(aux, d, 2);
-  if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+    const double EPS = 1e-9;
+    double Ax = A[0], Ay = A[1];
+    double Bx = B[0], By = B[1];
+    double px = p[0], py = p[1];
+    double dx = d[0], dy = d[1];
 
-  aux[0] = p;
-  aux[1] = d;
-  o1 = orientation(aux, A, 2);
-  o2 = orientation(aux, B, 2);
-  if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+    // 1) Degenerate pd, treat as X
+    if (fabs(px - dx) < EPS && fabs(py - dy) < EPS) {
+        double X[2] = { px, py };
+        if (fabs(Ax - Bx) < EPS && fabs(Ay - By) < EPS) {
+            // If A, B also degenerate
+            return (fabs(px - Ax) < EPS && fabs(py - Ay) < EPS);
+        }
+        double *auxAB[2] = { A, B };
+        if (orientation(auxAB, X, 2) == 0 &&
+            between_1d(px, Ax, Bx, EPS) &&
+            between_1d(py, Ay, By, EPS)) {
+            return 1;
+        }
+        return 0;
+    }
 
-  return 1;
+    // 2) Degenerate AB, treat as Y
+    if (fabs(Ax - Bx) < EPS && fabs(Ay - By) < EPS) {
+        double Y[2] = { Ax, Ay };
+        double *auxPD[2] = { p, d };
+        if (orient2d(auxPD[0], auxPD[1], Y) == 0 &&
+            between_1d(Ax, px, dx, EPS) &&
+            between_1d(Ay, py, dy, EPS)) {
+            return 1;
+        }
+        return 0;
+    }
+
+    // 3) General case: two “straddling” tests
+    // 3a) [A,B] vs {p,d}
+    double *auxAB[2] = { A, B };
+    int o1 = orient2d(auxAB[0], auxAB[1], p);
+    int o2 = orient2d(auxAB[0], auxAB[1], d);
+    if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+
+    // 3b) [p,d] vs {A,B}
+    double *auxPD[2] = { p, d };
+    o1 = orient2d(auxPD[0], auxPD[1], A);
+    o2 = orient2d(auxPD[0], auxPD[1], B);
+    if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+
+    return 1;
+  //   
+  // double *aux[2];
+  // aux[0] = A;
+  // aux[1] = B;
+  // int o1 = orientation(aux, p, 2);
+  // int o2 = orientation(aux, d, 2);
+  // if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+  //
+  // aux[0] = p;
+  // aux[1] = d;
+  // o1 = orientation(aux, A, 2);
+  // o2 = orientation(aux, B, 2);
+  // if (o1 != 0 && o2 != 0 && o1 == o2) return 0;
+  //
+  // return 1;
 }
 
 
