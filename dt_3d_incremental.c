@@ -1,4 +1,6 @@
-// TODO Make plots to visualize what is happening? Or simply print the values... TEST!!
+// TODO For each "cycle" of adding a point, store all ncells that have not been flipped.
+// For the list, try to re-introduce them as is. If there are still ncells, change their order and repeat, and so until delaunayness is restored.
+// It is important to restore delaunayness before proceeding.
 
 #include <assert.h>
 #include "simplical_complex.c"
@@ -802,7 +804,8 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *sta
     // Insert p in container_ncell with a flip14
     flip14(setup, container_ncell, point_id, stack);
 
-    check_blocked_previous(setup, stack, stack_blocked);
+    // check_blocked_previous(setup, stack, stack_blocked);
+    stack_blocked->size = 0;
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack, NULL);
 
@@ -814,6 +817,7 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *sta
                 }
             }
         }
+        printf("stack_blocked->N: %d\n", stack_blocked->size);
     }
     
 }
