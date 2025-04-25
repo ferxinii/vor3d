@@ -369,7 +369,13 @@ int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int 
 
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
-            
+
+    assert(!(orientation(coords1, coords1[3], 3) == 0 && 
+            orientation(coords2, coords2[3], 3) == 0));
+
+    if (orientation(coords1, coords1[3], 3) == 0 || 
+        orientation(coords2, coords2[3], 3) == 0) return 0;
+
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
     face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
@@ -444,29 +450,6 @@ int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int 
 // }
 
 
-int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
-{
-    int o1 = orient2d(v1, v2, p);
-    int o2 = orient2d(v2, v3, p);
-    int o3 = orient2d(v3, v1, p);
-    
-    // Find reference sign (non-zero)
-    int signs[3] = {o1, o2, o3};
-    int ref_sign = 0;
-    for (int ii=0; ii<3; ii++) {
-        if (signs[ii] != 0) {
-            ref_sign = signs[ii];
-            break;
-        }
-    }
-
-    for (int ii=0; ii<4; ii++) {
-        if (signs[ii] != 0 && signs[ii] != ref_sign) return 0;
-    }
-    return 1;
-}
-
-
 int point_in_face(double **vertices_face, double *p)
 {
     double n[3], d1[3], d2[3];
@@ -502,7 +485,7 @@ int point_in_face(double **vertices_face, double *p)
 }
 
 
-int point_in_tetra(s_setup *setup, double *x, s_ncell *ncell)
+int point_in_tetra_OLD(s_setup *setup, double *x, s_ncell *ncell)
 {
     assert(setup->dim == 3 && "next test not implemented, just in 3D.");
 
@@ -515,12 +498,60 @@ int point_in_tetra(s_setup *setup, double *x, s_ncell *ncell)
 
         int o1 = orientation(facet_vertices, opposite_vertex, 3);
         int o2 = orientation(facet_vertices, x, 3);
-        if (o1 == 0) {
-            if (point_in_face(facet_vertices, x)) return 1;
-            else continue;
-        }
+        assert(o1 != 0);
         if (o2 != 0 && o1 * o2 < 0) return 0;
+        else if (o2 == 0) {
+            if (point_in_face(facet_vertices, x)) return 1;
+            else return 0;
+        }
     }
+    return 1;
+}
+
+
+int point_in_tetra(s_setup *setup, double *x, s_ncell *nc)
+{
+    assert(setup->dim == 3);
+    static double **facet_vertices = NULL;
+    if (!facet_vertices) facet_vertices = malloc_matrix(3, 3);
+
+    double *v0 = setup->points[nc->vertex_id[0]];
+    double *v1 = setup->points[nc->vertex_id[1]];
+    double *v2 = setup->points[nc->vertex_id[2]];
+    double *v3 = setup->points[nc->vertex_id[3]];
+
+    // compute signed volumes (orientation)
+    facet_vertices[0] = v1; facet_vertices[1] = v2; facet_vertices[2] = v3; 
+    int s0 = orientation(facet_vertices, x, 3);  // face opposite v0
+
+    facet_vertices[0] = v0; facet_vertices[1] = v3; facet_vertices[2] = v2; 
+    int s1 = orientation(facet_vertices, x, 3);  // face opposite v0
+                                                 //
+    facet_vertices[0] = v0; facet_vertices[1] = v1; facet_vertices[2] = v3; 
+    int s2 = orientation(facet_vertices, x, 3);  // face opposite v0
+
+    facet_vertices[0] = v0; facet_vertices[1] = v2; facet_vertices[2] = v1; 
+    int s3 = orientation(facet_vertices, x, 3);  // face opposite v0
+
+    // find a nonzero reference sign
+    int ref = 0;
+    if (s0 != 0) ref = s0;
+    else if (s1 != 0) ref = s1;
+    else if (s2 != 0) ref = s2;
+    else if (s3 != 0) ref = s3;
+    if (ref == 0) {
+        puts("DEGENERATE!");
+        exit(1);
+    }
+
+    // if any nonzero sign disagrees, x is outside
+    if ((s0 && s0 != ref) || (s1 && s1 != ref) ||
+        (s2 && s2 != ref) || (s3 && s3 != ref)   )
+        return 0;
+        
+    assert(abs(s0) + abs(s1) + abs(s2) + abs(s3) >= 3 && "point in edge!");
+    if (s0 == 0 || s1 == 0 || s2 == 0 || s3 == 0) printf("\nIN FACE!!\n");
+
     return 1;
 }
 
@@ -539,7 +570,7 @@ s_ncell *bruteforce_find_ncell_containing(s_setup *setup, double *p)
 
 s_ncell *in_ncell_walk_NEW(s_setup *setup, double *p)
 {
-    // return bruteforce_find_ncell_containing(setup, p);
+    return bruteforce_find_ncell_containing(setup, p);
 
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
@@ -594,6 +625,62 @@ s_ncell *in_ncell_walk_NEW(s_setup *setup, double *p)
     assert(point_in_tetra(setup, p, current)); // DEBUG TODO FIXME, REMOVE, TESTING
     return current;
 }
+
+
+s_ncell *in_ncell_walk_2(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)
+{
+    s_ncell *current = setup->head;
+    assert(setup->N_ncells >= 1 && "N_ncells < 1");
+    int randi = (rand() % setup->N_ncells);
+    for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
+        current = current->next;
+    }
+
+    // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
+    static int prev_dim = 0;
+    static double **facet_vertices = NULL;
+    if (setup->dim != prev_dim) {
+        if (facet_vertices) free_matrix(facet_vertices, prev_dim);
+        prev_dim = setup->dim;
+        facet_vertices = malloc_matrix(setup->dim, setup->dim);
+    }
+    
+    s_ncell *prev = current;
+    STEP:
+    for (int ii=0; ii<setup->dim+1; ii++) {
+        double *opposite_vertex = setup->points[current->vertex_id[ii]];
+
+        s_ncell *next = current->opposite[ii];
+        if (next) {
+            extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
+
+            int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
+            int o2 = orientation(facet_vertices, p, setup->dim);
+
+            if (o1 == 0 && next != prev) {
+                prev = current;
+                current = next;
+                goto STEP;
+            } else if (o1 == 0) continue;
+
+            if (o2 == 0) {
+                if (point_in_tetra(setup, p, current)) { return current; }
+                else if (next != prev) {
+                    prev = current;
+                    current = next;
+                    goto STEP;
+                } else continue;
+            } else if (o1 != o2) {
+                prev = current;
+                current = next;
+                goto STEP;
+            }
+        }
+    }
+    
+    return current;
+}
+
 
 
 s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)

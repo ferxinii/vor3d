@@ -221,6 +221,15 @@ void find_center_mass(double **in, int N_points, int dim, double *out)
 }
 
 
+int coord_with_largest_component_3d(double *n)
+{
+    int out = 2;
+    if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) out = 0;
+    else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) out = 1;
+    return out;
+}
+
+
 void cross_3d(const double *u, const double *v, double *out)
 {
     out[0] = u[1]*v[2] - u[2]*v[1];
@@ -260,6 +269,29 @@ double distance_squared(const double *a, const double *b)
 //     
 //     return atan2(dot_3d(normal, cross), dot);
 // }
+
+
+int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
+{
+    int o1 = orient2d(v1, v2, p);
+    int o2 = orient2d(v2, v3, p);
+    int o3 = orient2d(v3, v1, p);
+    
+    // Find reference sign (non-zero)
+    int signs[3] = {o1, o2, o3};
+    int ref_sign = 0;
+    for (int ii=0; ii<3; ii++) {
+        if (signs[ii] != 0) {
+            ref_sign = signs[ii];
+            break;
+        }
+    }
+
+    for (int ii=0; ii<4; ii++) {
+        if (signs[ii] != 0 && signs[ii] != ref_sign) return 0;
+    }
+    return 1;
+}
 
 
 int ray_triangle_intersection_3d(double **triangle, const double *origin, const double *dir, double *intersection) 

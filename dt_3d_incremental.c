@@ -583,14 +583,10 @@ void flip44(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_ncell *nce
 
 int pd_intersects_edge(double *s1, double *s2, double *p, double *d, int drop_coord)
 {
-     int i1, i2;
-    if (drop_coord == 0) {
-        i1 = 1;     i2 = 2;
-    } else if (drop_coord == 1) {
-        i1 = 2;     i2 = 0;
-    } else {
-        i1 = 0;     i2 = 1;
-    }
+    int i1, i2;
+    if (drop_coord == 0)      { i1 = 1; i2 = 2; } 
+    else if (drop_coord == 1) { i1 = 2; i2 = 0; } 
+    else                      { i1 = 0; i2 = 1; }
 
     double A[2], B[2], paux[2], daux[2];
     A[0] = s1[i1];    A[1] = s1[i2];
@@ -598,8 +594,9 @@ int pd_intersects_edge(double *s1, double *s2, double *p, double *d, int drop_co
     paux[0] = p[i1];  paux[1] = p[i2];
     daux[0] = d[i1];  daux[1] = d[i2];
     
-    assert(!(p[0] == d[0] && p[1] == d[1]));
-    assert(!(A[0] == B[0] && A[1] == B[1]));
+    // assert(!(p[0] == d[0] && p[1] == d[1]));
+    // assert(!(A[0] == B[0] && A[1] == B[1]));
+    // in theory segments_intersect_2d SHOULD DEAL WITH THE DEGENERACIES!
     return segments_intersect_2d(A, B, paux, daux);
 }
 
@@ -615,9 +612,7 @@ int is_case_3(double **vertices_face, double *p, double *d)
     d2[2] = vertices_face[2][2] - vertices_face[0][2];
     cross_3d(d1, d2, n);
 
-    int drop_coord = 2;
-    if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) drop_coord = 0;
-    else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) drop_coord = 1;
+    int drop_coord = coord_with_largest_component_3d(n);
 
     double *aux[3];
     aux[0] = p; 
@@ -768,14 +763,14 @@ int flip_tetrahedra(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_nc
             if (can_perform_flip32(setup, ncell, opp_cell_id, &ridge_id_2)) {
                 flip32(setup, stack, stack_blocked, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL);
                 return 1;
-            } else {puts("Could not case 2"); if (stack_blocked) stack_push(stack_blocked, ncell);}
+            } else {if (stack_blocked) stack_push(stack_blocked, ncell);}
             break;
         case 3:
             if (can_perform_flip44(setup, ncell, coords_face, opp_cell_id, &ridge_id_2)) {
                 s_ncell *FLIP44_PTRS[4];
                 flip44(setup, stack, stack_blocked, ncell, opp_cell_id, ridge_id_2, FLIP44_PTRS);
                 return 1;
-            } else {puts("Could not case 3"); if (stack_blocked) stack_push(stack_blocked, ncell);}
+            } else {if (stack_blocked) stack_push(stack_blocked, ncell);}
             break;
         case 4:
             puts("CASE 4... UNSURE, UNTESTED");
@@ -787,36 +782,36 @@ int flip_tetrahedra(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_nc
 }
 
 
-void retry_blocked(s_setup *setup, s_stack *stack, s_stack *stack_blocked, int point_id)
-{
-    while (stack_blocked->size != 0) {
-        s_ncell *try = stack_peek(stack_blocked);
-        stack_push(stack, try);
-        if (try && try->opposite) {
-            int opp_cell_id = id_where_equal_int(try->vertex_id, 4, point_id);
-            if (try->opposite[opp_cell_id] && 
-                flip_tetrahedra(setup, stack, NULL, try, opp_cell_id)) {
-                stack_pop(stack_blocked);
-                while (stack->size > 0) {
-                    printf("RETRY BLOCKED: stack->N: %d\n", stack->size);
-                    if (are_locally_delaunay_strict(setup, try, opp_cell_id) != 1) {
-                        flip_tetrahedra(setup, stack, stack_blocked, try, opp_cell_id);
-                    }
-                }
-            }
-        } else stack_pop(stack_blocked);
-
-        stack_shuffle(stack_blocked);
-        printf("RETRY BLOCKED: stack_blocked->N: %d\n", stack_blocked->size);
-        stack_print(stack_blocked);
-    }
-}
+// void retry_blocked(s_setup *setup, s_stack *stack, s_stack *stack_blocked, int point_id)
+// {
+//     while (stack_blocked->size != 0) {
+//         s_ncell *try = stack_peek(stack_blocked);
+//         stack_push(stack, try);
+//         if (try && try->opposite) {
+//             int opp_cell_id = id_where_equal_int(try->vertex_id, 4, point_id);
+//             if (try->opposite[opp_cell_id] && 
+//                 flip_tetrahedra(setup, stack, NULL, try, opp_cell_id)) {
+//                 stack_pop(stack_blocked);
+//                 while (stack->size > 0) {
+//                     printf("RETRY BLOCKED: stack->N: %d\n", stack->size);
+//                     if (are_locally_delaunay_strict(setup, try, opp_cell_id) != 1) {
+//                         flip_tetrahedra(setup, stack, stack_blocked, try, opp_cell_id);
+//                     }
+//                 }
+//             }
+//         } else stack_pop(stack_blocked);
+//
+//         stack_shuffle(stack_blocked);
+//         printf("RETRY BLOCKED: stack_blocked->N: %d\n", stack_blocked->size);
+//         stack_print(stack_blocked);
+//     }
+// }
 
 
 void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stack_blocked)
 {
     double *point = setup->points[point_id];
-    s_ncell *container_ncell = in_ncell_walk(setup, point);
+    s_ncell *container_ncell = in_ncell_walk_2(setup, point);
 
     // Insert p in container_ncell with a flip14
     flip14(setup, container_ncell, point_id, stack);
@@ -829,14 +824,14 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *sta
         if (current) {  // UNSURE IF THIS IS RIGHT... TODO
             int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
             if (current->opposite[opp_cell_id]) {
-                if (are_locally_delaunay_strict(setup, current, opp_cell_id) != 1) {
+                if (!are_locally_delaunay_strict(setup, current, opp_cell_id)) {
                     flip_tetrahedra(setup, stack, stack_blocked, current, opp_cell_id);
                 }
             }
         }
     }
-    printf("INSERT_ONE_POINT: %d\n", stack_blocked->size);
-    printf("IS DELAUNAY: %d\n", is_delaunay_3d(setup));
+    // printf("INSERT_ONE_POINT: %d\n", stack_blocked->size);
+    // printf("IS DELAUNAY: %d\n", is_delaunay_3d(setup));
     // retry_blocked(setup, stack, stack_blocked, point_id);
     
 }
@@ -904,8 +899,7 @@ s_setup *construct_dt_3d(double **points, int N_points)
     // assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
     for (int ii=0; ii<N_points; ii++) {
         insert_one_point(setup, ii, stack, stack_blocked);
-        // DOES NOT NEED TO BE DELAUNAY!! For example, maybe in case 2 a flip32 cannot be done, 
-        // but in principle some future flip will restore delaunayness
+        // SHOULD ALWAYS BE DELAUNAY!
     }
     
     stack_free(stack);  

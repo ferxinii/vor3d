@@ -329,6 +329,29 @@ int is_plane_saved(double **planes, int N, double *n, double d)
 }
 
 
+int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3)
+{
+    double dist = dot_3d(n, s) - d;
+    // Projection onto the face's plane:
+    double p[3] = { s[0] - dist*n[0],
+                    s[1] - dist*n[1],
+                    s[2] - dist*n[2] };
+
+    int drop = coord_with_largest_component_3d(n);
+    int i1, i2;
+    if (drop == 0)      { i1 = 1; i2 = 2; } 
+    else if (drop == 1) { i1 = 2; i2 = 0; } 
+    else                { i1 = 0; i2 = 1; }
+
+    double v1[2] = {f1[i1], f1[i2]},
+           v2[2] = {f2[i1], f2[i2]},
+           v3[2] = {f3[i1], f3[i2]},
+           paux[2] = {p[i1], p[i2]};
+    
+    return point_in_triangle_2d(v1, v2, v3, p);
+}
+
+
 int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
 {
     double **out = malloc_matrix(Ns*(1+bp->Nf), 3);
@@ -348,6 +371,8 @@ int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
                            bp->points[bp->faces[ii*3]]);
 
         assert(fabs(norm_squared(ni, 3) - 1) < 1e-9);
+        
+
         if (!is_plane_saved(stored_planes, Np_unique, ni, di)) {
             stored_planes[Np_unique][0] = ni[0];
             stored_planes[Np_unique][1] = ni[1];
@@ -356,6 +381,7 @@ int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
             Np_unique++;
             for (int jj=0; jj<Ns; jj++) {
                 double factor = 2 * (di - dot_3d(ni, (*s)[jj]));
+                assert(fabs(factor) > 1e-7); 
                 out[kk][0] = (*s)[jj][0] +  factor * ni[0];
                 out[kk][1] = (*s)[jj][1] +  factor * ni[1];
                 out[kk][2] = (*s)[jj][2] +  factor * ni[2];

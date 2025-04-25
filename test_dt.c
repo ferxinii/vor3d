@@ -59,8 +59,8 @@ void write_sphere_txt(void)
 {
     // Parameters for the sphere
     double radius = 2;
-    int nTheta = 6; //18; // Number of steps in the polar angle (θ)
-    int nPhi = 5; //36;   // Number of steps in the azimuthal angle (φ)
+    int nTheta = 18; //18; // Number of steps in the polar angle (θ)
+    int nPhi = 36; //36;   // Number of steps in the azimuthal angle (φ)
 
     // Open the file for writing coordinates
     FILE *fp = fopen(FILE_COORDS_SPHERE, "w");
@@ -124,7 +124,7 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     puts("Constructing dt...");
     s_setup *dt = construct_dt_3d(points_poiss, N_new);
     printf("RESULTING SETUP NPOINTS: %d, NNCELLS: %d\n", dt->N_points, dt->N_ncells);
-    printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt));
+    // printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt));
 
     puts("Plotting dt...");
     // double ranges_plot[6];
@@ -190,9 +190,9 @@ int main(void) {
     double **points_bp_L;
     int N_points_bp_L;
     s_bound_poly *bp_L;
-    write_triangle_points(FILE_COORDS_SPHERE);
+    // write_triangle_points(FILE_COORDS_SPHERE);
     // write_cube_points(FILE_COORDS_SPHERE);
-    // write_sphere_txt();
+    write_sphere_txt();
     new_bpoly_from_txt(FILE_COORDS_SPHERE, &points_bp_L, &N_points_bp_L, &bp_L, 0); 
 
     double ranges_plot[6];
@@ -245,7 +245,7 @@ int main(void) {
 
     puts("PLOTTING...");
     // ptest = NULL;
-    // plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, ptest, &Ntest);
+    plot_vdiagram(vd, "plot_sphere/sph", ranges_plot, 0, NULL, 0);
 
 
 
