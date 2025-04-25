@@ -1,32 +1,12 @@
-#ifndef SIMPLICAL_COMPLEX_C
-#define SIMPLICAL_COMPLEX_C
 
+#include "simplical_complex.h"
+#include "algebra.h"
+#include "geometry.h"
+#include "array_operations.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
-#include "geometry.c"
-#include "array_operations.c"
-
-
-typedef struct setup {
-    int dim;
-    int N_points;
-    double **points;  // (n_points + dim + 1) x dim
-                      // The last (dim+1) points correspond to the big n_cell
-    int N_ncells;
-    struct ncell *head;  // Linked list of ncells
-} s_setup;
-
-
-typedef struct ncell {
-    int *vertex_id;
-    struct ncell **opposite;
-    struct ncell *next;  // Linked list of cells
-    struct ncell *prev;
-    int mark;  // Used to mark particular ncells
-    int count;
-    double volume;  // DEBUGGING
-} s_ncell;
+#include <math.h>
 
 
 s_ncell *malloc_ncell(const s_setup *setup)
@@ -47,22 +27,6 @@ void free_ncell(s_ncell *ncell)
     free(ncell->vertex_id);
     free(ncell->opposite);
     free(ncell);
-}
-
-
-void free_complex(s_setup *setup)
-{   
-    s_ncell *current = setup->head;
-    s_ncell *next = current->next;
-    free_ncell(current);
-    for (int ii=1; ii<setup->N_ncells; ii++) {
-        current = next;
-        next = current->next;
-        free_ncell(current);
-    }
-
-    free_matrix(setup->points, setup->N_points);
-    free(setup);
 }
 
 
@@ -599,7 +563,7 @@ s_ncell *bruteforce_find_ncell_containing(s_setup *setup, double *p)
 }
 
 
-s_ncell *in_ncell_walk_2(s_setup *setup, double *p)
+s_ncell *in_ncell_walk(s_setup *setup, double *p)
 {
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
@@ -655,47 +619,47 @@ s_ncell *in_ncell_walk_2(s_setup *setup, double *p)
 
 
 
-s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)
-{
-    s_ncell *current = setup->head;
-    assert(setup->N_ncells >= 1 && "N_ncells < 1");
-    int randi = (rand() % setup->N_ncells);
-    for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
-        current = current->next;
-    }
-
-    // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
-    static int prev_dim = 0;
-    static double **facet_vertices = NULL;
-    if (setup->dim != prev_dim) {
-        if (facet_vertices) free_matrix(facet_vertices, prev_dim);
-        prev_dim = setup->dim;
-        facet_vertices = malloc_matrix(setup->dim, setup->dim);
-    }
-
-    STEP:
-    for (int ii=0; ii<setup->dim+1; ii++) {
-        double *opposite_vertex = setup->points[current->vertex_id[ii]];
-
-        s_ncell *next = current->opposite[ii];
-        if (next) {
-            extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
-
-            int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
-            int o2 = orientation(facet_vertices, p, setup->dim);
-            assert(o1 != 0);
-            if (o2 == 0) {
-                if (point_in_tetra(setup, p, current)) return current;
-                // if (point_in_tetra(setup, p, next)) return next;
-            } else if (o1 != o2) {
-                current = next;
-                goto STEP;
-            }
-        }
-    }
-    
-    return current;
-}
+// s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)
+// {
+//     s_ncell *current = setup->head;
+//     assert(setup->N_ncells >= 1 && "N_ncells < 1");
+//     int randi = (rand() % setup->N_ncells);
+//     for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
+//         current = current->next;
+//     }
+//
+//     // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
+//     static int prev_dim = 0;
+//     static double **facet_vertices = NULL;
+//     if (setup->dim != prev_dim) {
+//         if (facet_vertices) free_matrix(facet_vertices, prev_dim);
+//         prev_dim = setup->dim;
+//         facet_vertices = malloc_matrix(setup->dim, setup->dim);
+//     }
+//
+//     STEP:
+//     for (int ii=0; ii<setup->dim+1; ii++) {
+//         double *opposite_vertex = setup->points[current->vertex_id[ii]];
+//
+//         s_ncell *next = current->opposite[ii];
+//         if (next) {
+//             extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
+//
+//             int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
+//             int o2 = orientation(facet_vertices, p, setup->dim);
+//             assert(o1 != 0);
+//             if (o2 == 0) {
+//                 if (point_in_tetra(setup, p, current)) return current;
+//                 // if (point_in_tetra(setup, p, next)) return next;
+//             } else if (o1 != o2) {
+//                 current = next;
+//                 goto STEP;
+//             }
+//         }
+//     }
+//     
+//     return current;
+// }
 
 
 
@@ -755,12 +719,11 @@ int is_delaunay_3d_old(const s_setup *setup)
 
 void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)
 {   // THIS IS JUST FOR DEBUGGING!!
-    
-    ncell->volume = fabs(1.0/6.0 * 
-                         orient3d(setup->points[ncell->vertex_id[0]], 
-                                  setup->points[ncell->vertex_id[1]],
-                                  setup->points[ncell->vertex_id[2]],
-                                  setup->points[ncell->vertex_id[3]]));
+    ncell->volume = volume_tetrahedron_approx(
+                    setup->points[ncell->vertex_id[0]], 
+                    setup->points[ncell->vertex_id[1]],
+                    setup->points[ncell->vertex_id[2]],
+                    setup->points[ncell->vertex_id[3]]);
 }
 
 
@@ -898,4 +861,3 @@ void plot_dt_3d(s_setup *setup, char *f_name, double *ranges, int max_files)
     pclose(pipe);
 }
 
-#endif

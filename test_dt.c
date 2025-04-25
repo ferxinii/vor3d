@@ -104,7 +104,7 @@ void check_volume(s_bound_poly *bp, s_vdiagram *vd)
             printf("VOL %d : %f\n", ii, vd->vcells[ii]->volume);
         }
     }
-    printf("V lung = %f, Diff = %f\n", bp->volume, bp->volume - sum_vol);
+    printf("V lung = %f, Diff = %.16f, rel_diff = %.16f\n", bp->volume, bp->volume - sum_vol, (bp->volume - sum_vol) / bp->volume);
 
 }
 

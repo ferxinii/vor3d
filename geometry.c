@@ -1,11 +1,12 @@
-#ifndef GEOMETRY_C
-#define GEOMETRY_C
 
-#include <string.h>
-#include "algebra.c"
+#include "geometry.h"
+#include "algebra.h"
 #include "predicates.h"
 #include "convhull_3d.h"
 #include "array_operations.c"
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
 
 
 int orientation(double **p, double *q, int dim)
@@ -630,6 +631,11 @@ int mark_inside_convhull(double **points, int Np, double **pch, int *faces, doub
 }
 
 
+double volume_tetrahedron_approx(double *p1, double *p2, double *p3, double *p4)
+{
+    return fabs(1.0/6.0 * orient3d(p1, p2, p3, p4));
+}
+
 double compute_volume_convhull(double **points, int *faces, double **fnormals, int Nf)
 {
     double vol = 0;
@@ -836,5 +842,3 @@ void segment_convex_hull_intersection(const double *p0, const double *p1, double
 //     }
 // }
 
-
-#endif

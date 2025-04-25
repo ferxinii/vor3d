@@ -1,0 +1,62 @@
+#include <stdio.h>
+#include <time.h>
+#include <stdlib.h>
+#include "voronoi.h"
+
+
+#define FILE_BP "bp_points.txt"
+#define FILE_VOLS "volumes.txt"
+
+
+double r_fun(double *x)
+{   
+    double r0 = 1.3;
+    double z0 = -2;
+    double K = 0.04;
+
+    return r0 + K * fabs(x[2] - z0);
+}
+
+
+void check_volume(s_bound_poly *bp, s_vdiagram *vd)
+{
+    double sum_vol = 0;
+    for (int ii=0; ii<vd->N_vcells; ii++) {
+        sum_vol += vd->vcells[ii]->volume;
+        if (vd->vcells[ii]->volume <= 0) {
+            printf("VOL %d : %f\n", ii, vd->vcells[ii]->volume);
+        }
+    }
+    printf("V lung = %f, Diff = %.16f, rel_diff = %.16f\n", bp->volume, bp->volume - sum_vol, (bp->volume - sum_vol) / bp->volume);
+}
+
+
+int main(void)
+{
+    srand(time(NULL));
+    system("rm -f plot_vd/*");
+
+    generate_file_tetrahedron_bp(FILE_BP, 2);
+    s_vdiagram *vd = construct_vd(&r_fun, FILE_BP, 5);
+    if (!vd) { puts("Could not construct vd in max_tries."); exit(1); }
+    plot_vdiagram_auto(vd, "plot_vd/tetra", 0);
+
+    free_vdiagram(vd);
+    exit(1);
+
+
+    
+    // // DO A LOOP TO GENERATE A LOT OF LUNGS
+    // int N_simu = 10;
+    // for (int ii=0; ii<N_simu; ii++) {
+    //     printf("%d\n", ii);
+    //     bp = new_bpoly_copy(bp_L);
+    //     vd = construct_cells_nonuniform(bp);
+    //     append_volumes_to_file(vd, FILE_VOLS_SPHERE);
+    //     check_volume(bp, vd);
+    //     free_vdiagram(vd);
+    // }
+
+    // PLOTTING HISTOGRAM
+    system("gnuplot sphere.plt");
+}

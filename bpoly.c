@@ -1,34 +1,14 @@
-#ifndef BPOLY_C
-#define BPOLY_C
 
-#include "algebra.c"
-#include "geometry.c"
+#include "algebra.h"
+#include "geometry.h"
 #include "float.h"
+#include "bpoly.h"
+// #include "poisson_disk.h"
+#include <assert.h>
+#include <string.h>
 #include <time.h>
-// REQUIRES CONVHULL_3D.H
-#define TPH_POISSON_IMPLEMENTATION
-#include "poisson_disk.h"
-
-
-#define MAX_TRIAL_POINTS 10000
-#define MAX_TRIAL_TESTS 100
-typedef struct point {
-    double coords[3];
-} s_point;
-
-
-typedef struct bound_poly {
-    int Np;
-    double **points;
-    int Nf;
-    int *faces;  // Its flat! Nf x 3
-    double **fnormals;
-    double dmax;  // Max distance between two pairs of points
-    double CM[3];
-    double min[3];
-    double max[3];
-    double volume;
-} s_bound_poly;
+#include <stdlib.h>
+#include <stdio.h>
 
 
 void free_bpoly(s_bound_poly *bpoly)
@@ -250,71 +230,71 @@ void find_intersection_with_bounding_poly(const s_bound_poly *bpoly, const doubl
 }
 
 
-double **generate_uniform_poisson_dist_inside(s_bound_poly *bpoly, double rmax, int *Np_generated)
-{
-    double s = 0.1;
-
-    const tph_poisson_real bounds_min[3] = { (tph_poisson_real)(bpoly->min[0] - s * bpoly->dmax),
-                                             (tph_poisson_real)(bpoly->min[1] - s * bpoly->dmax), 
-                                             (tph_poisson_real)(bpoly->min[2] - s * bpoly->dmax)};
-    const tph_poisson_real bounds_max[3] = { (tph_poisson_real)(bpoly->max[0] + s * bpoly->dmax), 
-                                             (tph_poisson_real)(bpoly->max[1] + s * bpoly->dmax), 
-                                             (tph_poisson_real)(bpoly->max[2] + s * bpoly->dmax)};
-    const tph_poisson_args args = { .bounds_min = bounds_min,
-                                    .bounds_max = bounds_max,
-                                    .radius = (tph_poisson_real)rmax,
-                                    .ndims = INT32_C(3),
-                                    .max_sample_attempts = UINT32_C(30),
-                                    .seed = (uint64_t)time(NULL) };
-
-    tph_poisson_allocator *alloc = NULL;
-
-    tph_poisson_sampling sampling;
-    memset(&sampling, 0, sizeof(tph_poisson_sampling));
-
-    // puts("DEBUG: NOW CREATING DISTRIBUTION");
-    int ret = tph_poisson_create(&args, alloc, &sampling);
-    if (ret != TPH_POISSON_SUCCESS) {
-      // No need to destroy sampling here!
-      printf("Failed creating Poisson sampling! Error code: %d", ret);
-      exit(1);
-    }
-
-    // puts("DEBUG: NOW GETTING SAMPLES");
-    const tph_poisson_real *samples = tph_poisson_get_samples(&sampling);
-
-    double **samples_arr = malloc_matrix(sampling.nsamples, 3);
-    for (int ii = 0; ii < sampling.nsamples; ii++) {
-        samples_arr[ii][0] = samples[ii * sampling.ndims];
-        samples_arr[ii][1] = samples[ii * sampling.ndims + 1];
-        samples_arr[ii][2] = samples[ii * sampling.ndims + 2];
-    }
-
-
-    // Filter all samples and get only those inside the bpoly
-    int *mark_inside = malloc(sizeof(int) * sampling.nsamples);
-    mark_inside_convhull(samples_arr, sampling.nsamples, bpoly->points, bpoly->faces, 
-                         bpoly->fnormals, bpoly->Nf, mark_inside);
-    int N_in = 0;
-    for (int ii=0; ii<sampling.nsamples; ii++) {
-        if (mark_inside[ii] == 1) N_in++;
-    }
-    
-    double **out = malloc_matrix(N_in, 3);
-    int kk = 0;
-    for (int ii=0; ii<sampling.nsamples; ii++) {
-        if (mark_inside[ii] == 1) {
-            copy_matrix(&samples_arr[ii], &out[kk], 1, 3);
-            kk++;
-        }
-    }
-
-    free(mark_inside);
-    free_matrix(samples_arr, sampling.nsamples);
-    tph_poisson_destroy(&sampling);
-    *Np_generated = N_in;
-    return out;
-}
+// double **generate_uniform_poisson_dist_inside(s_bound_poly *bpoly, double rmax, int *Np_generated)
+// {
+//     double s = 0.1;
+//
+//     const tph_poisson_real bounds_min[3] = { (tph_poisson_real)(bpoly->min[0] - s * bpoly->dmax),
+//                                              (tph_poisson_real)(bpoly->min[1] - s * bpoly->dmax), 
+//                                              (tph_poisson_real)(bpoly->min[2] - s * bpoly->dmax)};
+//     const tph_poisson_real bounds_max[3] = { (tph_poisson_real)(bpoly->max[0] + s * bpoly->dmax), 
+//                                              (tph_poisson_real)(bpoly->max[1] + s * bpoly->dmax), 
+//                                              (tph_poisson_real)(bpoly->max[2] + s * bpoly->dmax)};
+//     const tph_poisson_args args = { .bounds_min = bounds_min,
+//                                     .bounds_max = bounds_max,
+//                                     .radius = (tph_poisson_real)rmax,
+//                                     .ndims = INT32_C(3),
+//                                     .max_sample_attempts = UINT32_C(30),
+//                                     .seed = (uint64_t)time(NULL) };
+//
+//     tph_poisson_allocator *alloc = NULL;
+//
+//     tph_poisson_sampling sampling;
+//     memset(&sampling, 0, sizeof(tph_poisson_sampling));
+//
+//     // puts("DEBUG: NOW CREATING DISTRIBUTION");
+//     int ret = tph_poisson_create(&args, alloc, &sampling);
+//     if (ret != TPH_POISSON_SUCCESS) {
+//       // No need to destroy sampling here!
+//       printf("Failed creating Poisson sampling! Error code: %d", ret);
+//       exit(1);
+//     }
+//
+//     // puts("DEBUG: NOW GETTING SAMPLES");
+//     const tph_poisson_real *samples = tph_poisson_get_samples(&sampling);
+//
+//     double **samples_arr = malloc_matrix(sampling.nsamples, 3);
+//     for (int ii = 0; ii < sampling.nsamples; ii++) {
+//         samples_arr[ii][0] = samples[ii * sampling.ndims];
+//         samples_arr[ii][1] = samples[ii * sampling.ndims + 1];
+//         samples_arr[ii][2] = samples[ii * sampling.ndims + 2];
+//     }
+//
+//
+//     // Filter all samples and get only those inside the bpoly
+//     int *mark_inside = malloc(sizeof(int) * sampling.nsamples);
+//     mark_inside_convhull(samples_arr, sampling.nsamples, bpoly->points, bpoly->faces, 
+//                          bpoly->fnormals, bpoly->Nf, mark_inside);
+//     int N_in = 0;
+//     for (int ii=0; ii<sampling.nsamples; ii++) {
+//         if (mark_inside[ii] == 1) N_in++;
+//     }
+//     
+//     double **out = malloc_matrix(N_in, 3);
+//     int kk = 0;
+//     for (int ii=0; ii<sampling.nsamples; ii++) {
+//         if (mark_inside[ii] == 1) {
+//             copy_matrix(&samples_arr[ii], &out[kk], 1, 3);
+//             kk++;
+//         }
+//     }
+//
+//     free(mark_inside);
+//     free_matrix(samples_arr, sampling.nsamples);
+//     tph_poisson_destroy(&sampling);
+//     *Np_generated = N_in;
+//     return out;
+// }
 
 
 int is_plane_saved(double **planes, int N, double *n, double d)
@@ -642,9 +622,64 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
 }
 
 
+void generate_file_cube_bp(const char *filename, double length)
+{
+    double s = length / 2;
+    
+    FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%d\n\n", 8);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, s);
+    fprintf(fp, "%f, %f, %f\n", s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, s, s);
+    fclose(fp);
+}
 
 
+void generate_file_tetrahedron_bp(const char *filename, double length)
+{
+    double s = length / 2;
+    
+    FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%d\n\n", 4);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, s, s);
+    fclose(fp);
+}
 
+
+void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi)
+{
+    // ntheta: 18; // Number of steps in the polar angle
+    // nphi: 36;   // Number of steps in the azimuthal angle
+    FILE *fp = fopen(filename, "w");
+
+    for (int i = 0; i <= nTheta; i++) {
+        double theta = M_PI * i / nTheta;
+        
+        if (i == 0 || i == nTheta) { // If at a pole, compute and write the coordinate once.
+            double x = 0.0;
+            double y = 0.0;
+            double z = radius * cos(theta);  // will be +radius or -radius
+            fprintf(fp, "%f %f %f\n", x, y, z);
+        } else {
+            for (int j = 0; j < nPhi; j++) {
+                double phi = 2 * M_PI * j / nPhi;
+                double x = radius * sin(theta) * cos(phi);
+                double y = radius * sin(theta) * sin(phi);
+                double z = radius * cos(theta);
+                fprintf(fp, "%f, %f, %f\n", x, y, z);
+            }
+        }
+    }
+    fclose(fp);
+}
 
 
 void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *f_name, double *ranges)
@@ -696,4 +731,3 @@ void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *
     pclose(pipe);
 }
 
-#endif

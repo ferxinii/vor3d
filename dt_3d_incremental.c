@@ -1,21 +1,18 @@
-// TODO For each "cycle" of adding a point, store all ncells that have not been flipped.
-// For the list, try to re-introduce them as is. If there are still ncells, change their order and repeat, and so until delaunayness is restored.
-// It is important to restore delaunayness before proceeding.
 
+#include "dt_3d_incremental.h"
+#include "simplical_complex.h"
+#include "array_operations.h"
+#include "algebra.h"
+#include "geometry.h"
 #include <assert.h>
-#include "simplical_complex.c"
-
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
 
 // ---------------------------------------------------------------------------------------
 // ----------------------------------- STACK ---------------------------------------------
 // ---------------------------------------------------------------------------------------
-
-#define MAX_STACK_SIZE 10000
-
-typedef struct stack {
-    s_ncell *entry[MAX_STACK_SIZE];
-    int size;
-} s_stack;
 
 
 s_stack *stack_create(void)
@@ -799,7 +796,7 @@ void remove_point_setup(s_setup *setup, int point_id)
 int insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stack_blocked)
 {
     double *point = setup->points[point_id];
-    s_ncell *container_ncell = in_ncell_walk_2(setup, point);
+    s_ncell *container_ncell = in_ncell_walk(setup, point);
 
     double EPS = 1e-8;
     if (norm_difference(setup->points[container_ncell->vertex_id[0]], point, 3) < EPS || 
@@ -925,3 +922,4 @@ s_setup *construct_dt_3d(double **points, int N_points)
 
     return setup;
 }
+

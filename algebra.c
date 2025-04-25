@@ -1,6 +1,5 @@
-#ifndef ALGEBRA_C
-#define ALGEBRA_C
 
+#include "algebra.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -291,4 +290,3 @@ void normalize_inplace(double *v, int dim)
 //     }
 // }
 
-#endif

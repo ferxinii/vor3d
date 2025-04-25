@@ -1,59 +1,14 @@
 // [ ] TODO Improve malloc of vertices, or check if i have reached VCELL_MAX_VERTICES to increase size as needed
-#ifndef VD_3D_C
-#define VD_3D_C
-
-#include "simplical_complex.c"
+#include "vd_3d.h"
+#include "simplical_complex.h"
+#include "array_operations.h"
+#include "bpoly.h"
+#include "algebra.h"
+#include "geometry.h"
 #include <float.h>
-#define CONVHULL_3D_ENABLE
-#include "convhull_3d.h"
-#include "bpoly.c"
-
-#define VCELL_BLOCK_VERTICES 1000
-#define MAX_PLANES 1000
-
-
-typedef struct plane {
-    double A[3];
-    double b;
-} s_plane;
-
-typedef struct planes_poly {
-    s_plane planes[MAX_PLANES];
-    int id[MAX_PLANES];
-    int Nplanes;
-} s_planes_poly;
-
-
-typedef struct vdiagram {
-    int N_vcells;
-    struct vcell **vcells;  // Array of pointers to the cells, N_vcells x 1
-    const struct bound_poly *bpoly;
-    double **seeds;
-} s_vdiagram;
-
-typedef struct vcell {
-    int seed_id;
-    // struct vcell *next;     // linked list of vcells
-    int Nv;
-    int Nv_capacity;
-    double **vertices;  // Nv x 3
-    int **origin_vertices;  // Nv x 4, LAST column indicates the dual ncell if POSITIVE,
-                            // if -1: comes from circumcenter delaunay. The rest of 
-                            //        the columns indicate the delaunay indices of the 
-                            //        face whose normal was extended, 
-                            // if -2: ARTIFICIAL extension, first column is id of face of
-                            //        convhull of setup points
-                            // if -3: it is from the bounding polyhedron, and the first 
-                            //        index is the point id 
-                            // if -4: it comes from some coords, supposedly from the ray 
-                            //        intersection with bounding convex hull, and the first
-                            //        columns correspond to face's vertex_id
-    int Nf;
-    int *faces;
-    double **fnormals;
-    double volume;
-    s_planes_poly *planes_poly;
-} s_vcell;
+#include <stdlib.h>
+#include <stdio.h>
+#include <assert.h>
 
 
 void free_vcell(s_vcell *vcell)
@@ -530,6 +485,22 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
 }
 
 
+void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files)
+{
+    const s_bound_poly *bp = vdiagram->bpoly;
+    double ranges[6] = {bp->min[0], bp->max[0], bp->min[1], bp->max[1], bp->min[2], bp->max[2]};
+    plot_vdiagram(vdiagram, f_name, ranges, max_files, NULL, 0);
+}
+
+
+
+void clear_volumes_file(char *fname)
+{
+    FILE *f = fopen(fname, "w");
+    fclose(f);
+}
+
+
 void append_volumes_to_file(s_vdiagram *vdiagram, char *fname)
 {
     FILE *f = fopen(fname, "a");
@@ -541,11 +512,6 @@ void append_volumes_to_file(s_vdiagram *vdiagram, char *fname)
                                        vdiagram->seeds[vdiagram->vcells[ii]->seed_id][2], 
                                        vdiagram->vcells[ii]->volume);   
     }
-    
-
-
     fclose(f);
 }
 
-
-#endif
