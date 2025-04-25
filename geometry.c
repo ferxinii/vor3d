@@ -260,15 +260,46 @@ double distance_squared(const double *a, const double *b)
 }
 
 
-// double compute_signed_angle(const double *ref, const double *vec, const double *normal)
-// {  // With reference to the plane determined by normal
-//     double cross[3];
-//     cross_3d(ref, vec, cross);
-//
-//     double dot = dot_3d(ref, vec);
-//     
-//     return atan2(dot_3d(normal, cross), dot);
-// }
+
+int point_in_triangle_2d_NEW(double *v1, double *v2, double *v3, double *p)
+{
+    double EPS = 1e-9;
+    // 1) 2D orient tests
+    int o1 = orient2d(v1, v2, p);
+    int o2 = orient2d(v2, v3, p);
+    int o3 = orient2d(v3, v1, p);
+
+    int signs[3] = { o1, o2, o3 };
+    int ref = 0;
+    for (int i = 0; i < 3; i++) {
+        if (signs[i] != 0) {
+            ref = signs[i];
+            break;
+        }
+    }
+
+    if (ref != 0) {
+        // Strict or on‐edge test
+        for (int i = 0; i < 3; i++) {
+            if (signs[i] != 0 && signs[i] != ref)
+                return 0;
+        }
+        return 1;
+    }
+
+    // --- All three orients are zero: collinear / degenerate with p on the same line ---
+    // Fallback: check if p lies within the triangle's bounding box
+    double minx = fmin(fmin(v1[0], v2[0]), v3[0]);
+    double maxx = fmax(fmax(v1[0], v2[0]), v3[0]);
+    double miny = fmin(fmin(v1[1], v2[1]), v3[1]);
+    double maxy = fmax(fmax(v1[1], v2[1]), v3[1]);
+
+    if (p[0] + EPS < minx || p[0] - EPS > maxx ||
+        p[1] + EPS < miny || p[1] - EPS > maxy) {
+        return 0;
+    }
+    return 1;
+}
 
 
 int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
@@ -286,9 +317,51 @@ int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
             break;
         }
     }
+    assert(ref_sign != 0);
 
-    for (int ii=0; ii<4; ii++) {
+    for (int ii=0; ii<3; ii++) {
         if (signs[ii] != 0 && signs[ii] != ref_sign) return 0;
+    }
+    return 1;
+}
+
+
+int point_in_triangle_2d_candegenerate(double *v1, double *v2, double *v3, double *p)
+{
+    int o1 = orient2d(v1, v2, p);
+    int o2 = orient2d(v2, v3, p);
+    int o3 = orient2d(v3, v1, p);
+    
+    // Find reference sign (non-zero)
+    int signs[3] = {o1, o2, o3};
+    int ref_sign = 0;
+    for (int ii=0; ii<3; ii++) {
+        if (signs[ii] != 0) {
+            ref_sign = signs[ii];
+            break;
+        }
+    }
+
+    if (ref_sign != 0) {
+        // Strict or on‐edge test
+        for (int i = 0; i < 3; i++) {
+            if (signs[i] != 0 && signs[i] != ref_sign)
+                return 0;
+        }
+        return 1;
+    }
+
+    // --- All three orients are zero: collinear / degenerate with p on the same line ---
+    // Fallback: check if p lies within the triangle's bounding box
+    double minx = fmin(fmin(v1[0], v2[0]), v3[0]);
+    double maxx = fmax(fmax(v1[0], v2[0]), v3[0]);
+    double miny = fmin(fmin(v1[1], v2[1]), v3[1]);
+    double maxy = fmax(fmax(v1[1], v2[1]), v3[1]);
+    
+    double EPS = 1e-9;
+    if (p[0] + EPS < minx || p[0] - EPS > maxx ||
+        p[1] + EPS < miny || p[1] - EPS > maxy) {
+        return 0;
     }
     return 1;
 }

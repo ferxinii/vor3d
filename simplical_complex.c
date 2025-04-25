@@ -355,7 +355,7 @@ void mark_ncells_incident_face(const s_setup *setup, s_ncell *ncell, const int *
 
 
 int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int id_opposite)
-{   
+{   // I.E., only return true if the point is INSIDE circumscr., not on it.
     // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
     static int prev_dim = 0;
     static double **coords1 = NULL, **coords2 = NULL;
@@ -382,9 +382,40 @@ int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int 
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
     int in1 = in_sphere(coords1, setup->points[opp_face_vertex_id], setup->dim);
-    // in_sphere(coords2, setup->points[ncell->vertex_id[id_opposite]], setup->dim) == -1)
-    // if (in1 == 0) puts("DEBUG: ARE_LOCALLY_DELAUNAY_STRICT IS CIRCUMSCRIBED");
     if (in1 == -1) return 1;
+    else return 0;
+}
+
+
+int are_locally_delaunay_nonstrict(const s_setup *setup, const s_ncell *ncell, int id_opposite)
+{   // Points on circumscribed sphere are VALID
+    // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
+    static int prev_dim = 0;
+    static double **coords1 = NULL, **coords2 = NULL;
+    if (setup->dim != prev_dim) {
+        if (coords1) free_matrix(coords1, prev_dim + 1);
+        if (coords2) free_matrix(coords2, prev_dim + 1);
+        prev_dim = setup->dim;
+        coords1 = malloc_matrix(setup->dim + 1, setup->dim);
+        coords2 = malloc_matrix(setup->dim + 1, setup->dim);
+    }
+
+    extract_vertices_ncell(setup, ncell, coords1);
+    extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
+
+    assert(!(orientation(coords1, coords1[3], 3) == 0 && 
+            orientation(coords2, coords2[3], 3) == 0));
+
+    if (orientation(coords1, coords1[3], 3) == 0 || 
+        orientation(coords2, coords2[3], 3) == 0) return 0;
+
+    // Extract vertex_id of opposite's cell face
+    int opp_face_localid;
+    face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
+    int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
+    
+    int in1 = in_sphere(coords1, setup->points[opp_face_vertex_id], setup->dim);
+    if (in1 != 1) return 1;
     else return 0;
 }
 
@@ -568,66 +599,7 @@ s_ncell *bruteforce_find_ncell_containing(s_setup *setup, double *p)
 }
 
 
-s_ncell *in_ncell_walk_NEW(s_setup *setup, double *p)
-{
-    return bruteforce_find_ncell_containing(setup, p);
-
-    s_ncell *current = setup->head;
-    assert(setup->N_ncells >= 1 && "N_ncells < 1");
-    int randi = (rand() % setup->N_ncells);
-    for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
-        current = current->next;
-    }
-
-    // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
-    static int prev_dim = 0;
-    static double **facet_vertices = NULL;
-    if (setup->dim != prev_dim) {
-        if (facet_vertices) free_matrix(facet_vertices, prev_dim);
-        prev_dim = setup->dim;
-        facet_vertices = malloc_matrix(setup->dim, setup->dim);
-    }
-
-    int steps = 0;
-    int max_steps = 1000;
-    while (steps++ < max_steps) {
-        int moved = 0;
-        for (int ii=0; ii<setup->dim+1; ii++) {
-            double *opposite_vertex = setup->points[current->vertex_id[ii]];
-            
-            s_ncell *next = current->opposite[ii];
-            if (next) {
-                extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
-
-                int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
-                int o2 = orientation(facet_vertices, p, setup->dim);
-
-                if (o1 == 0 && o2 == 0) {  // p in plane of flat tetrahedron
-                    puts("P in plane of flat tetrahedron.");
-                    exit(1);
-                } else if (o1 == 0) { // Tetrahedron is flat
-                    printf("\n\nDEBUG WALK: tetrahedron is flat. current = %p, next = %p\n\n", (void*)current, (void*)next);
-                    exit(1);
-                } else if (o2 == 0) {  // p in face's plane
-                    printf("DEBUG WALK: p in plane of face. o1 = %d, o2 = %d. INTETRA = %d\n", o1, o2, point_in_tetra(setup, p, current));
-                    if (point_in_tetra(setup, p, current)) return current;
-                    else continue;
-                } else if (o1 != o2) {
-                    current = next;
-                    moved = 1;
-                    break;
-                }
-            }
-        }
-        if (!moved) break;
-    }
-    assert(steps < max_steps);
-    assert(point_in_tetra(setup, p, current)); // DEBUG TODO FIXME, REMOVE, TESTING
-    return current;
-}
-
-
-s_ncell *in_ncell_walk_2(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)
+s_ncell *in_ncell_walk_2(s_setup *setup, double *p)
 {
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
@@ -735,6 +707,28 @@ int is_delaunay_3d(const s_setup *setup)
     s_ncell *current = setup->head;
     while (current) {
         extract_vertices_ncell(setup, current, vertices_ncell);
+        if (orientation(vertices_ncell, vertices_ncell[3], 3) == 0) {
+            puts("Flat tetra!!");
+            return 0;
+        }
+        for (int ii=0; ii<4; ii++) {
+            if (current->opposite[ii] &&
+                !are_locally_delaunay_nonstrict(setup, current, ii)) return 0;
+        }
+        current = current->next;
+    }
+    return 1;
+}
+
+
+int is_delaunay_3d_old(const s_setup *setup)
+{
+    static double **vertices_ncell = NULL;
+    if (!vertices_ncell) vertices_ncell = malloc_matrix(4, 3);
+
+    s_ncell *current = setup->head;
+    while (current) {
+        extract_vertices_ncell(setup, current, vertices_ncell);
         s_ncell *query = current->next;
         while (query) {
             for (int ii=0; ii<4; ii++) {
@@ -758,6 +752,7 @@ int is_delaunay_3d(const s_setup *setup)
 }
 
 
+
 void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)
 {   // THIS IS JUST FOR DEBUGGING!!
     
@@ -766,19 +761,6 @@ void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)
                                   setup->points[ncell->vertex_id[1]],
                                   setup->points[ncell->vertex_id[2]],
                                   setup->points[ncell->vertex_id[3]]));
-    // static double **vertices = NULL;
-    // if (!vertices) vertices = malloc_matrix(4, 3);
-    //
-    // extract_vertices_ncell(setup, ncell, vertices);
-    //
-    // // ncell->volume = compute_volume_convhull_from_points(vertices, 4);
-    // double aux_vol = compute_volume_convhull_from_points(vertices, 4);
-    // printf("DEBUG VOLUME NCELL: %f, %f\n", ncell->volume, aux_vol);
-    // if (ncell->volume < 0) {
-    //     printf("DEBUG ADD_NCELL_VOLUME: vol = %f, vertices = (%d, %d, %d, %d)\n", 
-    //             ncell->volume, ncell->vertex_id[0], ncell->vertex_id[1], 
-    //             ncell->vertex_id[2], ncell->vertex_id[3]);
-    // }
 }
 
 

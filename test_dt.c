@@ -149,6 +149,7 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
 
 
     printf("DT, SUM VOLUMES = %f, CONVHULL VOLUME = %f\n", sum_vol, compute_volume_complex(dt));
+    printf("IS DELAUNAY: %d\n", is_delaunay_3d(dt));
     // double ranges_plot[6];
     // ranges_plot[0] = bp->min[0];     ranges_plot[1] = bp->max[0];
     // ranges_plot[2] = bp->min[1];     ranges_plot[3] = bp->max[1];
@@ -156,6 +157,7 @@ s_vdiagram *construct_cells_nonuniform(s_bound_poly *bp)
     // plot_dt_3d(dt, "test_dt.png", ranges_plot);
     
 
+    N_new = dt->N_points;
     int count[N_new];
     for (int ii=0; ii<N_new; ii++) count[ii] = 0;
     current = dt->head;
@@ -190,9 +192,9 @@ int main(void) {
     double **points_bp_L;
     int N_points_bp_L;
     s_bound_poly *bp_L;
-    // write_triangle_points(FILE_COORDS_SPHERE);
+    write_triangle_points(FILE_COORDS_SPHERE);
     // write_cube_points(FILE_COORDS_SPHERE);
-    write_sphere_txt();
+    // write_sphere_txt();
     new_bpoly_from_txt(FILE_COORDS_SPHERE, &points_bp_L, &N_points_bp_L, &bp_L, 0); 
 
     double ranges_plot[6];

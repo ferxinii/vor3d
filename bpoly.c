@@ -329,7 +329,85 @@ int is_plane_saved(double **planes, int N, double *n, double d)
 }
 
 
-int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3)
+void closest_point_on_triangle(const double *A, const double *B, const double *C, const double *p,
+                               double *c_out) 
+{
+    double AB[3] = {B[0]-A[0], B[1]-A[1], B[2]-A[2]},
+           AC[3] = {C[0]-A[0], C[1]-A[1], C[2]-A[2]},
+           AP[3] = {p [0]-A[0], p [1]-A[1], p [2]-A[2]};
+
+    double d1 = dot_3d(AB, AP),
+           d2 = dot_3d(AC, AP);
+    if (d1 <= 0 && d2 <= 0) {          // Vertex region A
+        memcpy(c_out, A, 3*sizeof(double));
+        return;
+    }
+
+    // Check vertex B region
+    double BP[3] = { p[0]-B[0], p[1]-B[1], p[2]-B[2] };
+    double d3 = dot_3d(AB, BP),
+           d4 = dot_3d(AC, BP);
+    if (d3 >= 0 && d4 <= d3) {         // Vertex region B
+        memcpy(c_out, B, 3*sizeof(double));
+        return;
+    }
+
+    // Check edge AB region
+    double vc = d1*d4 - d3*d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+        double v = d1 / (d1 - d3);
+        c_out[0] = A[0] + v * AB[0];
+        c_out[1] = A[1] + v * AB[1];
+        c_out[2] = A[2] + v * AB[2];
+        return;
+    }
+
+    // Check vertex C region
+    double CP[3] = { p[0]-C[0], p[1]-C[1], p[2]-C[2] };
+    double d5 = dot_3d(AB, CP),
+           d6 = dot_3d(AC, CP);
+    if (d6 >= 0 && d5 <= d6) {         // Vertex region C
+        memcpy(c_out, C, 3*sizeof(double));
+        return;
+    }
+
+    // Check edge AC region
+    double vb = d5*d2 - d1*d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+        double w = d2 / (d2 - d6);
+        c_out[0] = A[0] + w * AC[0];
+        c_out[1] = A[1] + w * AC[1];
+        c_out[2] = A[2] + w * AC[2];
+        return;
+    }
+
+    // Check edge BC region
+    double va = d3*d6 - d5*d4;
+    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+        // projection onto BC
+        double BC[3] = {C[0]-B[0], C[1]-B[1], C[2]-B[2]};
+        double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        c_out[0] = B[0] + w * BC[0];
+        c_out[1] = B[1] + w * BC[1];
+        c_out[2] = B[2] + w * BC[2];
+        return;
+    }
+
+    // Inside face region
+    // Barycentric coordinates (u,v,w)
+    double denom = va + vb + vc;
+    assert(fabs(denom) > 1e-9);
+    double v = vb / denom;
+    double w = vc / denom;
+    c_out[0] = A[0] + AB[0]*v + AC[0]*w;
+    c_out[1] = A[1] + AB[1]*v + AC[1]*w;
+    c_out[2] = A[2] + AB[2]*v + AC[2]*w;
+}
+
+
+
+int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3, 
+                  double **all_seeds, int Ns, int seed_id)
 {
     double dist = dot_3d(n, s) - d;
     // Projection onto the face's plane:
@@ -337,18 +415,61 @@ int should_mirror(double *n, double *s, double d, double *f1, double *f2, double
                     s[1] - dist*n[1],
                     s[2] - dist*n[2] };
 
-    int drop = coord_with_largest_component_3d(n);
-    int i1, i2;
-    if (drop == 0)      { i1 = 1; i2 = 2; } 
-    else if (drop == 1) { i1 = 2; i2 = 0; } 
-    else                { i1 = 0; i2 = 1; }
-
-    double v1[2] = {f1[i1], f1[i2]},
-           v2[2] = {f2[i1], f2[i2]},
-           v3[2] = {f3[i1], f3[i2]},
-           paux[2] = {p[i1], p[i2]};
+    // 2) find closest point c on triangle to p
+    double c[3];
+    closest_point_on_triangle(f1, f2, f3, p, c);
     
-    return point_in_triangle_2d(v1, v2, v3, p);
+    // 3) check nearest‐neighbor at c
+    double d_s = norm_difference(c, s, 3);
+    for (int j = 0; j < Ns; j++) {
+        if (j == seed_id) continue;
+        if (norm_difference(all_seeds[j], c, 3) < d_s)
+            return 0;   // someone else is nearer
+    }
+    return 1;
+}
+
+
+int extend_sites_mirroring_NEW(s_bound_poly *bp, double ***s, int Ns)
+{
+    // worst‐case 
+    double **out = malloc_matrix(Ns * (1 + bp->Nf), 3);
+
+    for (int ii=0; ii<Ns; ii++) {
+        out[ii][0] = (*s)[ii][0];
+        out[ii][1] = (*s)[ii][1];
+        out[ii][2] = (*s)[ii][2];
+    }
+    int kk = Ns;
+
+    for (int ff=0; ff<bp->Nf; ff++) {
+        int   i0 = bp->faces[ff*3 + 0],
+              i1 = bp->faces[ff*3 + 1],
+              i2 = bp->faces[ff*3 + 2];
+        double *f1 = bp->points[i0],
+               *f2 = bp->points[i1],
+               *f3 = bp->points[i2];
+
+        double *n = bp->fnormals[ff];
+        double d = dot_3d(n, f1);
+
+        for (int jj=0; jj<Ns; jj++) {
+            double *sj = (*s)[jj];
+            if (!should_mirror(n, sj, d, f1, f2, f3, *s, Ns, jj))
+                continue;
+
+            double dist   = dot_3d(n, sj) - d;
+            double factor = -2.0 * dist;
+            out[kk][0] = sj[0] + factor * n[0];
+            out[kk][1] = sj[1] + factor * n[1];
+            out[kk][2] = sj[2] + factor * n[2];
+            kk++;
+        }
+    }
+
+    free_matrix(*s, Ns);
+    *s = realloc_matrix(out, Ns * (1 + bp->Nf), kk, 3);
+    return kk;
 }
 
 
@@ -360,7 +481,7 @@ int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
         out[ii][1] = (*s)[ii][1];
         out[ii][2] = (*s)[ii][2];
     }
-    
+
     double **stored_planes = malloc_matrix(bp->Nf, 4);
     int kk = Ns, Np_unique = 0;
     for (int ii=0; ii<bp->Nf; ii++) {

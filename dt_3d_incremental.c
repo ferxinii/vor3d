@@ -691,11 +691,11 @@ int determine_case(double **vertices_face, double *p, double *d)
 
 s_setup *initialize_setup(double **points, int N_points, int dim)
 {
-    // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL
+    // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL, PUT AT THE BEGINNING!
     double **setup_points = malloc_matrix(N_points + dim + 1, dim);
     for (int ii=0; ii<N_points; ii++) {
         for (int jj=0; jj<dim; jj++) {
-            setup_points[ii][jj] = points[ii][jj];
+            setup_points[ii+dim+1][jj] = points[ii][jj];
         }
     }
     
@@ -716,7 +716,7 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
     for (int ii=0; ii<dim+1; ii++) {
         for (int jj=0; jj<dim; jj++) {
             double aux = 2.0 * rand() / RAND_MAX - 1;  // ADD SOME NOISE TO AVOID COLINEARITIES
-            setup_points[N_points + ii][jj] = CM[jj] + V[ii][jj] + 0.001 * aux * s ; 
+            setup_points[ii][jj] = CM[jj] + V[ii][jj] + 0.001 * aux * s ; 
         }
     }
     free_matrix(V, dim+1);
@@ -728,7 +728,7 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
 
     s_ncell *big_ncell = malloc_ncell(setup);
     for (int ii=0; ii<setup->dim+1; ii++) {
-        big_ncell->vertex_id[ii] = N_points + ii;
+        big_ncell->vertex_id[ii] = ii;
         big_ncell->opposite[ii] = NULL;
     }
     setup->head = big_ncell;
@@ -782,41 +782,38 @@ int flip_tetrahedra(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_nc
 }
 
 
-// void retry_blocked(s_setup *setup, s_stack *stack, s_stack *stack_blocked, int point_id)
-// {
-//     while (stack_blocked->size != 0) {
-//         s_ncell *try = stack_peek(stack_blocked);
-//         stack_push(stack, try);
-//         if (try && try->opposite) {
-//             int opp_cell_id = id_where_equal_int(try->vertex_id, 4, point_id);
-//             if (try->opposite[opp_cell_id] && 
-//                 flip_tetrahedra(setup, stack, NULL, try, opp_cell_id)) {
-//                 stack_pop(stack_blocked);
-//                 while (stack->size > 0) {
-//                     printf("RETRY BLOCKED: stack->N: %d\n", stack->size);
-//                     if (are_locally_delaunay_strict(setup, try, opp_cell_id) != 1) {
-//                         flip_tetrahedra(setup, stack, stack_blocked, try, opp_cell_id);
-//                     }
-//                 }
-//             }
-//         } else stack_pop(stack_blocked);
-//
-//         stack_shuffle(stack_blocked);
-//         printf("RETRY BLOCKED: stack_blocked->N: %d\n", stack_blocked->size);
-//         stack_print(stack_blocked);
-//     }
-// }
+void remove_point_setup(s_setup *setup, int point_id)
+{
+    if (point_id < setup->N_points-1) {
+        for (int ii=point_id; ii<setup->N_points-1; ii++) {
+            setup->points[ii][0] = setup->points[ii+1][0];
+            setup->points[ii][1] = setup->points[ii+1][1];
+            setup->points[ii][2] = setup->points[ii+1][2];
+        }
+    }
+    setup->points = realloc_matrix(setup->points, setup->N_points, setup->N_points-1, 3);
+    setup->N_points--;
+}
 
 
-void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stack_blocked)
+int insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stack_blocked)
 {
     double *point = setup->points[point_id];
     s_ncell *container_ncell = in_ncell_walk_2(setup, point);
 
+    double EPS = 1e-8;
+    if (norm_difference(setup->points[container_ncell->vertex_id[0]], point, 3) < EPS || 
+        norm_difference(setup->points[container_ncell->vertex_id[1]], point, 3) < EPS ||
+        norm_difference(setup->points[container_ncell->vertex_id[2]], point, 3) < EPS ||
+        norm_difference(setup->points[container_ncell->vertex_id[3]], point, 3) < EPS) {
+        puts("insert_one_point: POINT EXISTS!");
+        remove_point_setup(setup, point_id);
+        return 0;
+    }
+
     // Insert p in container_ncell with a flip14
     flip14(setup, container_ncell, point_id, stack);
 
-    // check_blocked_previous(setup, stack, stack_blocked);
     stack_blocked->size = 0;
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
@@ -830,10 +827,7 @@ void insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *sta
             }
         }
     }
-    // printf("INSERT_ONE_POINT: %d\n", stack_blocked->size);
-    // printf("IS DELAUNAY: %d\n", is_delaunay_3d(setup));
-    // retry_blocked(setup, stack, stack_blocked, point_id);
-    
+    return 1;
 }
 
 
@@ -843,7 +837,7 @@ void remove_big_tetra(s_setup *setup)
     while (current) {
         s_ncell *next = current->next;
         for (int ii=0; ii<4; ii++) {
-            if (current->vertex_id[ii] >= setup->N_points - 4) {  // This checks if a vertex is part of BIG TETRA
+            if (current->vertex_id[ii] < 4) { // This checks if a vertex is part of BIG TETRA
                 if (current->next) (current->next)->prev = current->prev;
                 if (current->prev) (current->prev)->next = next;
                 else setup->head = current->next;
@@ -867,8 +861,18 @@ void remove_big_tetra(s_setup *setup)
         }
         current = next;
     }
+    for (int ii=0; ii<setup->N_points-4; ii++) {
+        memcpy(setup->points[ii], setup->points[ii+4], 3 * sizeof * setup->points[ii]);
+    }
     setup->points = realloc_matrix(setup->points, setup->N_points, setup->N_points-4, 3);
     setup->N_points -= 4;
+
+    // Reindex all remaining tetrahedra so their vertex_id points at correct coords
+    for (s_ncell *c=setup->head; c; c=c->next) {
+        for (int kk=0; kk< 4; kk++) {
+            c->vertex_id[kk] -= 4;
+        }
+    }
 }
 
 
@@ -879,7 +883,8 @@ int count_valid_ncells_reduced_triangulation(const s_setup *setup)
     while (current) {
         s_ncell *next = current->next;
         for (int ii=0; ii<4; ii++) {
-            if (current->vertex_id[ii] >= setup->N_points - 4) {  // This checks if a vertex is part of BIG TETRA
+            // This checks if a vertex is part of BIG TETRA:
+            if (current->vertex_id[ii] < 4) {  
                 kk++;
                 break;
             }
@@ -896,10 +901,15 @@ s_setup *construct_dt_3d(double **points, int N_points)
     s_stack *stack_blocked = stack_create();
     s_setup *setup = initialize_setup(points, N_points, 3);
     
-    // assert(is_delaunay_3d(setup) == 1 && "Setup is not delaunay");  // DEBUG
-    for (int ii=0; ii<N_points; ii++) {
-        insert_one_point(setup, ii, stack, stack_blocked);
-        // SHOULD ALWAYS BE DELAUNAY!
+    int ii = 4;  // First 4 are big tetra, which already is inserted!
+    while (ii < setup->N_points) {
+        // printf("Inserting ii=%d\n", ii);
+        if (insert_one_point(setup, ii, stack, stack_blocked)) {
+            // SHOULD ALWAYS BE DELAUNAY!
+            ii++;
+        }
+        else printf("Not inserted! ii=%d\n", ii);
+        // if (!is_delaunay_3d(setup)) printf("Not delaunay!! ii=%d\n", ii);
     }
     
     stack_free(stack);  
@@ -909,6 +919,7 @@ s_setup *construct_dt_3d(double **points, int N_points)
     s_ncell *current = setup->head;
     while (current) {
         add_ncell_volume_3d(setup, current);
+        assert(current->volume != 0);
         current = current->next;
     }
 
