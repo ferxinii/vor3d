@@ -10,7 +10,7 @@
 
 double r_fun(double *x)
 {   
-    double r0 = 1.3;
+    double r0 = 1;
     double z0 = -2;
     double K = 0.04;
 
@@ -18,7 +18,7 @@ double r_fun(double *x)
 }
 
 
-void check_volume(s_bound_poly *bp, s_vdiagram *vd)
+void check_volume(s_vdiagram *vd)
 {
     double sum_vol = 0;
     for (int ii=0; ii<vd->N_vcells; ii++) {
@@ -27,7 +27,7 @@ void check_volume(s_bound_poly *bp, s_vdiagram *vd)
             printf("VOL %d : %f\n", ii, vd->vcells[ii]->volume);
         }
     }
-    printf("V lung = %f, Diff = %.16f, rel_diff = %.16f\n", bp->volume, bp->volume - sum_vol, (bp->volume - sum_vol) / bp->volume);
+    printf("V lung = %f, Diff = %.16f, rel_diff = %.16f\n", vd->bpoly->volume, vd->bpoly->volume - sum_vol, (vd->bpoly->volume - sum_vol) / vd->bpoly->volume);
 }
 
 
@@ -36,12 +36,30 @@ int main(void)
     srand(time(NULL));
     system("rm -f plot_vd/*");
 
-    generate_file_tetrahedron_bp(FILE_BP, 2);
-    s_vdiagram *vd = construct_vd(&r_fun, FILE_BP, 5);
-    if (!vd) { puts("Could not construct vd in max_tries."); exit(1); }
-    plot_vdiagram_auto(vd, "plot_vd/tetra", 0);
+    // generate_file_tetrahedron_bp(FILE_BP, 3);
+    // s_vdiagram *vd = construct_vd(&r_fun, FILE_BP, 5);
+    // if (!vd) { puts("Could not construct vd in max_tries."); exit(1); }
+    // plot_vdiagram_auto(vd, "plot_vd/tetra", 0);
+    // free_vdiagram(vd);
+    //
+    // generate_file_cube_bp(FILE_BP, 3);
+    // vd = construct_vd(&r_fun, FILE_BP, 5);
+    // if (!vd) { puts("Could not construct vd in max_tries."); exit(1); }
+    // plot_vdiagram_auto(vd, "plot_vd/tetra", 0);
+    // free_vdiagram(vd);
+    //
+    // generate_file_sphere_bp(FILE_BP, 2, 15, 20);
+    // s_vdiagram *vd_sph = construct_vd(&r_fun, FILE_BP, 5);
+    // if (!vd_sph) { puts("Could not construct vd in max_tries."); exit(1); }
+    // check_volume(vd_sph);
+    // // plot_vdiagram_auto(vd_sph, "plot_vd/tetra", 0);
+    // free_vdiagram(vd_sph);
 
-    free_vdiagram(vd);
+    s_vdiagram *vd_L = construct_vd(&r_fun, "lobes/L.txt", 5);
+    if (!vd_L) { puts("Could not construct vd in max_tries."); exit(1); }
+    check_volume(vd_L);
+    // plot_vdiagram_auto(vd_sph, "plot_vd/tetra", 0);
+    free_vdiagram(vd_L);
     exit(1);
 
 

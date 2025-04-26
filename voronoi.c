@@ -3,6 +3,8 @@
 #include "dt_3d_incremental.h"
 #include "vd_3d.h"
 #include "bpoly.h"
+#include "geometry.h"
+#include <stdlib.h>
 #include <assert.h>
 
 
@@ -22,11 +24,16 @@ int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
 {
     double sum_vol = 0;
     for (int ii=0; ii<vd->N_vcells; ii++) {
-        assert(vd->vcells[ii]->volume > 0);
+        if (vd->vcells[ii]->volume <= 0) {
+            printf("Volume is not positive? ii = %d, Vol = %.16f\n", ii, vd->vcells[ii]->volume);
+            printf("orient(vertices): %d\n", orientation(&vd->vcells[ii]->vertices[0], 
+                                                         vd->vcells[ii]->vertices[3], 3));
+            return 0;
+        }
         sum_vol += vd->vcells[ii]->volume;
     }
 
-    double relative_diff =  bp->volume - sum_vol / bp->volume;
+    double relative_diff =  (bp->volume - sum_vol) / bp->volume;
     if (fabs(relative_diff) < 1e-6) return 1;
     else return 0;
 }

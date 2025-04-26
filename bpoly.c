@@ -557,14 +557,10 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
     int Nactive = 0;
 
     s_point x; // RANDOM!!
-    puts("DEBUG POISSON: Finding initial point...");
     random_point_uniform(bpoly->min, bpoly->max, &x);
     while (!is_inside_convhull(x.coords, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf)) {
-        printf("DEBUG POISSON: (%f, %f, %f) : %d\n", x.coords[0], x.coords[1], x.coords[2], 
-                is_inside_convhull(x.coords, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf));
         random_point_uniform(bpoly->min, bpoly->max, &x);
     }
-    puts("DEBUG POISSON: Found!");
 
     samples[Nsamples++] = x;
     active_list[Nactive++] = x;
@@ -659,6 +655,7 @@ void generate_file_sphere_bp(const char *filename, double radius, int nTheta, in
     // ntheta: 18; // Number of steps in the polar angle
     // nphi: 36;   // Number of steps in the azimuthal angle
     FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%d\n\n", 2 + nPhi * (nTheta-1));
 
     for (int i = 0; i <= nTheta; i++) {
         double theta = M_PI * i / nTheta;

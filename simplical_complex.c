@@ -545,7 +545,7 @@ int point_in_tetra(s_setup *setup, double *x, s_ncell *nc)
         return 0;
         
     assert(abs(s0) + abs(s1) + abs(s2) + abs(s3) >= 3 && "point in edge!");
-    if (s0 == 0 || s1 == 0 || s2 == 0 || s3 == 0) printf("\nIN FACE!!\n");
+    // if (s0 == 0 || s1 == 0 || s2 == 0 || s3 == 0) printf("\nIN FACE!!\n");
 
     return 1;
 }

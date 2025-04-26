@@ -209,29 +209,32 @@ void compute_vcell_volume(s_vcell *vcell)
 }
 
 
-void add_convex_hull_vcell(s_vcell *vcell)
+int add_convex_hull_vcell(s_vcell *vcell)
 {
     double CM[3];
     find_center_mass(vcell->vertices, vcell->Nv, 3, CM);
     int *faces, N_faces;
     ch_vertex *vertices_aux = convert_points_to_chvertex(vcell->vertices, vcell->Nv);
     convhull_3d_build(vertices_aux, vcell->Nv, &faces, &N_faces);
+    if(!faces) return 0;
     vcell->faces = faces;
     vcell->Nf = N_faces;
     double **fnormals = extract_normals_from_ch(vertices_aux, faces, N_faces, CM);
     vcell->fnormals = fnormals;
     free(vertices_aux);
+    return 1;
 }
 
 
-void bounded_extraction(const s_setup *setup, s_vcell *vcell)
+int bounded_extraction(const s_setup *setup, s_vcell *vcell)
 {
     s_ncell *current = setup->head;
     while (current) {
         if (current->mark == 1) add_vvertex_from_ncell(setup, current, vcell);
         current = current->next;
     }
-    add_convex_hull_vcell(vcell);
+    int out = add_convex_hull_vcell(vcell);
+    return out;
 }
 
 
@@ -258,7 +261,12 @@ s_vcell *extract_voronoi_cell(const s_setup *setup, int vertex_id)
 
 
     s_vcell *vcell = malloc_vcell(vertex_id);
-    bounded_extraction(setup, vcell);
+    int out = bounded_extraction(setup, vcell);
+    if (out == 0) {
+        puts("ERROR EXTRACTING VCELL!");
+        free_vcell(vcell);
+        return NULL;
+    }
 
     // Compute volume
     compute_vcell_volume(vcell);
@@ -276,6 +284,11 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, 
     
     for (int ii=0; ii<Nreal; ii++) {
         vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii);
+        if (vdiagram->vcells[ii] == NULL) {
+            puts("Could not construct vdiagram.");
+            free_vdiagram(vdiagram);
+            return NULL;
+        }
     }
 
     return vdiagram;

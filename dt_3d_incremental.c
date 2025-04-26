@@ -803,7 +803,7 @@ int insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stac
         norm_difference(setup->points[container_ncell->vertex_id[1]], point, 3) < EPS ||
         norm_difference(setup->points[container_ncell->vertex_id[2]], point, 3) < EPS ||
         norm_difference(setup->points[container_ncell->vertex_id[3]], point, 3) < EPS) {
-        puts("insert_one_point: POINT EXISTS!");
+        // puts("insert_one_point: POINT EXISTS!");
         remove_point_setup(setup, point_id);
         return 0;
     }
@@ -905,7 +905,7 @@ s_setup *construct_dt_3d(double **points, int N_points)
             // SHOULD ALWAYS BE DELAUNAY!
             ii++;
         }
-        else printf("Not inserted! ii=%d\n", ii);
+        else continue; //printf("Not inserted! ii=%d\n", ii);
         // if (!is_delaunay_3d(setup)) printf("Not delaunay!! ii=%d\n", ii);
     }
     
