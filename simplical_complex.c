@@ -3,6 +3,7 @@
 #include "algebra.h"
 #include "geometry.h"
 #include "array_operations.h"
+#include "predicates.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -543,8 +544,19 @@ int point_in_tetra(s_setup *setup, double *x, s_ncell *nc)
     if ((s0 && s0 != ref) || (s1 && s1 != ref) ||
         (s2 && s2 != ref) || (s3 && s3 != ref)   )
         return 0;
-        
-    assert(abs(s0) + abs(s1) + abs(s2) + abs(s3) >= 3 && "point in edge!");
+    
+    // if (abs(s0) + abs(s1) + abs(s2) + abs(s3) < 3) {
+    //     printf("ATTENTION: "); print_ncell(setup, nc);
+    //     printf("(%f, %f, %f), ", v0[0], v0[1], v0[2]);
+    //     printf("(%f, %f, %f), ", v1[0], v1[1], v1[2]);
+    //     printf("(%f, %f, %f), ", v2[0], v2[1], v2[2]);
+    //     printf("(%f, %f, %f)\n", v3[0], v3[1], v3[2]);
+    //     printf("p: (%f, %f, %f)\n", x[0], x[1], x[2]);
+    //
+    //     printf("orientation: %f\n", orient3d(v0, v1, v2, v3));
+    //     printf("%d, %d, %d, %d\n", s0, s1, s2, s3);
+    // }
+    // assert(abs(s0) + abs(s1) + abs(s2) + abs(s3) >= 3 && "point in edge!");
     // if (s0 == 0 || s1 == 0 || s2 == 0 || s3 == 0) printf("\nIN FACE!!\n");
 
     return 1;

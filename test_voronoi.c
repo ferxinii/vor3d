@@ -37,27 +37,37 @@ int main(void)
     system("rm -f plot_vd/*");
 
     // generate_file_tetrahedron_bp(FILE_BP, 3);
-    // s_vdiagram *vd = construct_vd(&r_fun, FILE_BP, 5);
-    // if (!vd) { puts("Could not construct vd in max_tries."); exit(1); }
-    // plot_vdiagram_auto(vd, "plot_vd/tetra", 0);
-    // free_vdiagram(vd);
+    // s_vdiagram *vd_tet = construct_vd(&r_fun, FILE_BP, 5);
+    // if (!vd_tet) { puts("Could not construct vd in max_tries."); exit(1); }
+    // // plot_vdiagram_auto(vd_tet, "plot_vd/tetra", 0);
+    // free_vdiagram(vd_tet);
     //
     // generate_file_cube_bp(FILE_BP, 3);
-    // vd = construct_vd(&r_fun, FILE_BP, 5);
-    // if (!vd) { puts("Could not construct vd in max_tries."); exit(1); }
-    // plot_vdiagram_auto(vd, "plot_vd/tetra", 0);
-    // free_vdiagram(vd);
+    // s_vdiagram *vd_cube = construct_vd(&r_fun, FILE_BP, 5);
+    // if (!vd_cube) { puts("Could not construct vd in max_tries."); exit(1); }
+    // check_volume(vd_cube);
+    // FILE *f_vcells = fopen("test_vcells.txt", "w");
+    // write_vd_file(vd_cube, f_vcells);
+    // fclose(f_vcells);
+    // // plot_vdiagram_auto(vd_cube, "plot_vd/tetra", 0);
+    // free_vdiagram(vd_cube);
     //
     // generate_file_sphere_bp(FILE_BP, 2, 15, 20);
     // s_vdiagram *vd_sph = construct_vd(&r_fun, FILE_BP, 5);
     // if (!vd_sph) { puts("Could not construct vd in max_tries."); exit(1); }
     // check_volume(vd_sph);
+    // FILE *f_vcells = fopen("test_vcells.txt", "w");
+    // write_vd_file(vd_sph, f_vcells);
+    // fclose(f_vcells);
     // // plot_vdiagram_auto(vd_sph, "plot_vd/tetra", 0);
     // free_vdiagram(vd_sph);
 
     s_vdiagram *vd_L = construct_vd(&r_fun, "lobes/L.txt", 5);
     if (!vd_L) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(vd_L);
+    FILE *f_vcells = fopen("test_vcells.txt", "w");
+    write_vd_file(vd_L, f_vcells);
+    fclose(f_vcells);
     // plot_vdiagram_auto(vd_sph, "plot_vd/tetra", 0);
     free_vdiagram(vd_L);
     exit(1);

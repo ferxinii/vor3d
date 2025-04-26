@@ -15,6 +15,8 @@ void cross_3d(const double *u, const double *v, double *out);
 double dot_3d(const double *u, const double *v);
 void subtract_3d(const double *u, const double *v, double *result);
 double distance_squared(const double *a, const double *b);
+void closest_point_on_triangle(const double *A, const double *B, const double *C, const double *p, double *c_out);
+void closest_point_on_segment(double *p, double *A, double *B, double *OUT);
 int point_in_triangle_2d_NEW(double *v1, double *v2, double *v3, double *p);
 int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p);
 int point_in_triangle_2d_candegenerate(double *v1, double *v2, double *v3, double *p);

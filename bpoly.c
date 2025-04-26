@@ -309,91 +309,14 @@ int is_plane_saved(double **planes, int N, double *n, double d)
 }
 
 
-void closest_point_on_triangle(const double *A, const double *B, const double *C, const double *p,
-                               double *c_out) 
-{
-    double AB[3] = {B[0]-A[0], B[1]-A[1], B[2]-A[2]},
-           AC[3] = {C[0]-A[0], C[1]-A[1], C[2]-A[2]},
-           AP[3] = {p [0]-A[0], p [1]-A[1], p [2]-A[2]};
-
-    double d1 = dot_3d(AB, AP),
-           d2 = dot_3d(AC, AP);
-    if (d1 <= 0 && d2 <= 0) {          // Vertex region A
-        memcpy(c_out, A, 3*sizeof(double));
-        return;
-    }
-
-    // Check vertex B region
-    double BP[3] = { p[0]-B[0], p[1]-B[1], p[2]-B[2] };
-    double d3 = dot_3d(AB, BP),
-           d4 = dot_3d(AC, BP);
-    if (d3 >= 0 && d4 <= d3) {         // Vertex region B
-        memcpy(c_out, B, 3*sizeof(double));
-        return;
-    }
-
-    // Check edge AB region
-    double vc = d1*d4 - d3*d2;
-    if (vc <= 0 && d1 >= 0 && d3 <= 0) {
-        double v = d1 / (d1 - d3);
-        c_out[0] = A[0] + v * AB[0];
-        c_out[1] = A[1] + v * AB[1];
-        c_out[2] = A[2] + v * AB[2];
-        return;
-    }
-
-    // Check vertex C region
-    double CP[3] = { p[0]-C[0], p[1]-C[1], p[2]-C[2] };
-    double d5 = dot_3d(AB, CP),
-           d6 = dot_3d(AC, CP);
-    if (d6 >= 0 && d5 <= d6) {         // Vertex region C
-        memcpy(c_out, C, 3*sizeof(double));
-        return;
-    }
-
-    // Check edge AC region
-    double vb = d5*d2 - d1*d6;
-    if (vb <= 0 && d2 >= 0 && d6 <= 0) {
-        double w = d2 / (d2 - d6);
-        c_out[0] = A[0] + w * AC[0];
-        c_out[1] = A[1] + w * AC[1];
-        c_out[2] = A[2] + w * AC[2];
-        return;
-    }
-
-    // Check edge BC region
-    double va = d3*d6 - d5*d4;
-    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
-        // projection onto BC
-        double BC[3] = {C[0]-B[0], C[1]-B[1], C[2]-B[2]};
-        double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        c_out[0] = B[0] + w * BC[0];
-        c_out[1] = B[1] + w * BC[1];
-        c_out[2] = B[2] + w * BC[2];
-        return;
-    }
-
-    // Inside face region
-    // Barycentric coordinates (u,v,w)
-    double denom = va + vb + vc;
-    assert(fabs(denom) > 1e-9);
-    double v = vb / denom;
-    double w = vc / denom;
-    c_out[0] = A[0] + AB[0]*v + AC[0]*w;
-    c_out[1] = A[1] + AB[1]*v + AC[1]*w;
-    c_out[2] = A[2] + AB[2]*v + AC[2]*w;
-}
-
-
-
 int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3, 
                   double **all_seeds, int Ns, int seed_id)
 {
-    double dist = dot_3d(n, s) - d;
+    double dist = d - dot_3d(n, s);
     // Projection onto the face's plane:
-    double p[3] = { s[0] - dist*n[0],
-                    s[1] - dist*n[1],
-                    s[2] - dist*n[2] };
+    double p[3] = { s[0] + dist*n[0],
+                    s[1] + dist*n[1],
+                    s[2] + dist*n[2] };
 
     // 2) find closest point c on triangle to p
     double c[3];
@@ -402,11 +325,250 @@ int should_mirror(double *n, double *s, double d, double *f1, double *f2, double
     // 3) check nearest‐neighbor at c
     double d_s = norm_difference(c, s, 3);
     for (int j = 0; j < Ns; j++) {
-        if (j == seed_id) continue;
-        if (norm_difference(all_seeds[j], c, 3) < d_s)
+        if (j != seed_id && norm_difference(all_seeds[j], c, 3) + 1e-6 < d_s)
             return 0;   // someone else is nearer
     }
+
     return 1;
+}
+
+
+
+typedef struct {
+    int neighbor;   // index of adjacent face, or -1 if none
+    int v1, v2;     // the two shared vertex indices defining the edge
+} FaceNeighbor;
+
+
+FaceNeighbor** compute_face_adjacency(const s_bound_poly *bp)
+{  // Returns a Nx3 array: adj[f][e] gives the neighbor across edge e of face f.
+    int Nf = bp->Nf;
+    FaceNeighbor **adj = malloc(Nf * sizeof(FaceNeighbor*));
+    for (int f = 0; f < Nf; f++) {
+        adj[f] = malloc(3 * sizeof(FaceNeighbor));
+        for (int e = 0; e < 3; e++) {
+            adj[f][e].neighbor = -1;
+            adj[f][e].v1 = adj[f][e].v2 = -1;
+        }
+    }
+
+    // Build a flat list of all edges: each face contributes 3 edges
+    typedef struct { int vmin, vmax, face, edge_idx; } EdgeRec;
+    int total_edges = Nf * 3;
+    EdgeRec *edges = malloc(total_edges * sizeof(EdgeRec));
+    int ecount = 0;
+
+    // For each face, record its three edges with ordered vertex indices
+    for (int f = 0; f < Nf; ++f) {
+        int i0 = bp->faces[3*f + 0];
+        int i1 = bp->faces[3*f + 1];
+        int i2 = bp->faces[3*f + 2];
+        int vs[3] = { i0, i1, i2 };
+        for (int e = 0; e < 3; e++) {
+            int a = vs[e];
+            int b = vs[(e+1) % 3];
+            edges[ecount].vmin     = (a < b ? a : b);
+            edges[ecount].vmax     = (a < b ? b : a);
+            edges[ecount].face     = f;
+            edges[ecount].edge_idx = e;
+            ecount++;
+        }
+    }
+
+    // Match edges: whenever two records share (vmin,vmax), they are adjacent
+    for (int i = 0; i < ecount; i++) {
+        for (int j = i + 1; j < ecount; j++) {
+            if (edges[i].vmin == edges[j].vmin && edges[i].vmax == edges[j].vmax) {
+                int f1 = edges[i].face, f2 = edges[j].face;
+                int e1 = edges[i].edge_idx, e2 = edges[j].edge_idx;
+                // Record adjacency both ways
+                adj[f1][e1].neighbor = f2;
+                adj[f1][e1].v1       = edges[i].vmin;
+                adj[f1][e1].v2       = edges[i].vmax;
+
+                adj[f2][e2].neighbor = f1;
+                adj[f2][e2].v1       = edges[j].vmin;
+                adj[f2][e2].v2       = edges[j].vmax;
+            }
+        }
+    }
+
+    free(edges);
+    return adj;
+}
+
+
+int extend_sites_double_reflection(const s_bound_poly *bp, FaceNeighbor **adj, double **seeds,
+                                   int N_original, int N_current)
+{
+    for (int f = 0; f < bp->Nf; ++f) { // Loop over each face f
+        double *f1_1 = bp->points[bp->faces[f*3 + 0]],
+               *f1_2 = bp->points[bp->faces[f*3 + 1]],
+               *f1_3 = bp->points[bp->faces[f*3 + 2]];
+        double *n1 = bp->fnormals[f];
+        double d1 = dot_3d(n1, f1_1);
+
+        for (int e = 0; e < 3; ++e) { // Explore each edge of face f
+            FaceNeighbor nbr = adj[f][e];
+            int f2 = nbr.neighbor;
+            if (f2 < 0) continue; // no adjacent face
+            int vA = nbr.v1, vB = nbr.v2;
+            double *f2_1 = bp->points[bp->faces[f2*3 + 0]],
+                   *f2_2 = bp->points[bp->faces[f2*3 + 1]],
+                   *f2_3 = bp->points[bp->faces[f2*3 + 2]];
+            double *n2 = bp->fnormals[f2];
+            double d2 = dot_3d(n2, f2_1);
+
+            // For each original seed that survived both face reflections
+            for (int i = 0; i < N_original; ++i) {
+                double *s_orig = seeds[i];
+                if (!should_mirror(n1, s_orig, d1, f1_1, f1_2, f1_3, seeds, N_original, i))
+                    continue;
+                if (!should_mirror(n2, s_orig, d2, f2_1, f2_2, f2_3, seeds, N_original, i))
+                    continue;
+
+                // Reflect across face f
+                double d1 = dot_3d(bp->fnormals[f], s_orig) - 
+                            dot_3d(bp->fnormals[f], bp->points[bp->faces[3*f]]);
+                double tmp1[3] = { s_orig[0] - 2.0 * d1 * bp->fnormals[f][0],
+                                   s_orig[1] - 2.0 * d1 * bp->fnormals[f][1],
+                                   s_orig[2] - 2.0 * d1 * bp->fnormals[f][2] };
+
+                // Reflect tmp1 across face f2
+                double d2 = dot_3d(bp->fnormals[f2], tmp1) - 
+                            dot_3d(bp->fnormals[f2], bp->points[bp->faces[3*f2]]);
+                double tmp2[3] = { tmp1[0] - 2.0 * d2 * bp->fnormals[f2][0],
+                                   tmp1[1] - 2.0 * d2 * bp->fnormals[f2][1],
+                                   tmp1[2] - 2.0 * d2 * bp->fnormals[f2][2] };
+
+                // Closest point on the shared edge segment
+                double P[3];
+                closest_point_on_segment(bp->points[vA], bp->points[vB], tmp2, P);
+
+                // Nearest-neighbor test at P
+                double d = norm_difference(P, tmp2, 3);
+                int blocked = 0;
+                for (int j = 0; j < N_original; ++j) {
+                    if (norm_difference(P, seeds[j], 3) + 1e-9 < d) {
+                        blocked = 1;
+                        break;
+                    }
+                }
+                if (blocked) continue;
+                
+                // Append new ghost
+                seeds[N_current][0] = tmp2[0];
+                seeds[N_current][1] = tmp2[1];
+                seeds[N_current][2] = tmp2[2];
+                N_current++;
+            }
+        }
+    }
+    return N_current;
+}
+
+
+int next_incident_face(const s_bound_poly *bp, int v, int last_face) {
+    for (int f = last_face + 1; f < bp->Nf; ++f) {
+        int i0 = bp->faces[3*f + 0],
+            i1 = bp->faces[3*f + 1],
+            i2 = bp->faces[3*f + 2];
+        if (i0 == v || i1 == v || i2 == v)
+            return f;
+    }
+    return -1;
+}
+
+
+// Generate third-order (corner) ghost sites via triple reflections
+int extend_sites_triple_reflection(const s_bound_poly *bp, double **seeds,
+                                   int N_original, int N_current)
+{
+    double tmp1[3], tmp2[3], tmp3[3];
+    // Iterate over every vertex v
+    for (int v = 0; v < bp->Np; ++v) {
+        // Enumerate incident faces f1 < f2 < f3
+        for (int f1 = next_incident_face(bp, v, -1);
+             f1 >= 0;
+             f1 = next_incident_face(bp, v, f1))
+        {
+            // single-face test f1
+            double *n1  = bp->fnormals[f1];
+            double  d1  = dot_3d(n1, bp->points[bp->faces[3*f1]]);
+
+            for (int f2 = next_incident_face(bp, v, f1);
+                 f2 >= 0;
+                 f2 = next_incident_face(bp, v, f2))
+            {
+                // single-face test f2
+                double *n2  = bp->fnormals[f2];
+                double  d2  = dot_3d(n2, bp->points[bp->faces[3*f2]]);
+
+                for (int f3 = next_incident_face(bp, v, f2);
+                     f3 >= 0;
+                     f3 = next_incident_face(bp, v, f3))
+                {
+                    // single-face test f3
+                    double *n3  = bp->fnormals[f3];
+                    double  d3  = dot_3d(n3, bp->points[bp->faces[3*f3]]);
+
+                    // For each original seed
+                    for (int i = 0; i < N_original; ++i) {
+                        double *s = seeds[i];
+                        // must pass all three face-tests
+                        if (!should_mirror(n1, s, d1,
+                                           bp->points[bp->faces[3*f1+0]],
+                                           bp->points[bp->faces[3*f1+1]],
+                                           bp->points[bp->faces[3*f1+2]],
+                                           seeds, N_original, i))
+                            continue;
+                        if (!should_mirror(n2, s, d2,
+                                           bp->points[bp->faces[3*f2+0]],
+                                           bp->points[bp->faces[3*f2+1]],
+                                           bp->points[bp->faces[3*f2+2]],
+                                           seeds, N_original, i))
+                            continue;
+                        if (!should_mirror(n3, s, d3,
+                                           bp->points[bp->faces[3*f3+0]],
+                                           bp->points[bp->faces[3*f3+1]],
+                                           bp->points[bp->faces[3*f3+2]],
+                                           seeds, N_original, i))
+                            continue;
+
+                        // triple reflect across f1 -> f2 -> f3
+                        double dist1 = dot_3d(n1, s) - d1;
+                        for (int k = 0; k < 3; ++k)
+                            tmp1[k] = s[k] - 2.0 * dist1 * n1[k];
+                        double dist2 = dot_3d(n2, tmp1) - d2;
+                        for (int k = 0; k < 3; ++k)
+                            tmp2[k] = tmp1[k] - 2.0 * dist2 * n2[k];
+                        double dist3 = dot_3d(n3, tmp2) - d3;
+                        for (int k = 0; k < 3; ++k)
+                            tmp3[k] = tmp2[k] - 2.0 * dist3 * n3[k];
+                        
+                        // Nearest-neighbor test at P
+                        double *P = bp->points[v];
+                        double d = norm_difference(P, tmp3, 3);
+                        int blocked = 0;
+                        for (int j = 0; j < N_original; ++j) {
+                            if (norm_difference(P, seeds[j], 3) + 1e-9 < d) {
+                                blocked = 1;
+                                break;
+                            }
+                        }
+                        if (blocked) continue;
+                        
+                        // Append ghost triple-reflection
+                        seeds[N_current][0] = tmp3[0];
+                        seeds[N_current][1] = tmp3[1];
+                        seeds[N_current][2] = tmp3[2];
+                        N_current++;
+                    }
+                }
+            }
+        }
+    }
+    return N_current;
 }
 
 
@@ -422,39 +584,53 @@ int extend_sites_mirroring_NEW(s_bound_poly *bp, double ***s, int Ns)
     }
     int kk = Ns;
 
+    // 1st order reflections
     for (int ff=0; ff<bp->Nf; ff++) {
-        int   i0 = bp->faces[ff*3 + 0],
-              i1 = bp->faces[ff*3 + 1],
-              i2 = bp->faces[ff*3 + 2];
+        int i0 = bp->faces[ff*3 + 0],
+            i1 = bp->faces[ff*3 + 1],
+            i2 = bp->faces[ff*3 + 2];
         double *f1 = bp->points[i0],
                *f2 = bp->points[i1],
                *f3 = bp->points[i2];
 
         double *n = bp->fnormals[ff];
+        // assert(fabs(norm_squared(n, 3)-1) < 1e-9);
         double d = dot_3d(n, f1);
 
         for (int jj=0; jj<Ns; jj++) {
             double *sj = (*s)[jj];
             if (!should_mirror(n, sj, d, f1, f2, f3, *s, Ns, jj))
                 continue;
+            
+            double factor = 2 * (d - dot_3d(n, sj));
+            // if (fabs(factor / 2.0) < 1e-9) continue;
 
-            double dist   = dot_3d(n, sj) - d;
-            double factor = -2.0 * dist;
             out[kk][0] = sj[0] + factor * n[0];
             out[kk][1] = sj[1] + factor * n[1];
             out[kk][2] = sj[2] + factor * n[2];
             kk++;
         }
     }
+    
+    // 2nd order reflections:
+    // precompute face adjacency: list of (fi,fj, shared_edge_vertices)
+    // FaceNeighbor **f_adjacency = compute_face_adjacency(bp);
+    // kk = extend_sites_double_reflection(bp, f_adjacency, out, Ns, kk);
+
+    // 3rd order reflections:
+    // kk = extend_sites_triple_reflection(bp, out, Ns, kk);
 
     free_matrix(*s, Ns);
     *s = realloc_matrix(out, Ns * (1 + bp->Nf), kk, 3);
+    printf("DEBUG: Reflected %d sites\n", kk-Ns);
     return kk;
 }
 
 
 int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
 {
+    return extend_sites_mirroring_NEW(bp, s, Ns);
+
     double **out = malloc_matrix(Ns*(1+bp->Nf), 3);
     for (int ii=0; ii<Ns; ii++) {
         out[ii][0] = (*s)[ii][0];

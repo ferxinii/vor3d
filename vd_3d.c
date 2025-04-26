@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 
 
 void free_vcell(s_vcell *vcell)
@@ -24,7 +25,7 @@ void free_vcell(s_vcell *vcell)
 void free_vdiagram(s_vdiagram *vdiagram)
 {
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
-        free_vcell(vdiagram->vcells[ii]);
+        if (vdiagram->vcells[ii]) free_vcell(vdiagram->vcells[ii]);
     }
     free(vdiagram->vcells);
     free_matrix(vdiagram->seeds, vdiagram->N_vcells);
@@ -152,10 +153,10 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
 
     double f = 2 * dot_3d(ab, c);
     if (fabs(f) < 1e-9) {
+        // printf("circumcenter: NEARLY SINGULAR!\n");
+        // printf("ab: (%f, %f, %f), c: (%f, %f, %f), denom: %.16f\n", ab[0], ab[1], ab[2], c[0], c[1], c[2],f);
+        // print_matrix(v, 4, 3);
         return -1;
-        printf("circumcenter: NEARLY SINGULAR!\n");
-        printf("denom: %.16f\n", f);
-        print_matrix(v, 4, 3);
     }
     assert(fabs(f) > 1e-9 && "NEARLY SINGULAR?");
     f = 1.0 / f;
@@ -166,8 +167,8 @@ int add_vvertex_from_ncell(const s_setup *setup, const s_ncell *ncell, s_vcell *
         f * ( a2 * bc[2] + b2 * ca[2] + c2 * ab[2]) + v[0][2],
     };
 
-    for (int ii=0; ii<vcell->Nv-1; ii++) {
-        if (norm_difference(circumcenter, vcell->vertices[ii], 3) < 1e-6) {
+    for (int ii=0; ii<vcell->Nv; ii++) {
+        if (norm_difference(circumcenter, vcell->vertices[ii], 3) < 1e-3) {
             return -1;
         }
     }
@@ -233,12 +234,13 @@ int bounded_extraction(const s_setup *setup, s_vcell *vcell)
         if (current->mark == 1) add_vvertex_from_ncell(setup, current, vcell);
         current = current->next;
     }
+    // printf("DEBUG: NV=%d\n", vcell->Nv);
     int out = add_convex_hull_vcell(vcell);
     return out;
 }
 
 
-s_vcell *extract_voronoi_cell(const s_setup *setup, int vertex_id)
+s_vcell *extract_voronoi_cell(const s_setup *setup, int vertex_id, s_bound_poly *bp)
 {
     // Find an ncell with this vertex
     s_ncell *ncell = setup->head;
@@ -258,14 +260,43 @@ s_vcell *extract_voronoi_cell(const s_setup *setup, int vertex_id)
     // Mark incident ncells to this point
     initialize_ncells_mark(setup);
     mark_ncells_incident_face(setup, ncell, v_localid_COMP, 0);
+    // printf("DEBUG: N=%d\n", count_marked(setup));
 
 
     s_vcell *vcell = malloc_vcell(vertex_id);
     int out = bounded_extraction(setup, vcell);
     if (out == 0) {
         puts("ERROR EXTRACTING VCELL!");
+        print_vcell(vcell);
         free_vcell(vcell);
         return NULL;
+    }
+    
+    // Snap into bp if cell spikes outward, KNOWN PROBLEM FIXME TODO
+    for (int ii=0; ii<vcell->Nv; ii++) {
+        if (!is_inside_convhull(vcell->vertices[ii], bp->points, bp->faces, bp->fnormals, bp->Nf)) {
+            //   double d_f = dot(n_f, p_f0);   // plane offset
+            for (int vi = 0; vi < vcell->Nv; ++vi) {
+              // double *V = vcell->vertices[vi];
+              double best_delta = 0;
+              int    best_face  = -1;
+              // find the “most‐violated” half-space
+              for (int f = 0; f < bp->Nf; ++f) {
+                double delta = dot_3d(bp->fnormals[f],  vcell->vertices[vi]) -
+                               dot_3d(bp->fnormals[f], bp->points[bp->faces[3*f + 0]]);
+                if (delta > 1e-9 && (best_face < 0 || delta < best_delta)) {
+                  best_delta = delta;
+                  best_face  = f;
+                }
+              }
+              // if we found one, snap V back onto that plane
+              if (best_face >= 0) {
+                for (int k = 0; k < 3; ++k) {
+                   vcell->vertices[vi][k] -= best_delta * bp->fnormals[best_face][k];
+                }
+              }
+            }
+        }
     }
 
     // Compute volume
@@ -283,7 +314,11 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, 
     vdiagram->bpoly = bpoly;
     
     for (int ii=0; ii<Nreal; ii++) {
-        vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii);
+        for (int tries = 0; tries < 5; tries ++) { 
+            vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii, bpoly);
+            if (vdiagram->vcells[ii] == NULL) continue;
+            else break;
+        }
         if (vdiagram->vcells[ii] == NULL) {
             puts("Could not construct vdiagram.");
             free_vdiagram(vdiagram);

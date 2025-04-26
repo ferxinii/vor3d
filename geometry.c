@@ -261,6 +261,83 @@ double distance_squared(const double *a, const double *b)
 }
 
 
+void closest_point_on_triangle(const double *A, const double *B, const double *C, const double *p,
+                               double *c_out) 
+{
+    double AB[3] = {B[0]-A[0], B[1]-A[1], B[2]-A[2]},
+           AC[3] = {C[0]-A[0], C[1]-A[1], C[2]-A[2]},
+           AP[3] = {p [0]-A[0], p [1]-A[1], p [2]-A[2]};
+
+    double d1 = dot_3d(AB, AP), d2 = dot_3d(AC, AP);
+    if (d1 <= 0 && d2 <= 0) { memcpy(c_out, A, 3*sizeof(double)); return; }
+
+    double BP[3] = { p[0]-B[0], p[1]-B[1], p[2]-B[2] };
+    double d3 = dot_3d(AB, BP), d4 = dot_3d(AC, BP);
+    if (d3 >= 0 && d4 <= d3) { memcpy(c_out, B, 3*sizeof(double)); return; }
+
+    double vc = d1*d4 - d3*d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+        double v = d1 / (d1 - d3);
+        c_out[0] = A[0] + v * AB[0];
+        c_out[1] = A[1] + v * AB[1];
+        c_out[2] = A[2] + v * AB[2];
+        return;
+    }
+
+    double CP[3] = { p[0]-C[0], p[1]-C[1], p[2]-C[2] };
+    double d5 = dot_3d(AB, CP),
+           d6 = dot_3d(AC, CP);
+    if (d6 >= 0 && d5 <= d6) { memcpy(c_out, C, 3*sizeof(double)); return; }
+
+    // Check edge AC region
+    double vb = d5*d2 - d1*d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+        double w = d2 / (d2 - d6);
+        c_out[0] = A[0] + w * AC[0];
+        c_out[1] = A[1] + w * AC[1];
+        c_out[2] = A[2] + w * AC[2];
+        return;
+    }
+
+    // Check edge BC region
+    double va = d3*d6 - d5*d4;
+    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+        // projection onto BC
+        double BC[3] = {C[0]-B[0], C[1]-B[1], C[2]-B[2]};
+        double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        c_out[0] = B[0] + w * BC[0];
+        c_out[1] = B[1] + w * BC[1];
+        c_out[2] = B[2] + w * BC[2];
+        return;
+    }
+
+    // Inside face region
+    // Barycentric coordinates (u,v,w)
+    double denom = va + vb + vc;
+    assert(fabs(denom) > 1e-9);
+    double v = vb / denom;
+    double w = vc / denom;
+    c_out[0] = A[0] + AB[0]*v + AC[0]*w;
+    c_out[1] = A[1] + AB[1]*v + AC[1]*w;
+    c_out[2] = A[2] + AB[2]*v + AC[2]*w;
+}
+
+
+void closest_point_on_segment(double *p, double *A, double *B, double *OUT)
+{
+    double ab[3] = { B[0]-A[0], B[1]-A[1], B[2]-B[2]};
+    // Project c onto ab, computing parameterized position d(t) = a + t*(b – a)
+    double pa[3]; subtract_3d(p, A, pa);
+    double t = dot_3d(pa, ab) / dot_3d(ab, ab);
+    // If outside segment, clamp t (and therefore d) to the closest endpoint
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    // Compute projected position from the clamped t
+    OUT[0] = A[0] + t * ab[0];
+    OUT[1] = A[1] + t * ab[1];
+    OUT[2] = A[2] + t * ab[2];
+}
+
 
 int point_in_triangle_2d_NEW(double *v1, double *v2, double *v3, double *p)
 {
@@ -518,38 +595,27 @@ double **extract_normals_from_ch_UNNORMALIZED(ch_vertex *vertices, int *faces, i
 }
 
 
-
 int is_inside_convhull(double *query, double **pch, int *faces, double **fnormals, int Nf)
 {   
-    double *pf[3], fc[3];
-    pf[0] = pch[faces[0]];
-    pf[1] = pch[faces[1]];
-    pf[2] = pch[faces[2]];
-    find_center_mass(pf, 3, 3, fc);
-    
-    double d[3];
-    subtract_3d(fc, query, d);
-    double dot = dot_3d(d, fnormals[0]);
-    assert(dot != 0 && "parallel normal...");
+    int prev_sign = 0;
+    for (int f = 0; f < Nf; ++f) {
+        double *pf[3] = { pch[faces[3*f + 0]],
+                          pch[faces[3*f + 1]],
+                          pch[faces[3*f + 2]] };
+        double fc[3]; find_center_mass(pf, 3, 3, fc);
 
-    int prev_sign = dot > 0 ? 1 : -1;
+        double d[3]; subtract_3d(fc, query, d);  // vector from query to centroid
+        double dot = dot_3d(d, fnormals[f]);
+        if (fabs(dot) < 1e-9) 
+            continue;
 
-    for (int ii=1; ii<Nf; ii++) {
-        pf[0] = pch[faces[ii*3 + 0]];
-        pf[1] = pch[faces[ii*3 + 1]];
-        pf[2] = pch[faces[ii*3 + 2]];
-        find_center_mass(pf, 3, 3, fc);
-        
-        subtract_3d(fc, query, d);
-        dot = dot_3d(d, fnormals[ii]);
-        assert(dot != 0 && "parallel normal...");
-        int sign = dot > 0 ? 1 : -1;
-        if (prev_sign * sign < 0) {// Check change in sign
-            return 0;
-        }
+        int sign = (dot > 0 ? +1 : -1);
+        // if we've already seen a non-zero sign, it must match
+        if (prev_sign != 0 && sign != prev_sign) return 0;  // we are on the "other" side
 
         prev_sign = sign;
     }
+    assert(prev_sign != 0);
     return 1;
 }
 

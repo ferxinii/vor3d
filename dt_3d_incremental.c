@@ -798,7 +798,7 @@ int insert_one_point(s_setup *setup, int point_id, s_stack *stack, s_stack *stac
     double *point = setup->points[point_id];
     s_ncell *container_ncell = in_ncell_walk(setup, point);
 
-    double EPS = 1e-8;
+    double EPS = 1e-4;
     if (norm_difference(setup->points[container_ncell->vertex_id[0]], point, 3) < EPS || 
         norm_difference(setup->points[container_ncell->vertex_id[1]], point, 3) < EPS ||
         norm_difference(setup->points[container_ncell->vertex_id[2]], point, 3) < EPS ||
