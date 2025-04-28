@@ -497,7 +497,7 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
 
     // A NEW PLOT FOR EACH CELL (UNTIL MAX_FILES)
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
-        if (max_files != 0 && ii > max_files) break;
+        if (ii > max_files) break;
 
         s_vcell *vcell = vdiagram->vcells[ii];
         fprintf(pipe, "set output '%s_%d.png'\n", f_name, ii);

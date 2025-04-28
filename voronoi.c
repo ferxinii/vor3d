@@ -34,8 +34,8 @@ int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
     }
 
     double relative_diff =  (bp->volume - sum_vol) / bp->volume;
-    if (fabs(relative_diff) < 1e-6) return 1;
-    else return 1; //0;
+    if (fabs(relative_diff) < 1e-3) return 1;
+    else return 0;
 }
 
 
@@ -60,7 +60,6 @@ s_vdiagram *construct_vd(double (*f_radius_poiss)(double *), char *file_bounding
         if (valid_volumes(bp, vd)) return vd;
         else free_vdiagram(vd);
     }
-    
     return NULL;
 }
 
