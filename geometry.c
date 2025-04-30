@@ -162,46 +162,46 @@ int segments_intersect_2d(double *A, double *B, double *p, double *d)
 }
 
 
-int are_in_general_position_3d(double **points, int N)
-{
-    static double **aux1 = NULL;
-    if (!aux1) aux1 = malloc_matrix(3, 3);
-    static double **aux2 = NULL;
-    if (!aux2) aux2 = malloc_matrix(4, 3);
-
-    // Check that no 4-tuple is co-planar
-    for (int ii=0; ii<N; ii++) {
-        for (int jj=ii+1; jj<N; jj++) {
-            for (int kk=jj+1; kk<N; kk++) {
-                for (int ll=kk+1; ll<N; ll++) {
-                    aux1[0] = points[ii];
-                    aux1[1] = points[jj];
-                    aux1[2] = points[kk];
-                    if (orientation(aux1, points[ll], 3) == 0) return 0;
-                }
-            }
-        }
-    }
-
-    // Check that no 5-tuple is co-spherical
-    for (int ii=0; ii<N; ii++) {
-        for (int jj=ii+1; jj<N; jj++) {
-            for (int kk=jj+1; kk<N; kk++) {
-                for (int ll=kk+1; ll<N; ll++) {
-                    for (int mm=ll+1; mm<N; mm++) {
-                        aux2[0] = points[ii];
-                        aux2[1] = points[jj];
-                        aux2[2] = points[kk];
-                        aux2[3] = points[ll];
-                        if (in_sphere(aux2, points[mm], 3) == 0) return 0;
-                    }
-                }
-            }
-        }
-    }
-
-    return 1;
-}
+// int are_in_general_position_3d(double **points, int N)
+// {
+//     static double **aux1 = NULL;
+//     if (!aux1) aux1 = malloc_matrix(3, 3);
+//     static double **aux2 = NULL;
+//     if (!aux2) aux2 = malloc_matrix(4, 3);
+//
+//     // Check that no 4-tuple is co-planar
+//     for (int ii=0; ii<N; ii++) {
+//         for (int jj=ii+1; jj<N; jj++) {
+//             for (int kk=jj+1; kk<N; kk++) {
+//                 for (int ll=kk+1; ll<N; ll++) {
+//                     aux1[0] = points[ii];
+//                     aux1[1] = points[jj];
+//                     aux1[2] = points[kk];
+//                     if (orientation(aux1, points[ll], 3) == 0) return 0;
+//                 }
+//             }
+//         }
+//     }
+//
+//     // Check that no 5-tuple is co-spherical
+//     for (int ii=0; ii<N; ii++) {
+//         for (int jj=ii+1; jj<N; jj++) {
+//             for (int kk=jj+1; kk<N; kk++) {
+//                 for (int ll=kk+1; ll<N; ll++) {
+//                     for (int mm=ll+1; mm<N; mm++) {
+//                         aux2[0] = points[ii];
+//                         aux2[1] = points[jj];
+//                         aux2[2] = points[kk];
+//                         aux2[3] = points[ll];
+//                         if (in_sphere(aux2, points[mm], 3) == 0) return 0;
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     return 1;
+// }
 
 
 void find_center_mass(double **in, int N_points, int dim, double *out)
@@ -339,45 +339,45 @@ void closest_point_on_segment(double *p, double *A, double *B, double *OUT)
 }
 
 
-int point_in_triangle_2d_NEW(double *v1, double *v2, double *v3, double *p)
-{
-    double EPS = 1e-9;
-    // 1) 2D orient tests
-    int o1 = orient2d(v1, v2, p);
-    int o2 = orient2d(v2, v3, p);
-    int o3 = orient2d(v3, v1, p);
-
-    int signs[3] = { o1, o2, o3 };
-    int ref = 0;
-    for (int i = 0; i < 3; i++) {
-        if (signs[i] != 0) {
-            ref = signs[i];
-            break;
-        }
-    }
-
-    if (ref != 0) {
-        // Strict or on‐edge test
-        for (int i = 0; i < 3; i++) {
-            if (signs[i] != 0 && signs[i] != ref)
-                return 0;
-        }
-        return 1;
-    }
-
-    // --- All three orients are zero: collinear / degenerate with p on the same line ---
-    // Fallback: check if p lies within the triangle's bounding box
-    double minx = fmin(fmin(v1[0], v2[0]), v3[0]);
-    double maxx = fmax(fmax(v1[0], v2[0]), v3[0]);
-    double miny = fmin(fmin(v1[1], v2[1]), v3[1]);
-    double maxy = fmax(fmax(v1[1], v2[1]), v3[1]);
-
-    if (p[0] + EPS < minx || p[0] - EPS > maxx ||
-        p[1] + EPS < miny || p[1] - EPS > maxy) {
-        return 0;
-    }
-    return 1;
-}
+// int point_in_triangle_2d_NEW(double *v1, double *v2, double *v3, double *p)
+// {
+//     double EPS = 1e-9;
+//     // 1) 2D orient tests
+//     int o1 = orient2d(v1, v2, p);
+//     int o2 = orient2d(v2, v3, p);
+//     int o3 = orient2d(v3, v1, p);
+//
+//     int signs[3] = { o1, o2, o3 };
+//     int ref = 0;
+//     for (int i = 0; i < 3; i++) {
+//         if (signs[i] != 0) {
+//             ref = signs[i];
+//             break;
+//         }
+//     }
+//
+//     if (ref != 0) {
+//         // Strict or on‐edge test
+//         for (int i = 0; i < 3; i++) {
+//             if (signs[i] != 0 && signs[i] != ref)
+//                 return 0;
+//         }
+//         return 1;
+//     }
+//
+//     // --- All three orients are zero: collinear / degenerate with p on the same line ---
+//     // Fallback: check if p lies within the triangle's bounding box
+//     double minx = fmin(fmin(v1[0], v2[0]), v3[0]);
+//     double maxx = fmax(fmax(v1[0], v2[0]), v3[0]);
+//     double miny = fmin(fmin(v1[1], v2[1]), v3[1]);
+//     double maxy = fmax(fmax(v1[1], v2[1]), v3[1]);
+//
+//     if (p[0] + EPS < minx || p[0] - EPS > maxx ||
+//         p[1] + EPS < miny || p[1] - EPS > maxy) {
+//         return 0;
+//     }
+//     return 1;
+// }
 
 
 int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
@@ -404,98 +404,98 @@ int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p)
 }
 
 
-int point_in_triangle_2d_candegenerate(double *v1, double *v2, double *v3, double *p)
-{
-    int o1 = orient2d(v1, v2, p);
-    int o2 = orient2d(v2, v3, p);
-    int o3 = orient2d(v3, v1, p);
-    
-    // Find reference sign (non-zero)
-    int signs[3] = {o1, o2, o3};
-    int ref_sign = 0;
-    for (int ii=0; ii<3; ii++) {
-        if (signs[ii] != 0) {
-            ref_sign = signs[ii];
-            break;
-        }
-    }
+// int point_in_triangle_2d_candegenerate(double *v1, double *v2, double *v3, double *p)
+// {
+//     int o1 = orient2d(v1, v2, p);
+//     int o2 = orient2d(v2, v3, p);
+//     int o3 = orient2d(v3, v1, p);
+//     
+//     // Find reference sign (non-zero)
+//     int signs[3] = {o1, o2, o3};
+//     int ref_sign = 0;
+//     for (int ii=0; ii<3; ii++) {
+//         if (signs[ii] != 0) {
+//             ref_sign = signs[ii];
+//             break;
+//         }
+//     }
+//
+//     if (ref_sign != 0) {
+//         // Strict or on‐edge test
+//         for (int i = 0; i < 3; i++) {
+//             if (signs[i] != 0 && signs[i] != ref_sign)
+//                 return 0;
+//         }
+//         return 1;
+//     }
+//
+//     // --- All three orients are zero: collinear / degenerate with p on the same line ---
+//     // Fallback: check if p lies within the triangle's bounding box
+//     double minx = fmin(fmin(v1[0], v2[0]), v3[0]);
+//     double maxx = fmax(fmax(v1[0], v2[0]), v3[0]);
+//     double miny = fmin(fmin(v1[1], v2[1]), v3[1]);
+//     double maxy = fmax(fmax(v1[1], v2[1]), v3[1]);
+//     
+//     double EPS = 1e-9;
+//     if (p[0] + EPS < minx || p[0] - EPS > maxx ||
+//         p[1] + EPS < miny || p[1] - EPS > maxy) {
+//         return 0;
+//     }
+//     return 1;
+// }
 
-    if (ref_sign != 0) {
-        // Strict or on‐edge test
-        for (int i = 0; i < 3; i++) {
-            if (signs[i] != 0 && signs[i] != ref_sign)
-                return 0;
-        }
-        return 1;
-    }
 
-    // --- All three orients are zero: collinear / degenerate with p on the same line ---
-    // Fallback: check if p lies within the triangle's bounding box
-    double minx = fmin(fmin(v1[0], v2[0]), v3[0]);
-    double maxx = fmax(fmax(v1[0], v2[0]), v3[0]);
-    double miny = fmin(fmin(v1[1], v2[1]), v3[1]);
-    double maxy = fmax(fmax(v1[1], v2[1]), v3[1]);
-    
-    double EPS = 1e-9;
-    if (p[0] + EPS < minx || p[0] - EPS > maxx ||
-        p[1] + EPS < miny || p[1] - EPS > maxy) {
-        return 0;
-    }
-    return 1;
-}
-
-
-int ray_triangle_intersection_3d(double **triangle, const double *origin, const double *dir, double *intersection) 
-{   // Based on the Möller–Trumbore algorithm
-    const double EPSILON = 1e-9;
-
-    // Retrieve the triangle vertices
-    double *v0 = triangle[0];
-    double *v1 = triangle[1];
-    double *v2 = triangle[2];
-
-    // Compute edges of the triangle: e1 = v1 - v0, e2 = v2 - v0
-    double e1[3], e2[3];
-    subtract_3d(v1, v0, e1);
-    subtract_3d(v2, v0, e2);
-
-    // Compute the determinant
-    double h[3];
-    cross_3d(dir, e2, h);
-    double a = dot_3d(e1, h);
-    if (fabs(a) < EPSILON)
-        return 0;  // The ray is parallel to the triangle plane or the triangle is degenerate
-
-    double f = 1.0 / a;
-    double s[3];
-    subtract_3d(origin, v0, s);
-
-    // Compute the barycentric coordinate u
-    double u = f * dot_3d(s, h);
-    if (u < 0.0 || u > 1.0)
-        return 0;  // The intersection lies outside the triangle
-
-    double q[3];
-    cross_3d(s, e1, q);
-
-    // Compute the barycentric coordinate v
-    double v = f * dot_3d(dir, q);
-    if (v < 0.0 || (u + v) > 1.0)
-        return 0;  // The intersection lies outside the triangle
-
-    // Compute the parameter t to determine the intersection point along the ray
-    double t = f * dot_3d(e2, q);
-
-    if (t < EPSILON)  // For a ray, we only require t to be positive
-        return 0;  
-
-    // Compute the intersection point: origin + t * dir
-    intersection[0] = origin[0] + t * dir[0];
-    intersection[1] = origin[1] + t * dir[1];
-    intersection[2] = origin[2] + t * dir[2];
-
-    return 1;
-}
+// int ray_triangle_intersection_3d(double **triangle, const double *origin, const double *dir, double *intersection) 
+// {   // Based on the Möller–Trumbore algorithm
+//     const double EPSILON = 1e-9;
+//
+//     // Retrieve the triangle vertices
+//     double *v0 = triangle[0];
+//     double *v1 = triangle[1];
+//     double *v2 = triangle[2];
+//
+//     // Compute edges of the triangle: e1 = v1 - v0, e2 = v2 - v0
+//     double e1[3], e2[3];
+//     subtract_3d(v1, v0, e1);
+//     subtract_3d(v2, v0, e2);
+//
+//     // Compute the determinant
+//     double h[3];
+//     cross_3d(dir, e2, h);
+//     double a = dot_3d(e1, h);
+//     if (fabs(a) < EPSILON)
+//         return 0;  // The ray is parallel to the triangle plane or the triangle is degenerate
+//
+//     double f = 1.0 / a;
+//     double s[3];
+//     subtract_3d(origin, v0, s);
+//
+//     // Compute the barycentric coordinate u
+//     double u = f * dot_3d(s, h);
+//     if (u < 0.0 || u > 1.0)
+//         return 0;  // The intersection lies outside the triangle
+//
+//     double q[3];
+//     cross_3d(s, e1, q);
+//
+//     // Compute the barycentric coordinate v
+//     double v = f * dot_3d(dir, q);
+//     if (v < 0.0 || (u + v) > 1.0)
+//         return 0;  // The intersection lies outside the triangle
+//
+//     // Compute the parameter t to determine the intersection point along the ray
+//     double t = f * dot_3d(e2, q);
+//
+//     if (t < EPSILON)  // For a ray, we only require t to be positive
+//         return 0;  
+//
+//     // Compute the intersection point: origin + t * dir
+//     intersection[0] = origin[0] + t * dir[0];
+//     intersection[1] = origin[1] + t * dir[1];
+//     intersection[2] = origin[2] + t * dir[2];
+//
+//     return 1;
+// }
 
 
 ch_vertex *convert_points_to_chvertex(double **points, int Np)
@@ -536,16 +536,30 @@ double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double
         vertices_face[0][0] = v0.x;     vertices_face[0][1] = v0.y;     vertices_face[0][2] = v0.z;
         vertices_face[1][0] = v1.x;     vertices_face[1][1] = v1.y;     vertices_face[1][2] = v1.z;
         vertices_face[2][0] = v2.x;     vertices_face[2][1] = v2.y;     vertices_face[2][2] = v2.z;
-        double fc[3], dir[3];
-        find_center_mass(vertices_face, 3, 3, fc);
-        subtract_3d(fc, ch_CM, dir);
-        double dot = dot_3d(dir, n);
-        if (dot < 0) {
+        // double fc[3], dir[3];
+        // find_center_mass(vertices_face, 3, 3, fc);
+        // subtract_3d(fc, ch_CM, dir);
+        // double dot = dot_3d(dir, n);
+        // if (dot < 0) {
+        //     n[0] = -n[0];
+        //     n[1] = -n[1];
+        //     n[2] = -n[2];
+        //     int tmp = faces[ii*3+1];
+        //     faces[ii*3+1] = faces[ii*3+2];
+        //     faces[ii*3+2] = tmp;
+        //     // puts("DEBUG: Normal flipped! Is this normal?");
+        //     // printf("%.16f\n", dot);
+        // }
+
+        int o = orientation(vertices_face, ch_CM, 3);
+        assert(o != 0);
+        if (o < 0) {
             n[0] = -n[0];
             n[1] = -n[1];
             n[2] = -n[2];
-            // puts("DEBUG: Normal flipped! Is this normal?");
-            // printf("%.16f\n", dot);
+            int tmp = faces[ii*3+1];
+            faces[ii*3+1] = faces[ii*3+2];
+            faces[ii*3+2] = tmp;
         }
 
         out[ii][0] = n[0];
@@ -595,19 +609,21 @@ double **extract_normals_from_ch_UNNORMALIZED(ch_vertex *vertices, int *faces, i
 }
 
 
-int is_inside_convhull(double *query, double **pch, int *faces, double **fnormals, int Nf)
+int is_inside_convhull(double *query, double **pch, int *faces, __attribute__((unused)) double **fnormals, int Nf)
 {   
     int prev_sign = 0;
     for (int f = 0; f < Nf; ++f) {
         double *pf[3] = { pch[faces[3*f + 0]],
                           pch[faces[3*f + 1]],
                           pch[faces[3*f + 2]] };
-        double fc[3]; find_center_mass(pf, 3, 3, fc);
-
-        double d[3]; subtract_3d(fc, query, d);  // vector from query to centroid
-        double dot = dot_3d(d, fnormals[f]);
-        if (fabs(dot) < 1e-9) 
-            continue;
+        // double fc[3]; find_center_mass(pf, 3, 3, fc);
+        //
+        // double d[3]; subtract_3d(fc, query, d);  // vector from query to centroid
+        // double dot = dot_3d(d, fnormals[f]);
+        
+        double dot = orient3d(pf[0], pf[1], pf[2], query);
+        // if (fabs(dot) < 1e-9) 
+        //     continue;
 
         int sign = (dot > 0 ? +1 : -1);
         // if we've already seen a non-zero sign, it must match
@@ -620,35 +636,35 @@ int is_inside_convhull(double *query, double **pch, int *faces, double **fnormal
 }
 
 
-void inside_ray_convhull_intersection(double **pch, int *faces, double **fnormals, int Nf, double *origin, double *dir, double *OUT)
-{   
-    static double **vertices_face = NULL;
-    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
-
-    assert(is_inside_convhull(origin, pch, faces, fnormals, Nf) && "Ray origin is not inside convhull.");
-
-    for (int ii=0; ii<Nf; ii++) {
-        vertices_face[0][0] = pch[faces[ii*3]][0];
-        vertices_face[0][1] = pch[faces[ii*3]][1];
-        vertices_face[0][2] = pch[faces[ii*3]][2];
-        vertices_face[1][0] = pch[faces[ii*3 + 1]][0];
-        vertices_face[1][1] = pch[faces[ii*3 + 1]][1];
-        vertices_face[1][2] = pch[faces[ii*3 + 1]][2];
-        vertices_face[2][0] = pch[faces[ii*3+2]][0];
-        vertices_face[2][1] = pch[faces[ii*3+2]][1];
-        vertices_face[2][2] = pch[faces[ii*3+2]][2];
-
-        double intersection[3];
-        if (ray_triangle_intersection_3d(vertices_face, origin, dir, intersection)) {
-            OUT[0] = intersection[0];
-            OUT[1] = intersection[1];
-            OUT[2] = intersection[2];
-            return;
-        }
-    }
-    puts("Did not find an intersection with convhull?");
-    exit(1);
-}
+// void inside_ray_convhull_intersection(double **pch, int *faces, double **fnormals, int Nf, double *origin, double *dir, double *OUT)
+// {   
+//     static double **vertices_face = NULL;
+//     if (!vertices_face) vertices_face = malloc_matrix(3, 3);
+//
+//     assert(is_inside_convhull(origin, pch, faces, fnormals, Nf) && "Ray origin is not inside convhull.");
+//
+//     for (int ii=0; ii<Nf; ii++) {
+//         vertices_face[0][0] = pch[faces[ii*3]][0];
+//         vertices_face[0][1] = pch[faces[ii*3]][1];
+//         vertices_face[0][2] = pch[faces[ii*3]][2];
+//         vertices_face[1][0] = pch[faces[ii*3 + 1]][0];
+//         vertices_face[1][1] = pch[faces[ii*3 + 1]][1];
+//         vertices_face[1][2] = pch[faces[ii*3 + 1]][2];
+//         vertices_face[2][0] = pch[faces[ii*3+2]][0];
+//         vertices_face[2][1] = pch[faces[ii*3+2]][1];
+//         vertices_face[2][2] = pch[faces[ii*3+2]][2];
+//
+//         double intersection[3];
+//         if (ray_triangle_intersection_3d(vertices_face, origin, dir, intersection)) {
+//             OUT[0] = intersection[0];
+//             OUT[1] = intersection[1];
+//             OUT[2] = intersection[2];
+//             return;
+//         }
+//     }
+//     puts("Did not find an intersection with convhull?");
+//     exit(1);
+// }
 
 
 

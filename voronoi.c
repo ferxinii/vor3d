@@ -34,6 +34,7 @@ int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
     }
 
     double relative_diff =  (bp->volume - sum_vol) / bp->volume;
+    printf("rel_diff = %.16f\n", relative_diff);
     if (fabs(relative_diff) < 1e-3) return 1;
     else return 0;
 }
@@ -55,8 +56,10 @@ s_vdiagram *construct_vd(double (*f_radius_poiss)(double *), char *file_bounding
         s_setup *dt = construct_dt_3d(seeds, Ns_extended);
         
         s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp, Ns);
+        printf("DEBUG CONSTRUCT VD: NS=%d, vd=%p\n", Ns_extended, (void*)vd);
         if (!vd) continue;
-        
+        puts("CONTINUED!");
+
         if (valid_volumes(bp, vd)) return vd;
         else free_vdiagram(vd);
     }

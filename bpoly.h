@@ -2,13 +2,12 @@
 #define BPOLY_H
 
 #include "float.h"
-// REQUIRES CONVHULL_3D.H
 // #define TPH_POISSON_IMPLEMENTATION
 #include "poisson_disk.h"
 
 
 #define MAX_TRIAL_POINTS 10000
-#define MAX_TRIAL_TESTS 100
+#define MAX_TRIAL_TESTS 50
 typedef struct point {
     double coords[3];
 } s_point;
@@ -40,14 +39,11 @@ s_bound_poly *new_bpoly_copy(s_bound_poly *in);
 void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **out);
 
 
-void find_intersection_with_bounding_poly(const s_bound_poly *bpoly, const double *origin, double *dir, double *intersection, double *extension);
-double **generate_uniform_poisson_dist_inside(s_bound_poly *bpoly, double rmax, int *Np_generated);
-int is_plane_saved(double **planes, int N, double *n, double d);
-void closest_point_on_triangle(const double *A, const double *B, const double *C, const double *p, double *c_out);
+void find_closest_point_on_bp(s_bound_poly *bp, double *p, double *OUT);
+
 
 
 int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3, double **all_seeds, int Ns, int seed_id);
-int extend_sites_mirroring_NEW(s_bound_poly *bp, double ***s, int Ns);
 int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns);
 
 
@@ -60,5 +56,5 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
 void generate_file_cube_bp(const char *filename, double length);
 void generate_file_tetrahedron_bp(const char *filename, double length);
 void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
-void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *f_name, double *ranges);
+void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *f_name, double *ranges, char *color);
 #endif

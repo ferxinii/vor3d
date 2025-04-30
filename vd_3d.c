@@ -5,6 +5,7 @@
 #include "bpoly.h"
 #include "algebra.h"
 #include "geometry.h"
+#include "bpoly.h"
 #include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -275,27 +276,14 @@ s_vcell *extract_voronoi_cell(const s_setup *setup, int vertex_id, s_bound_poly 
     // Snap into bp if cell spikes outward, KNOWN PROBLEM FIXME TODO
     for (int ii=0; ii<vcell->Nv; ii++) {
         if (!is_inside_convhull(vcell->vertices[ii], bp->points, bp->faces, bp->fnormals, bp->Nf)) {
-            //   double d_f = dot(n_f, p_f0);   // plane offset
-            for (int vi = 0; vi < vcell->Nv; ++vi) {
-              // double *V = vcell->vertices[vi];
-              double best_delta = 0;
-              int    best_face  = -1;
-              // find the “most‐violated” half-space
-              for (int f = 0; f < bp->Nf; ++f) {
-                double delta = dot_3d(bp->fnormals[f],  vcell->vertices[vi]) -
-                               dot_3d(bp->fnormals[f], bp->points[bp->faces[3*f + 0]]);
-                if (delta > 1e-9 && (best_face < 0 || delta < best_delta)) {
-                  best_delta = delta;
-                  best_face  = f;
-                }
-              }
-              // if we found one, snap V back onto that plane
-              if (best_face >= 0) {
-                for (int k = 0; k < 3; ++k) {
-                   vcell->vertices[vi][k] -= best_delta * bp->fnormals[best_face][k];
-                }
-              }
-            }
+            double new[3];
+            find_closest_point_on_bp(bp, vcell->vertices[ii], new);
+            vcell->vertices[ii][0] = new[0];
+            vcell->vertices[ii][1] = new[1];
+            vcell->vertices[ii][2] = new[2];
+            // if (!is_inside_convhull(new, bp->points, bp->faces, bp->fnormals, bp->Nf)) {
+            //     puts("WARNING! SNAP IS STILL OUTSIDE?");
+            // }
         }
     }
 
@@ -346,6 +334,20 @@ int find_inside_which_vcell(s_vdiagram *vd, double *x)
 // --------------------------------------- PLOTS ------------------------------------------------
 // ----------------------------------------------------------------------------------------------
 
+
+void randomize_colors(int N, char array[N][20]) 
+{
+    for (int ii=0; ii<N; ii++) {
+        int randi1 = rand() % N;
+        int randi2 = rand() % N;
+        char tmp[20];
+        strcpy(tmp, array[randi1]);
+        strcpy(array[randi1], array[randi2]);
+        strcpy(array[randi2], tmp);
+    }
+}
+
+
 void plot_add_vcell(FILE *pipe, const s_vcell *vcell, char *config)
 {
     for (int ii=0; ii<vcell->Nf; ii++) {
@@ -385,9 +387,10 @@ void plot_add_bpoly(FILE *pipe, const s_bound_poly *bpoly, char *config)
 void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
 {
     FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
-    fprintf(pipe, "set output '%s.png'\n", f_name);
+    fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
+    fprintf(pipe, "set output '%s.pdf'\n", f_name);
     fprintf(pipe, "set pm3d depthorder\n");
+    fprintf(pipe, "set pm3d border lc 'black' lw 0.1\n");
     fprintf(pipe, "set view 100, 10, \n");
     fprintf(pipe, "set xyplane at 0\n");
     fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
@@ -398,7 +401,7 @@ void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
     fprintf(pipe, "set zlabel 'z'\n");
     fflush(pipe);
 
-    fprintf(pipe, "set output '%s.png'\n", f_name);
+    fprintf(pipe, "set output '%s.pdf'\n", f_name);
     fprintf(pipe, "splot ");
     plot_add_vcell(pipe, vcell, "w polygons fs transparent solid 0.6 notitle");
     plot_add_bpoly(pipe, vdiag->bpoly, "w polygonf transparent solid 0.1 notitle");
@@ -409,14 +412,15 @@ void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
 
 void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_files, double **aux_points, int *N_aux)
 {
-    char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
-        "#90ff70", "#ffee00", "#ff7000", "#ee0000", "#7f0000" };
+    char colors[][20] = { "#000090", "#ee0000", "#7f0000", "#0090ff", "#0fffee", 
+        "#90ff70", "#ffee00", "#000fff",  "#ff7000" };
+    randomize_colors(9, colors);
     char buff[1024];
 
     FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
+    fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
     fprintf(pipe, "set pm3d depth\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
+    fprintf(pipe, "set pm3d border lc 'black' lw 0.1\n");
     fprintf(pipe, "set view 100, 10, 1.5\n");
     fprintf(pipe, "unset border\n");
     fprintf(pipe, "unset xtics\n");
@@ -429,7 +433,7 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
 
     // PLOT POINTS
     if (aux_points) {
-        fprintf(pipe, "set output '%s_aux_0.png'\n", f_name);
+        fprintf(pipe, "set output '%s_aux_0.pdf'\n", f_name);
         fprintf(pipe, "splot ");
 
         for (int jj=0; jj<vdiagram->N_vcells; jj++) {
@@ -447,15 +451,15 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
         plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
         fprintf(pipe, "\n");
 
-        fprintf(pipe, "set output '%s_aux_1.png'\n", f_name);
+        fprintf(pipe, "set output '%s_aux_1.pdf'\n", f_name);
         fprintf(pipe, "set view 100, 90, 1.5\n");
         fprintf(pipe, "replot\n");
 
-        fprintf(pipe, "set output '%s_aux_2.png'\n", f_name);
+        fprintf(pipe, "set output '%s_aux_2.pdf'\n", f_name);
         fprintf(pipe, "set view 100, 180, 1.5\n");
         fprintf(pipe, "replot\n");
 
-        fprintf(pipe, "set output '%s_aux_3.png'\n", f_name);
+        fprintf(pipe, "set output '%s_aux_3.pdf'\n", f_name);
         fprintf(pipe, "set view 100, 270, 1.5\n");
         fprintf(pipe, "replot\n");
     }
@@ -463,7 +467,8 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
 
 
     // PLOT WITH ALL CELLS
-    fprintf(pipe, "set output '%s_v1.png'\n", f_name);
+    fprintf(pipe, "set view 100, 60, \n");
+    fprintf(pipe, "set output '%s_v1.pdf'\n", f_name);
     fprintf(pipe, "splot ");
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
         s_vcell *vcell = vdiagram->vcells[ii];
@@ -482,25 +487,25 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
 
     fprintf(pipe, "\n");
 
-    fprintf(pipe, "set output '%s_v2.png'\n", f_name);
+    fprintf(pipe, "set output '%s_v2.pdf'\n", f_name);
     fprintf(pipe, "set view 100, 90, 1.5\n");
     fprintf(pipe, "replot\n");
 
-    fprintf(pipe, "set output '%s_v3.png'\n", f_name);
+    fprintf(pipe, "set output '%s_v3.pdf'\n", f_name);
     fprintf(pipe, "set view 100, 180, 1.5\n");
     fprintf(pipe, "replot\n");
 
-    fprintf(pipe, "set output '%s_v4.png'\n", f_name);
+    fprintf(pipe, "set output '%s_v4.pdf'\n", f_name);
     fprintf(pipe, "set view 100, 270, 1.5\n");
     fprintf(pipe, "replot\n");
 
 
     // A NEW PLOT FOR EACH CELL (UNTIL MAX_FILES)
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
-        if (ii > max_files) break;
+        if (ii >= max_files) break;
 
         s_vcell *vcell = vdiagram->vcells[ii];
-        fprintf(pipe, "set output '%s_%d.png'\n", f_name, ii);
+        fprintf(pipe, "set output '%s_%d.pdf'\n", f_name, ii);
         fprintf(pipe, "splot ");
 
         snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[ii%8]);
