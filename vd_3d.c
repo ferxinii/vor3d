@@ -307,7 +307,7 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, 
             if (vdiagram->vcells[ii] == NULL) continue;
             else break;
         }
-        if (vdiagram->vcells[ii] == NULL) {
+        if (vdiagram->vcells[ii] == NULL || vdiagram->vcells[ii]->volume <= 0) {
             puts("Could not construct vdiagram.");
             free_vdiagram(vdiagram);
             return NULL;
@@ -554,16 +554,16 @@ void clear_volumes_file(char *fname)
 }
 
 
-void append_volumes_to_file(s_vdiagram *vdiagram, char *fname)
+void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id)
 {
     FILE *f = fopen(fname, "a");
     assert(f && "Could not open file to write volumes to");
 
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
-        fprintf(f, "%f, %f, %f, %f\n", vdiagram->seeds[vdiagram->vcells[ii]->seed_id][0],
-                                       vdiagram->seeds[vdiagram->vcells[ii]->seed_id][1], 
-                                       vdiagram->seeds[vdiagram->vcells[ii]->seed_id][2], 
-                                       vdiagram->vcells[ii]->volume);   
+        fprintf(f, "%d, %f, %f, %f, %f\n", id, vdiagram->seeds[vdiagram->vcells[ii]->seed_id][0],
+                                               vdiagram->seeds[vdiagram->vcells[ii]->seed_id][1], 
+                                               vdiagram->seeds[vdiagram->vcells[ii]->seed_id][2], 
+                                               vdiagram->vcells[ii]->volume);   
     }
     fclose(f);
 }

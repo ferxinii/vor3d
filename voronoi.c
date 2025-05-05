@@ -9,15 +9,15 @@
 
 
 // BP.C
-extern void generate_file_cube_bp(const char *filename, double length);
-extern void generate_file_tetrahedron_bp(const char *filename, double length);
-extern void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
+// extern void generate_file_cube_bp(const char *filename, double length);
+// extern void generate_file_tetrahedron_bp(const char *filename, double length);
+// extern void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
 
 
 // VD_3D.C
-extern void clear_volumes_file(char *fname);
-extern void append_volumes_to_file(s_vdiagram *vdiagram, char *fname);
-extern void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
+// extern void clear_volumes_file(char *fname);
+// extern void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id);
+// extern void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
 
 
 int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
@@ -40,7 +40,7 @@ int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
 }
 
 
-s_vdiagram *construct_vd(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries)
+s_vdiagram *construct_vd_from_txt(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries)
 {
     for (int ii=0; ii<max_tries; ii++) {
         double **points_bp;
@@ -56,9 +56,9 @@ s_vdiagram *construct_vd(double (*f_radius_poiss)(double *), char *file_bounding
         s_setup *dt = construct_dt_3d(seeds, Ns_extended);
         
         s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp, Ns);
-        printf("DEBUG CONSTRUCT VD: NS=%d, vd=%p\n", Ns_extended, (void*)vd);
         if (!vd) continue;
-        puts("CONTINUED!");
+
+        // printf("DEBUG CONSTRUCT VD: NS=%d, vd=%p\n", Ns_extended, (void*)vd);
 
         if (valid_volumes(bp, vd)) return vd;
         else free_vdiagram(vd);
@@ -67,4 +67,30 @@ s_vdiagram *construct_vd(double (*f_radius_poiss)(double *), char *file_bounding
 }
 
 
+s_vdiagram *construct_vd_from_bp(double (*f_radius_poiss)(double *), s_bound_poly *bp, int max_tries)
+{
+    s_bound_poly *bp_tmp = new_bpoly_copy(bp);
+    for (int ii=0; ii<max_tries; ii++) {
+        int Ns;
+        double **seeds = generate_nonuniform_poisson_dist_inside(bp_tmp, f_radius_poiss, &Ns);
+        
+        int Ns_extended = extend_sites_mirroring(bp_tmp, &seeds, Ns);
+        
+        s_setup *dt = construct_dt_3d(seeds, Ns_extended);
+        
+        s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp_tmp, Ns);
+        if (!vd) {
+            bp_tmp = new_bpoly_copy(bp);
+            continue;
+        }
+
+        // printf("DEBUG CONSTRUCT VD: NS=%d, vd=%p\n", Ns_extended, (void*)vd);
+        // puts("CONTINUED!");
+
+        if (valid_volumes(bp, vd)) return vd;
+        else free_vdiagram(vd);
+    }
+
+    return NULL;
+}
 

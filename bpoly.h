@@ -37,6 +37,9 @@ s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise);
 void new_bpoly_from_txt(const char *fname, double ***OUT_points, int *OUT_Np, s_bound_poly **OUT_bpoly, int add_noise);
 s_bound_poly *new_bpoly_copy(s_bound_poly *in);
 void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **out);
+void scale_bpoly_vertices(double **points, int Np, double s);
+void scale_bpoly(s_bound_poly **bp, double objective_volume);
+
 
 
 void find_closest_point_on_bp(s_bound_poly *bp, double *p, double *OUT);

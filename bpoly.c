@@ -73,7 +73,7 @@ void extract_convhull_bp(s_bound_poly *bpoly)
     ch_vertex *pch = convert_points_to_chvertex(bpoly->points, bpoly->Np);
 
     convhull_3d_build(pch, bpoly->Np, &bpoly->faces, &bpoly->Nf);
-    printf("DEBUG: Nf = %d, Np = %d\n", bpoly->Nf, bpoly->Np);
+    // printf("DEBUG: Nf = %d, Np = %d\n", bpoly->Nf, bpoly->Np);
     
     double CM[3];
     find_center_mass(bpoly->points, bpoly->Np, 3, CM);
@@ -191,6 +191,39 @@ void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **
     out[2][0] = bpoly->points[face[2]][0];
     out[2][1] = bpoly->points[face[2]][1];
     out[2][2] = bpoly->points[face[2]][2];
+}
+
+
+void scale_bpoly_vertices(double **points, int Np, double s)
+{
+    double CM[3];
+    find_center_mass(points, Np, 3, CM);
+    double b[3] = {(1-s)*CM[0],
+                   (1-s)*CM[1],
+                   (1-s)*CM[2]};
+    
+    for (int ii=0; ii<Np; ii++) {
+        points[ii][0] = s*points[ii][0] + b[0];
+        points[ii][1] = s*points[ii][1] + b[1];
+        points[ii][2] = s*points[ii][2] + b[2];
+    }
+}
+
+
+void scale_bpoly(s_bound_poly **bp, double objective_volume)
+{
+    assert(fabs((*bp)->volume) > 1e-6);
+    double F = objective_volume / (*bp)->volume;
+    double s = cbrt(F);
+
+    double **new_p = malloc_matrix((*bp)->Np, 3);
+    copy_matrix((*bp)->points, new_p, (*bp)->Np, 3);
+    scale_bpoly_vertices(new_p, (*bp)->Np, s);
+
+    int Np = (*bp)->Np;
+    free_bpoly(*bp);
+    *bp = new_bpoly_from_points(new_p, Np, 0);
+    printf("DEBUG SCALE_BPOLY: new volume = %f, objective volume = %f\n", (*bp)->volume, objective_volume);
 }
 
 

@@ -78,6 +78,6 @@ void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
 
 void clear_volumes_file(char *fname);
 
-void append_volumes_to_file(s_vdiagram *vdiagram, char *fname);
+void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id);
 
 #endif
