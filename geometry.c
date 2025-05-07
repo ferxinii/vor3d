@@ -572,8 +572,9 @@ double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double
 
 double **extract_normals_from_ch_UNNORMALIZED(ch_vertex *vertices, int *faces, int Nf, double *ch_CM)
 { 
-    static double **vertices_face = NULL;
-    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
+    double STORAGE[3*3];
+    double *vertices_face[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
+
     double **out = malloc_matrix(Nf, 3);
     for (int ii=0; ii<Nf; ii++) {
         ch_vertex v0 = vertices[faces[ii*3+0]];
@@ -631,7 +632,16 @@ int is_inside_convhull(double *query, double **pch, int *faces, __attribute__((u
 
         prev_sign = sign;
     }
+
+    if (Nf == 0) {
+        puts("What?");
+    }
     assert(prev_sign != 0);
+    // if (prev_sign == 0) {
+    //     printf("DEBUGGING: Nf = %d\n", Nf);
+    //     // print_matrix(pch, 10, 3);
+    //     exit(1);
+    // }
     return 1;
 }
 

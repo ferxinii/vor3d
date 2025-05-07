@@ -47,6 +47,10 @@ s_vdiagram *construct_vd_from_txt(double (*f_radius_poiss)(double *), char *file
         int N_points_bp;
         s_bound_poly *bp;
         new_bpoly_from_txt(file_bounding_polyhedron, &points_bp, &N_points_bp, &bp, 0);
+        if (bp->Nf == 0) {
+            free_bpoly(bp);
+            continue;
+        }
 
         int Ns;
         double **seeds = generate_nonuniform_poisson_dist_inside(bp, f_radius_poiss, &Ns);
@@ -72,15 +76,21 @@ s_vdiagram *construct_vd_from_bp(double (*f_radius_poiss)(double *), s_bound_pol
     s_bound_poly *bp_tmp = new_bpoly_copy(bp);
     for (int ii=0; ii<max_tries; ii++) {
         int Ns;
+        if (bp_tmp->Nf == 0) {
+            puts("What??");
+        }
         double **seeds = generate_nonuniform_poisson_dist_inside(bp_tmp, f_radius_poiss, &Ns);
         
         int Ns_extended = extend_sites_mirroring(bp_tmp, &seeds, Ns);
         
+        printf("Ns_extended = %d\n", Ns_extended);
+
         s_setup *dt = construct_dt_3d(seeds, Ns_extended);
         
         s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp_tmp, Ns);
         if (!vd) {
             bp_tmp = new_bpoly_copy(bp);
+            printf("DEBUG: %d\n", bp_tmp->Nf);
             continue;
         }
 
@@ -88,9 +98,10 @@ s_vdiagram *construct_vd_from_bp(double (*f_radius_poiss)(double *), s_bound_pol
         // puts("CONTINUED!");
 
         if (valid_volumes(bp, vd)) return vd;
-        else free_vdiagram(vd);
+        else {free_vdiagram(vd); bp_tmp = new_bpoly_copy(bp);}
     }
-
+    
+    free_bpoly(bp_tmp);
     return NULL;
 }
 

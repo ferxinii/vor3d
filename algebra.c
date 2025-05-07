@@ -129,14 +129,24 @@ double norm_difference(const double *a, const double *b, int dim)
 }
 
 
+double norm_difference_squared(const double *a, const double *b, int dim)
+{
+    double out = 0;
+    for (int ii=0; ii<dim; ii++) {
+        out += (a[ii] - b[ii]) * (a[ii] - b[ii]);
+    }
+    return out;
+}
+
+
 double max_distance(double **p, int N, int dim, double *q)
 {   
     double maxd = 0;
     for (int ii=0; ii<N; ii++) {
-        double d = norm_difference(p[ii], q, dim);
+        double d = norm_difference_squared(p[ii], q, dim);
         if (maxd < d) maxd = d;
     }
-    return maxd;
+    return sqrt(maxd);
 }
 
 

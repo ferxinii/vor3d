@@ -12,6 +12,7 @@ void copy_matrix_int(int **in, int **out, int N1, int N2);
 void print_matrix(double **array, int N1, int N2);
 double norm_squared(const double *v, int dim);
 double norm_difference(const double *a, const double *b, int dim);
+double norm_difference_squared(const double *a, const double *b, int dim);
 double max_distance(double **p, int N, int dim, double *q);
 void normalize_inplace(double *v, int dim);
 

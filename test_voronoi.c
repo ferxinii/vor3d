@@ -6,17 +6,15 @@
 
 
 #define FILE_BP "bp_points.txt"
-#define PLOT_VOLUMES(name) system("./plot_volumes.plt" name)
+#define PLOT_VOLUMES(name) system("./plot_volumes.plt " name)
 
 double z0, zf, r_mean;
 
 double r_fun(double *x)
 {   
-    double a = 0.8;
-    double K = 2 * r_mean * (1-a) / (zf - z0);
-    double C = a * r_mean - K * z0;
-
-    return K * x[2] + C;
+    double K = - 2 * r_mean * 0.1 / (zf - z0);
+    // printf("%f\n", K * (x[2] - (z0 + zf)/2) + r_mean);
+    return K * (x[2] - (z0 + zf)/2) + r_mean;
 }
 
 
@@ -37,8 +35,8 @@ void generate_statistics(s_bound_poly *bp, int N_simu, char *FILE_VOLS)
 {
     clear_volumes_file(FILE_VOLS);
     for (int ii=0; ii<N_simu; ii++) {
-        printf("%d\n", ii);
         s_bound_poly *bp_tmp = new_bpoly_copy(bp);
+        printf("%d, Nf = %d\n", ii, bp_tmp->Nf);
         s_vdiagram *vd = construct_vd_from_bp(&r_fun, bp_tmp, 5);
         append_volumes_to_file(vd, FILE_VOLS, ii);
         check_volume(vd);
@@ -89,7 +87,7 @@ int main(void)
     int Np_L;
     s_bound_poly *bp_L;
     new_bpoly_from_txt("lobes/L.txt", &points_bp_L, &Np_L, &bp_L, 0);
-    printf("volume: %f\n", compute_volume_convhull(bp_L->points, bp_L->faces, bp_L->fnormals, bp_L->Nf));
+    printf("volume: %f\n", bp_L->volume);
     printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_L->min[0], bp_L->min[1], bp_L->min[2], bp_L->max[0], bp_L->max[1], bp_L->max[2]);
     // plot_bpoly_with_points(bp_L, NULL, 0, "plot_vd/bp_L", NULL, "blue");
     // s_vdiagram *vd_L = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
@@ -98,37 +96,37 @@ int main(void)
     // plot_vdiagram_auto(vd_L, "plot_vd/L", 0);
     // free_vdiagram(vd_L);
     
-    int Nsimu = 10;
+    int Nsimu = 1;
     // ADULT:
-    scale_bpoly(&bp_L, 5500);
-    z0 = bp_L->min[2];
-    zf = bp_L->max[2];
-    r_mean = 1.5;
-    generate_statistics(bp_L, Nsimu, "volumes/L_adult.txt");
+    s_bound_poly *bp_L_adult = scale_bpoly(bp_L, 1.06);
+    z0 = bp_L_adult->min[2];
+    zf = bp_L_adult->max[2];
+    r_mean = 1.1;
+    generate_statistics(bp_L_adult, Nsimu, "volumes/L_adult.txt");
     PLOT_VOLUMES("volumes/L_adult");
 
-    // 11 Y.O.:
-    scale_bpoly(&bp_L, 3000);
-    z0 = bp_L->min[2];
-    zf = bp_L->max[2];
-    r_mean = 1.46;
-    generate_statistics(bp_L, Nsimu, "volumes/L_11yo.txt");
-    PLOT_VOLUMES("volumes/L_11yo");
+    // 13 Y.O.:
+    s_bound_poly *bp_L_13 = scale_bpoly(bp_L, 0.94);
+    z0 = bp_L_13->min[2];
+    zf = bp_L_13->max[2];
+    r_mean = 1;
+    generate_statistics(bp_L_13, Nsimu, "volumes/L_13yo.txt");
+    PLOT_VOLUMES("volumes/L_13yo");
 
-    // 8 Y.O.:
-    scale_bpoly(&bp_L, 2500);
-    z0 = bp_L->min[2];
-    zf = bp_L->max[2];
-    r_mean = 0.92;
-    generate_statistics(bp_L, Nsimu, "volumes/L_8yo.txt");
+    // // 8 Y.O.:
+    s_bound_poly *bp_L_8 = scale_bpoly(bp_L, 0.71);
+    z0 = bp_L_8->min[2];
+    zf = bp_L_8->max[2];
+    r_mean = 0.9;
+    generate_statistics(bp_L_8, Nsimu, "volumes/L_8yo.txt");
     PLOT_VOLUMES("volumes/L_8yo");
 
-    // 3 Y.O.:
-    scale_bpoly(&bp_L, 1500);
-    z0 = bp_L->min[2];
-    zf = bp_L->max[2];
-    r_mean = 0.6;
-    generate_statistics(bp_L, Nsimu, "volumes/L_3yo.txt");
+    // // 3 Y.O.:
+    s_bound_poly *bp_L_3 = scale_bpoly(bp_L, 0.52);
+    z0 = bp_L_3->min[2];
+    zf = bp_L_3->max[2];
+    r_mean = 0.7;
+    generate_statistics(bp_L_3, Nsimu, "volumes/L_3yo.txt");
     PLOT_VOLUMES("volumes/L_3yo");
 
 
@@ -140,7 +138,7 @@ int main(void)
     int Np_R;
     s_bound_poly *bp_R;
     new_bpoly_from_txt("lobes/R.txt", &points_bp_R, &Np_R, &bp_R, 0);
-    printf("volume: %f\n", compute_volume_convhull(bp_R->points, bp_R->faces, bp_R->fnormals, bp_R->Nf));
+    printf("volume: %f\n", bp_R->volume);
     printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_R->min[0], bp_R->min[1], bp_R->min[2], bp_R->max[0], bp_R->max[1], bp_R->max[2]);
     // plot_bpoly_with_points(bp_R, NULL, 0, "plot_vd/bp_R", NULL, "orange");
     // s_vdiagram *vd_R = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
@@ -151,6 +149,41 @@ int main(void)
     // fclose(f_vcells);
     // plot_vdiagram_auto(vd_R, "plot_vd/R", 0);
     // free_vdiagram(vd_R);
+
+    // ADULT:
+    s_bound_poly *bp_R_adult = scale_bpoly(bp_R, 1.06);
+    z0 = bp_R_adult->min[2];
+    zf = bp_R_adult->max[2];
+    r_mean = 1.1;
+    generate_statistics(bp_L_adult, Nsimu, "volumes/R_adult.txt");
+    PLOT_VOLUMES("volumes/R_adult");
+
+    // 13 Y.O.:
+    s_bound_poly *bp_R_13 = scale_bpoly(bp_R, 0.94);
+    z0 = bp_R_13->min[2];
+    zf = bp_R_13->max[2];
+    r_mean = 1;
+    generate_statistics(bp_R_13, Nsimu, "volumes/R_13yo.txt");
+    PLOT_VOLUMES("volumes/R_13yo");
+
+    // 8 Y.O.:
+    s_bound_poly *bp_R_8 = scale_bpoly(bp_R, 0.72);
+    z0 = bp_R_8->min[2];
+    zf = bp_R_8->max[2];
+    r_mean = 0.9;
+    generate_statistics(bp_R_8, Nsimu, "volumes/R_8yo.txt");
+    PLOT_VOLUMES("volumes/R_8yo");
+
+    // // 3 Y.O.:
+    s_bound_poly *bp_R_3 = scale_bpoly(bp_R, 0.52);
+    z0 = bp_R_3->min[2];
+    zf = bp_R_3->max[2];
+    r_mean = 0.7;
+    generate_statistics(bp_R_3, Nsimu, "volumes/R_3yo.txt");
+    PLOT_VOLUMES("volumes/R_3yo");
+
+
+
     exit(1);
 
 

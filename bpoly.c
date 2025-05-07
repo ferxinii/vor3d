@@ -37,12 +37,12 @@ void extract_dmax_bp(s_bound_poly *bpoly)
     double dmax = 0; 
     for (int ii=0; ii<bpoly->Np-1; ii++) {
         for (int jj=ii+1; jj<bpoly->Np; jj++) {
-            double d = norm_difference(bpoly->points[ii], bpoly->points[jj], 3);
+            double d = norm_difference_squared(bpoly->points[ii], bpoly->points[jj], 3);
             if (d > dmax) 
                 dmax = d;
         }
     }
-    bpoly->dmax = dmax;
+    bpoly->dmax = sqrt(dmax);
 }
 
 
@@ -83,20 +83,8 @@ void extract_convhull_bp(s_bound_poly *bpoly)
 }
 
 
-s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise)
+double compute_volume_bpoly(s_bound_poly *bpoly)
 {
-    s_bound_poly *bpoly = malloc(sizeof(s_bound_poly));
-    bpoly->points = malloc_matrix(Np, 3);
-    bpoly->Np = Np;
-    copy_matrix(points, bpoly->points, Np, 3);
-    
-    extract_dmax_bp(bpoly);
-    if (add_noise != 0) add_noise_to_bp(bpoly);
-    extract_convhull_bp(bpoly);
-    extract_CM_bp(bpoly);
-    extract_min_max_coord(bpoly, bpoly->min, bpoly->max);
-
-    // COMPUTE VOLUME
     double vol = 0;
     for (int ii=0; ii<bpoly->Nf; ii++) {
         int i0 = 0;
@@ -113,12 +101,31 @@ s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise)
                     (bpoly->points[bpoly->faces[ii*3 + 2]][i1] -
                      bpoly->points[bpoly->faces[ii*3 + 0]][i1]);
 
+        // Nx = bpoly->fnormals[ii][0];
         vol += Nx * (bpoly->points[bpoly->faces[ii*3 + 0]][i0] +
                      bpoly->points[bpoly->faces[ii*3 + 1]][i0] +
                      bpoly->points[bpoly->faces[ii*3 + 2]][i0]);
     }
-    bpoly->volume = vol / 6;
 
+    return vol/6;
+}
+
+
+s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise)
+{
+    s_bound_poly *bpoly = malloc(sizeof(s_bound_poly));
+    bpoly->points = malloc_matrix(Np, 3);
+    bpoly->Np = Np;
+    copy_matrix(points, bpoly->points, Np, 3);
+    
+    extract_dmax_bp(bpoly);
+    if (add_noise != 0) add_noise_to_bp(bpoly);
+    extract_convhull_bp(bpoly);
+    extract_CM_bp(bpoly);
+    extract_min_max_coord(bpoly, bpoly->min, bpoly->max);
+
+    bpoly->volume = compute_volume_bpoly(bpoly);
+    
     return bpoly;
 }
 
@@ -210,20 +217,31 @@ void scale_bpoly_vertices(double **points, int Np, double s)
 }
 
 
-void scale_bpoly(s_bound_poly **bp, double objective_volume)
+s_bound_poly *scale_bpoly(s_bound_poly *bp, double factor)
 {
-    assert(fabs((*bp)->volume) > 1e-6);
-    double F = objective_volume / (*bp)->volume;
+    double OLD_VOL = (bp)->volume;
+    double **new_p = malloc_matrix((bp)->Np, 3);
+    copy_matrix((bp)->points, new_p, (bp)->Np, 3);
+    scale_bpoly_vertices(new_p, (bp)->Np, factor);
+
+    int Np = (bp)->Np;
+    return(new_bpoly_from_points(new_p, Np, 0));
+    printf("DEBUG SCALE_BPOLY: new volume = %f, old volume = %f\n", (bp)->volume, OLD_VOL);
+}
+
+
+s_bound_poly *scale_bpoly_objective_volume(s_bound_poly *bp, double objective_volume)
+{
+    assert(fabs((bp)->volume) > 1e-6);
+    double F = objective_volume / (bp)->volume;
     double s = cbrt(F);
 
-    double **new_p = malloc_matrix((*bp)->Np, 3);
-    copy_matrix((*bp)->points, new_p, (*bp)->Np, 3);
-    scale_bpoly_vertices(new_p, (*bp)->Np, s);
+    double **new_p = malloc_matrix((bp)->Np, 3);
+    copy_matrix((bp)->points, new_p, (bp)->Np, 3);
+    scale_bpoly_vertices(new_p, (bp)->Np, s);
 
-    int Np = (*bp)->Np;
-    free_bpoly(*bp);
-    *bp = new_bpoly_from_points(new_p, Np, 0);
-    printf("DEBUG SCALE_BPOLY: new volume = %f, objective volume = %f\n", (*bp)->volume, objective_volume);
+    int Np = (bp)->Np;
+    return(new_bpoly_from_points(new_p, Np, 0));
 }
 
 
@@ -241,9 +259,9 @@ int should_mirror(double *n, double *s, double d, double *f1, double *f2, double
     closest_point_on_triangle(f1, f2, f3, p, c);
     
     // 3) check nearest‐neighbor at c
-    double d_s = norm_difference(c, s, 3);
+    double d_s = norm_difference_squared(c, s, 3);
     for (int j = 0; j < Ns; j++) {
-        if (j != seed_id && norm_difference(all_seeds[j], c, 3) + 1e-6 < d_s)
+        if (j != seed_id && norm_difference_squared(all_seeds[j], c, 3) + 1e-6 < d_s)
             return 0;   // someone else is nearer
     }
 
@@ -301,7 +319,7 @@ int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
 
     free_matrix(*s, Ns);
     *s = realloc_matrix(out, Ns * (1 + bp->Nf), kk, 3);
-    printf("DEBUG: Reflected %d sites\n", kk-Ns);
+    // printf("DEBUG: Reflected %d sites\n", kk-Ns);
     return kk;
 }
 
@@ -416,7 +434,7 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
         out_points[ii][2] = samples[ii].coords[2];
     }
     
-    printf("DEBUG POISSON: Nsamples = %d\n", Nsamples);
+    // printf("DEBUG POISSON: Nsamples = %d\n", Nsamples);
     // if (Nsamples < 3) {
     //     printf("WARNING! TOO FEW SAMPLES..., N = %d\n", Nsamples);
     //     exit(1);

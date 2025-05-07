@@ -68,6 +68,7 @@ s_vdiagram *malloc_vdiagram(const s_setup *setup, int Nreal)
 
     out->N_vcells = Nreal;
     out->vcells = malloc(sizeof(s_vcell*) * Nreal);
+    for (int ii=0; ii<Nreal; ii++) out->vcells[ii] = NULL;
     out->bpoly = NULL;
     return out;
 }
@@ -268,7 +269,7 @@ s_vcell *extract_voronoi_cell(const s_setup *setup, int vertex_id, s_bound_poly 
     int out = bounded_extraction(setup, vcell);
     if (out == 0) {
         puts("ERROR EXTRACTING VCELL!");
-        print_vcell(vcell);
+        // print_vcell(vcell);
         free_vcell(vcell);
         return NULL;
     }
@@ -302,14 +303,14 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, 
     vdiagram->bpoly = bpoly;
     
     for (int ii=0; ii<Nreal; ii++) {
-        for (int tries = 0; tries < 5; tries ++) { 
+        for (int tries = 0; tries < 2; tries ++) { 
             vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii, bpoly);
             if (vdiagram->vcells[ii] == NULL) continue;
             else break;
         }
         if (vdiagram->vcells[ii] == NULL || vdiagram->vcells[ii]->volume <= 0) {
-            puts("Could not construct vdiagram.");
-            free_vdiagram(vdiagram);
+            puts("OBS: Could not construct vdiagram.");
+            // free_vdiagram(vdiagram);
             return NULL;
         }
     }
