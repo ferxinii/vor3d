@@ -358,7 +358,7 @@ void flip32(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_ncell *nc1
     int d = nc2->vertex_id[opp_face_localid];
 
     // WE NEED TO MAKE SURE THEY ARE ORIENTED ??? TODO NOT SURE ABOUT THIS, IS IT NECESSARY?
-    static double *face_vertices[3];
+    double *face_vertices[3];
     face_vertices[0] = setup->points[a];
     face_vertices[1] = setup->points[b];
     face_vertices[2] = setup->points[c];
@@ -737,10 +737,9 @@ s_setup *initialize_setup(double **points, int N_points, int dim)
 
 int flip_tetrahedra(s_setup *setup, s_stack *stack, s_stack *stack_blocked, s_ncell *ncell, int opp_cell_id)
 {
-    static double **coords_face = NULL;
-    if (!coords_face) {
-        coords_face = malloc_matrix(3, 3);
-    }
+    double STORAGE[3*3];
+    double *coords_face[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
+
     extract_vertices_face(setup, ncell, &opp_cell_id, 2, coords_face);
 
     // Extract id of vertex in opposite cell corresponding to the face

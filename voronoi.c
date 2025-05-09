@@ -34,7 +34,7 @@ int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
     }
 
     double relative_diff =  (bp->volume - sum_vol) / bp->volume;
-    printf("rel_diff = %.16f\n", relative_diff);
+    // printf("rel_diff = %.16f\n", relative_diff);
     if (fabs(relative_diff) < 1e-3) return 1;
     else return 0;
 }

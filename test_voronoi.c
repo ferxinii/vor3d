@@ -90,18 +90,20 @@ int main(void)
     printf("volume: %f\n", bp_L->volume);
     printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_L->min[0], bp_L->min[1], bp_L->min[2], bp_L->max[0], bp_L->max[1], bp_L->max[2]);
     // plot_bpoly_with_points(bp_L, NULL, 0, "plot_vd/bp_L", NULL, "blue");
-    // s_vdiagram *vd_L = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
-    // if (!vd_L) { puts("Could not construct vd in max_tries."); exit(1); }
-    // check_volume(vd_L);
-    // plot_vdiagram_auto(vd_L, "plot_vd/L", 0);
-    // free_vdiagram(vd_L);
+
     
-    int Nsimu = 1;
+    int Nsimu = 10;
     // ADULT:
     s_bound_poly *bp_L_adult = scale_bpoly(bp_L, 1.06);
     z0 = bp_L_adult->min[2];
     zf = bp_L_adult->max[2];
     r_mean = 1.1;
+    // PLOT
+    // s_vdiagram *vd_L = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
+    // check_volume(vd_L);
+    // plot_vdiagram_auto(vd_L, "plot_vd/L", 0);
+    // free_vdiagram(vd_L);
+    // STATS
     generate_statistics(bp_L_adult, Nsimu, "volumes/L_adult.txt");
     PLOT_VOLUMES("volumes/L_adult");
 
@@ -141,20 +143,18 @@ int main(void)
     printf("volume: %f\n", bp_R->volume);
     printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_R->min[0], bp_R->min[1], bp_R->min[2], bp_R->max[0], bp_R->max[1], bp_R->max[2]);
     // plot_bpoly_with_points(bp_R, NULL, 0, "plot_vd/bp_R", NULL, "orange");
-    // s_vdiagram *vd_R = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
-    // if (!vd_R) { puts("Could not construct vd in max_tries."); exit(1); }
-    // check_volume(vd_R);
-    // FILE *f_vcells = fopen("test_vcells.txt", "w");
-    // write_vd_file(vd_L, f_vcells);
-    // fclose(f_vcells);
-    // plot_vdiagram_auto(vd_R, "plot_vd/R", 0);
-    // free_vdiagram(vd_R);
 
     // ADULT:
     s_bound_poly *bp_R_adult = scale_bpoly(bp_R, 1.06);
     z0 = bp_R_adult->min[2];
     zf = bp_R_adult->max[2];
     r_mean = 1.1;
+    // PLOT
+    // s_vdiagram *vd_R = construct_vd_from_txt(&r_fun, "lobes/R.txt", 5);
+    // check_volume(vd_R);
+    // plot_vdiagram_auto(vd_R, "plot_vd/R", 0);
+    // free_vdiagram(vd_R);
+    // STATS
     generate_statistics(bp_L_adult, Nsimu, "volumes/R_adult.txt");
     PLOT_VOLUMES("volumes/R_adult");
 

@@ -63,8 +63,9 @@ int in_sphere(double **p, double *q, int dim)
 
 int segment_crosses_triangle_3d(double **triangle, double *a, double *b)
 {
-    static double **aux = NULL;  // multithreaded will not work!
-    if (!aux) aux = malloc_matrix(3, 3);
+    double STORAGE[3*3];
+    double *aux[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
+
     aux[2][0] = a[0];     aux[2][1] = a[1];     aux[2][2] = a[2];
     
     if (orientation(triangle, a, 3) == orientation(triangle, b, 3)) return 0;
@@ -512,8 +513,8 @@ ch_vertex *convert_points_to_chvertex(double **points, int Np)
 
 double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double *ch_CM)
 {   // Normalized normals
-    static double **vertices_face = NULL;
-    if (!vertices_face) vertices_face = malloc_matrix(3, 3);
+    double STORAGE[3*3];
+    double *vertices_face[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
 
     double **out = malloc_matrix(Nf, 3);
     for (int ii=0; ii<Nf; ii++) {
@@ -574,6 +575,7 @@ double **extract_normals_from_ch_UNNORMALIZED(ch_vertex *vertices, int *faces, i
 { 
     double STORAGE[3*3];
     double *vertices_face[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
+
 
     double **out = malloc_matrix(Nf, 3);
     for (int ii=0; ii<Nf; ii++) {

@@ -204,10 +204,14 @@ void extract_vertices_face(const s_setup *setup, const s_ncell *ncell, const int
 
 void extract_face_center_and_normal(const s_setup *setup, const s_ncell *ncell, int face_localid, double *fc, double *n)
 {
-    static double **face_v = NULL;
-    if (!face_v) face_v = malloc_matrix(3, 3);
-    static double **ncell_v = NULL;
-    if (!ncell_v) ncell_v = malloc_matrix(4, 3);
+    double STORAGE1[3*3];
+    double *face_v[3] = {STORAGE1, STORAGE1 + 3, STORAGE1 + 6};
+
+    double STORAGE2[4*3];
+    double *ncell_v[4] = {STORAGE2, STORAGE2 + 3, STORAGE2 + 6, STORAGE2 + 9};
+
+
+
 
     extract_vertices_face(setup, ncell, &face_localid, 2, face_v);
     extract_vertices_ncell(setup, ncell, ncell_v);
@@ -321,16 +325,17 @@ void mark_ncells_incident_face(const s_setup *setup, s_ncell *ncell, const int *
 
 int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int id_opposite)
 {   // I.E., only return true if the point is INSIDE circumscr., not on it.
-    // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
-    static int prev_dim = 0;
-    static double **coords1 = NULL, **coords2 = NULL;
-    if (setup->dim != prev_dim) {
-        if (coords1) free_matrix(coords1, prev_dim + 1);
-        if (coords2) free_matrix(coords2, prev_dim + 1);
-        prev_dim = setup->dim;
-        coords1 = malloc_matrix(setup->dim + 1, setup->dim);
-        coords2 = malloc_matrix(setup->dim + 1, setup->dim);
-    }
+    double STORAGE1[(setup->dim+1)*(setup->dim)];
+    double *coords1[setup->dim+1];
+    for (int ii=0; ii<setup->dim+1; ii++) 
+        coords1[ii] = STORAGE1 + ii*(setup->dim);
+
+    double STORAGE2[(setup->dim+1)*(setup->dim)];
+    double *coords2[setup->dim+1];
+    for (int ii=0; ii<setup->dim+1; ii++) 
+        coords2[ii] = STORAGE2 + ii*(setup->dim);
+
+
 
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
@@ -354,16 +359,15 @@ int are_locally_delaunay_strict(const s_setup *setup, const s_ncell *ncell, int 
 
 int are_locally_delaunay_nonstrict(const s_setup *setup, const s_ncell *ncell, int id_opposite)
 {   // Points on circumscribed sphere are VALID
-    // Create array for coords1 in static memory, CANNOT BE MULTI-THREADED! FIXME
-    static int prev_dim = 0;
-    static double **coords1 = NULL, **coords2 = NULL;
-    if (setup->dim != prev_dim) {
-        if (coords1) free_matrix(coords1, prev_dim + 1);
-        if (coords2) free_matrix(coords2, prev_dim + 1);
-        prev_dim = setup->dim;
-        coords1 = malloc_matrix(setup->dim + 1, setup->dim);
-        coords2 = malloc_matrix(setup->dim + 1, setup->dim);
-    }
+    double STORAGE1[(setup->dim+1)*(setup->dim)];
+    double *coords1[setup->dim+1];
+    for (int ii=0; ii<setup->dim+1; ii++) 
+        coords1[ii] = STORAGE1 + ii*(setup->dim);
+
+    double STORAGE2[(setup->dim+1)*(setup->dim)];
+    double *coords2[setup->dim+1];
+    for (int ii=0; ii<setup->dim+1; ii++) 
+        coords2[ii] = STORAGE2 + ii*(setup->dim);
 
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
@@ -484,9 +488,8 @@ int point_in_face(double **vertices_face, double *p)
 int point_in_tetra_OLD(s_setup *setup, double *x, s_ncell *ncell)
 {
     assert(setup->dim == 3 && "next test not implemented, just in 3D.");
-
-    static double **facet_vertices = NULL;
-    if (!facet_vertices) facet_vertices = malloc_matrix(3, 3);
+    double STORAGE[3*3];
+    double *facet_vertices[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
 
     for (int ii=0; ii<4; ii++) {
         double *opposite_vertex = setup->points[ncell->vertex_id[ii]];
@@ -508,8 +511,8 @@ int point_in_tetra_OLD(s_setup *setup, double *x, s_ncell *ncell)
 int point_in_tetra(s_setup *setup, double *x, s_ncell *nc)
 {
     assert(setup->dim == 3);
-    static double **facet_vertices = NULL;
-    if (!facet_vertices) facet_vertices = malloc_matrix(3, 3);
+    double STORAGE[3*3];
+    double *facet_vertices[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
 
     double *v0 = setup->points[nc->vertex_id[0]];
     double *v1 = setup->points[nc->vertex_id[1]];
@@ -583,15 +586,10 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)
     for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
         current = current->next;
     }
-
-    // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
-    static int prev_dim = 0;
-    static double **facet_vertices = NULL;
-    if (setup->dim != prev_dim) {
-        if (facet_vertices) free_matrix(facet_vertices, prev_dim);
-        prev_dim = setup->dim;
-        facet_vertices = malloc_matrix(setup->dim, setup->dim);
-    }
+    double STORAGE1[(setup->dim)*(setup->dim)];
+    double *facet_vertices[setup->dim];
+    for (int ii=0; ii<setup->dim; ii++) 
+        facet_vertices[ii] = STORAGE1 + ii*(setup->dim);
     
     s_ncell *prev = current;
     STEP:
@@ -677,8 +675,8 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)
 
 int is_delaunay_3d(const s_setup *setup)
 {
-    static double **vertices_ncell = NULL;
-    if (!vertices_ncell) vertices_ncell = malloc_matrix(4, 3);
+    double STORAGE[4*3];
+    double *vertices_ncell[4] = {STORAGE, STORAGE + 3, STORAGE + 6, STORAGE + 9};
 
     s_ncell *current = setup->head;
     while (current) {
@@ -699,8 +697,8 @@ int is_delaunay_3d(const s_setup *setup)
 
 int is_delaunay_3d_old(const s_setup *setup)
 {
-    static double **vertices_ncell = NULL;
-    if (!vertices_ncell) vertices_ncell = malloc_matrix(4, 3);
+    double STORAGE[4*3];
+    double *vertices_ncell[4] = {STORAGE, STORAGE + 3, STORAGE + 6, STORAGE + 9};
 
     s_ncell *current = setup->head;
     while (current) {
@@ -754,8 +752,9 @@ double compute_volume_complex(s_setup *setup)
 
 void plot_add_ncell(FILE *pipe, s_setup *setup, s_ncell *ncell, char *config)
 {
-    static double **face_vertices = NULL;
-    if (!face_vertices) face_vertices = malloc_matrix(3, 3);
+    double STORAGE[3*3];
+    double *face_vertices[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
+
     for (int ii=0; ii<4; ii++) {
         extract_vertices_face(setup, ncell, &ii, 2, face_vertices);
         fprintf(pipe, "\"<echo \'");

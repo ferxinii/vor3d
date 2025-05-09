@@ -419,9 +419,10 @@ void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_f
     char buff[1024];
 
     FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
+    // fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
+    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 2160,2160 enhanced \n");
     fprintf(pipe, "set pm3d depth\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.1\n");
+    fprintf(pipe, "set pm3d border lc 'black' lw 0.01\n");
     fprintf(pipe, "set view 100, 10, 1.5\n");
     fprintf(pipe, "unset border\n");
     fprintf(pipe, "unset xtics\n");
