@@ -4,7 +4,7 @@
 #include "voronoi.h"
 
 
-#define FILE_BP "bp_points.txt"
+#define FILE_BP "bp_points.txt.aux"
 #define PLOT_VOLUMES(name) system("./plot_volumes.plt " name)
 
 double z0, zf, r_mean;
@@ -47,7 +47,7 @@ void generate_statistics(s_bound_poly *bp, int N_simu, char *FILE_VOLS)
 int main(void)
 {
     srand(time(NULL));
-    system("rm -f plot_vd/*");
+    // system("rm -f plot_vd/*");
     
 
     puts("\nTETRAHEDON:");
