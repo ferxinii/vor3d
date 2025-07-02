@@ -2,17 +2,16 @@
 #include <time.h>
 #include <stdlib.h>
 #include "voronoi.h"
-#include "geometry.h"
 
 
-#define FILE_BP "bp_points.txt"
+#define FILE_BP "bp_points.txt.aux"
 #define PLOT_VOLUMES(name) system("./plot_volumes.plt " name)
 
 double z0, zf, r_mean;
 
 double r_fun(double *x)
 {   
-    double K = - 2 * r_mean * 0.1 / (zf - z0);
+    double K = + 2 * r_mean * 0.1 / (zf - z0);
     // printf("%f\n", K * (x[2] - (z0 + zf)/2) + r_mean);
     return K * (x[2] - (z0 + zf)/2) + r_mean;
 }
@@ -48,7 +47,7 @@ void generate_statistics(s_bound_poly *bp, int N_simu, char *FILE_VOLS)
 int main(void)
 {
     srand(time(NULL));
-    system("rm -f plot_vd/*");
+    // system("rm -f plot_vd/*");
     
 
     puts("\nTETRAHEDON:");
@@ -99,10 +98,10 @@ int main(void)
     zf = bp_L_adult->max[2];
     r_mean = 1.1;
     // PLOT
-    // s_vdiagram *vd_L = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
-    // check_volume(vd_L);
+    s_vdiagram *vd_L = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
+    check_volume(vd_L);
     // plot_vdiagram_auto(vd_L, "plot_vd/L", 0);
-    // free_vdiagram(vd_L);
+    free_vdiagram(vd_L);
     // STATS
     generate_statistics(bp_L_adult, Nsimu, "volumes/L_adult.txt");
     PLOT_VOLUMES("volumes/L_adult");
@@ -150,10 +149,10 @@ int main(void)
     zf = bp_R_adult->max[2];
     r_mean = 1.1;
     // PLOT
-    // s_vdiagram *vd_R = construct_vd_from_txt(&r_fun, "lobes/R.txt", 5);
-    // check_volume(vd_R);
+    s_vdiagram *vd_R = construct_vd_from_txt(&r_fun, "lobes/R.txt", 5);
+    check_volume(vd_R);
     // plot_vdiagram_auto(vd_R, "plot_vd/R", 0);
-    // free_vdiagram(vd_R);
+    free_vdiagram(vd_R);
     // STATS
     generate_statistics(bp_L_adult, Nsimu, "volumes/R_adult.txt");
     PLOT_VOLUMES("volumes/R_adult");
