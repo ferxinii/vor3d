@@ -21,3 +21,7 @@ In the following example, we see how the code has been used to generate secondar
 <img src="./images/R_v2.png" alt="Example right lung" width="500" height="auto" />
 <img src="./images/L_v4.png" alt="Example left lung" width="500" height="auto">
 </p>
+
+
+### Source
+Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*
