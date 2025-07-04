@@ -18,6 +18,6 @@ Given a set of seeds, the code first constructs the corresponding Delaunay trian
 In the following example, we see how the code has been used to generate secondary lung lobules inside a lung geometry.
 
 <p align="center">
-<img src="./images/R_v2.png" alt="Example right lung" width="600" height="auto" />
-<img src="./images/L_v3.png" alt="Example left lung" width="600" height="auto">
+<img src="./images/R_v2.png" alt="Example right lung" width="500" height="auto" />
+<img src="./images/L_v3.png" alt="Example left lung" width="500" height="auto">
 </p>
