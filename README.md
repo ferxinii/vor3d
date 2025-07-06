@@ -23,7 +23,7 @@ In the following example, we see how the code has been used to generate secondar
 </p>
 
 ## Usage
-The most high-level interface is in *voronoi.h*. The main function is *construct_vd_from_txt*. It reads the bounding polyhedron's coordinates from a .txt file, and generates inside of it a set of random seeds using the method of *Poisson disc sampling* with a user specified sizing function (local minimum distance between points). The output is a voronoi diagram structure (*vd_3d.h*).
+The most high-level interface is in *voronoi.h*. The main function is *construct_vd_from_txt*. It reads the bounding polyhedron's coordinates from a .txt file, and generates inside of it a set of random seeds using the method of *Poisson disc sampling* with a user specified sizing function (local minimum distance between points). The output is the corresponding Voronoi diagram structure (*vd_3d.h*).
 
 If the user needs to specify the seeds manually, they shall use lower-level already implemented functions.
 
