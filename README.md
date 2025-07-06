@@ -27,5 +27,6 @@ The most high-level interface is in *voronoi.h*. The main function is *construct
 
 If the user needs to specify the seeds manually, they shall use lower-level already implemented functions.
 
-### Source
+### References
 Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*
+Adaptive precision arithmetic: *Adaptive Precision Floating-Point Arithmetic and Fast Robust Predicates for Computational Geometry. Jonathan Richard Shewchuk.*
