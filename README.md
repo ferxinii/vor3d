@@ -22,6 +22,8 @@ In the following example, we see how the code has been used to generate secondar
 <img src="./images/L_v4.png" alt="Example left lung" width="400" height="auto">
 </p>
 
+## Usage
+The most high-level interface is in *voronoi.h*. The main function is *construct_vd_from_txt*. It reads the bounding polyhedron's coordinates from a .txt file, and generates inside of it a set of random seeds using the method of *Poisson disc sampling* with a user specified sizing function (local minimum distance between points). If the user needs to specify the seeds manually, they may need to use lower-level already implemented functions.
 
 ### Source
 Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*
