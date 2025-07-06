@@ -15,7 +15,7 @@ Given a set of seeds, the code first constructs the corresponding Delaunay trian
 
 
 ## Complex example
-In the following example, we see how the code has been used to generate secondary lung lobules inside a lung geometry.
+In the following example, we see how the code has been used to generate secondary pulmonary lobules inside a lung geometry.
 
 <p align="center">
 <img src="./images/R_v2.png" alt="Example right lung" width="400" height="auto" />
