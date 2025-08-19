@@ -1,4 +1,23 @@
+CC      = clang
+CFLAGS  = -Wall -Wextra -Wpedantic -Iinclude -Igeometric_predicates/include
+AR      = ar
 
+SRC     = $(wildcard src/*.c)
+OBJ     = $(SRC:.c=.o)
 
-make: 
-	clang test_voronoi.c voronoi.c vd_3d.c bpoly.c algebra.c geometry.c dt_3d_incremental.c simplical_complex.c convhull_3d.c ./predicates/build/Bin/libpredicates.dylib -o test_voronoi -Wpedantic -Wextra -Wall -Werror -Wl,-rpath,./predicates/build/Bin/ -O3 -g
+GEOM_PRED_LIB = geometric_predicates/build/Bin/libpredicates.a
+
+LIB     = voronoi3d.a
+
+all: $(LIB)
+
+# link program into a single archive
+$(LIB): $(OBJ) $(GEOM_PRED_LIB)
+	@mkdir -p tmp_objs
+	@cd tmp_objs && ar -x ../$(GEOM_PRED_LIB)
+	@$(AR) rcs $@ $(OBJ) tmp_objs/*.o
+	@rm -rf tmp_objs
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+

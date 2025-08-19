@@ -32,4 +32,4 @@ If the user needs to specify the seeds manually, they shall use lower-level alre
 ### References
 Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*
 
-Adaptive precision arithmetic: *Adaptive Precision Floating-Point Arithmetic and Fast Robust Predicates for Computational Geometry. Jonathan Richard Shewchuk.*
+Geometric predicates: [danshapero/predicates](https://github.com/danshapero/predicates).
