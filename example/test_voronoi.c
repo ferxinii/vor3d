@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include "voronoi.h"
 
-
 #define FILE_BP "bp_points.txt.aux"
 #define PLOT_VOLUMES(name) system("./plot_volumes.plt " name)
 
@@ -47,7 +46,7 @@ void generate_statistics(s_bound_poly *bp, int N_simu, char *FILE_VOLS)
 int main(void)
 {
     srand(time(NULL));
-    // system("rm -f plot_vd/*");
+    // system("rm -f plots/*");
     
 
     puts("\nTETRAHEDON:");
@@ -55,7 +54,7 @@ int main(void)
     // s_vdiagram *vd_tet = construct_vd_from_txt(&r_fun, FILE_BP, 5);
     // if (!vd_tet) { puts("Could not construct vd in max_tries."); exit(1); }
     // check_volume(vd_tet);
-    // plot_vdiagram_auto(vd_tet, "plot_vd/tet", 0);
+    // plot_vdiagram_auto(vd_tet, "plots/tet", 0);
     // free_vdiagram(vd_tet);
 
     puts("\nCUBE:");
@@ -66,7 +65,7 @@ int main(void)
     // FILE *f_vcells = fopen("test_vcells.txt", "w");
     // write_vd_file(vd_cube, f_vcells);
     // fclose(f_vcells);
-    // plot_vdiagram_auto(vd_cube, "plot_vd/cube", 5);
+    // plot_vdiagram_auto(vd_cube, "plots/cube", 5);
     // free_vdiagram(vd_cube);
 
     puts("\nSPHERE:");
@@ -75,7 +74,7 @@ int main(void)
     // if (!vd_sph) { puts("Could not construct vd in max_tries."); exit(1); }
     // check_volume(vd_sph);
     // fclose(f_vcells);
-    // plot_vdiagram_auto(vd_sph, "plot_vd/sph", 5);
+    // plot_vdiagram_auto(vd_sph, "plots/sph", 5);
     // free_vdiagram(vd_sph);
     
 
@@ -88,7 +87,7 @@ int main(void)
     new_bpoly_from_txt("lobes/L.txt", &points_bp_L, &Np_L, &bp_L, 0);
     printf("volume: %f\n", bp_L->volume);
     printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_L->min[0], bp_L->min[1], bp_L->min[2], bp_L->max[0], bp_L->max[1], bp_L->max[2]);
-    // plot_bpoly_with_points(bp_L, NULL, 0, "plot_vd/bp_L", NULL, "blue");
+    // plot_bpoly_with_points(bp_L, NULL, 0, "plots/bp_L", NULL, "blue");
 
     
     int Nsimu = 10;
@@ -100,7 +99,7 @@ int main(void)
     // PLOT
     s_vdiagram *vd_L = construct_vd_from_txt(&r_fun, "lobes/L.txt", 5);
     check_volume(vd_L);
-    // plot_vdiagram_auto(vd_L, "plot_vd/L", 0);
+    // plot_vdiagram_auto(vd_L, "plots/L", 0);
     free_vdiagram(vd_L);
     // STATS
     generate_statistics(bp_L_adult, Nsimu, "volumes/L_adult.txt");
@@ -141,7 +140,7 @@ int main(void)
     new_bpoly_from_txt("lobes/R.txt", &points_bp_R, &Np_R, &bp_R, 0);
     printf("volume: %f\n", bp_R->volume);
     printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_R->min[0], bp_R->min[1], bp_R->min[2], bp_R->max[0], bp_R->max[1], bp_R->max[2]);
-    // plot_bpoly_with_points(bp_R, NULL, 0, "plot_vd/bp_R", NULL, "orange");
+    // plot_bpoly_with_points(bp_R, NULL, 0, "plots/bp_R", NULL, "orange");
 
     // ADULT:
     s_bound_poly *bp_R_adult = scale_bpoly(bp_R, 1.06);
@@ -151,7 +150,7 @@ int main(void)
     // PLOT
     s_vdiagram *vd_R = construct_vd_from_txt(&r_fun, "lobes/R.txt", 5);
     check_volume(vd_R);
-    // plot_vdiagram_auto(vd_R, "plot_vd/R", 0);
+    // plot_vdiagram_auto(vd_R, "plots/R", 0);
     free_vdiagram(vd_R);
     // STATS
     generate_statistics(bp_L_adult, Nsimu, "volumes/R_adult.txt");

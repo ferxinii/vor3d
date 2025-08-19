@@ -8,17 +8,6 @@
 #include <assert.h>
 
 
-// BP.C
-// extern void generate_file_cube_bp(const char *filename, double length);
-// extern void generate_file_tetrahedron_bp(const char *filename, double length);
-// extern void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
-
-
-// VD_3D.C
-// extern void clear_volumes_file(char *fname);
-// extern void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id);
-// extern void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
-
 
 int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
 {
