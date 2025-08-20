@@ -33,3 +33,5 @@ If the user needs to specify the seeds manually, they shall use deeper-level alr
 Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*
 
 Geometric predicates: [danshapero/predicates](https://github.com/danshapero/predicates).
+
+Convhull_3d: [leomccormack/convhull_3d](https://github.com/leomccormack/convhull_3d).
