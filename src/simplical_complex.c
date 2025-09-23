@@ -1,9 +1,7 @@
 
 #include "simplical_complex.h"
-#include "algebra.h"
 #include "geometry.h"
 #include "array_operations.h"
-#include "predicates.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -389,67 +387,6 @@ int are_locally_delaunay_nonstrict(const s_setup *setup, const s_ncell *ncell, i
 }
 
 
-// int pd_intersects_face(double *s1, double *s2, double *p, double *d, int drop_coord)
-// {
-//     int i1, i2;
-//     if (drop_coord == 0) {
-//         i1 = 1;     i2 = 2;
-//     } else if (drop_coord == 1) {
-//         i1 = 2;     i2 = 0;
-//     } else {
-//         i1 = 0;     i2 = 1;
-//     }
-//
-//     double A[2], B[2], paux[2], daux[2];
-//     A[0] = s1[i1];    A[1] = s1[i1];
-//     B[0] = s2[i1];    B[1] = s2[i2];
-//     paux[0] = p[i1];  paux[1] = p[i2];
-//     daux[0] = d[i1];  daux[1] = d[i2];
-//     
-//     // printf("A: (%f, %f), B: (%f, %f), p: (%f, %f), d: (%f, %f)\n", A[0], A[1], B[0], B[1], p[0], p[1], d[0], d[1]);
-//     assert(!(p[0] == d[0] && p[1] == d[1]));
-//     assert(!(A[0] == B[0] && A[1] == B[1]));
-//     return segments_intersect_2d(A, B, paux, daux);
-// }
-//
-//
-// int point_in_face(double **vertices_face, double *p, double *d) 
-// {
-//     double n[3], d1[3], d2[3];
-//     d1[0] = vertices_face[1][0] - vertices_face[0][0];
-//     d1[1] = vertices_face[1][1] - vertices_face[0][1];
-//     d1[2] = vertices_face[1][2] - vertices_face[0][2];
-//     d2[0] = vertices_face[2][0] - vertices_face[0][0];
-//     d2[1] = vertices_face[2][1] - vertices_face[0][1];
-//     d2[2] = vertices_face[2][2] - vertices_face[0][2];
-//     cross_3d(d1, d2, n);
-//
-//     int drop_coord = 2;
-//     if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) drop_coord = 0;
-//     else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) drop_coord = 1;
-//
-//     double *aux[3];
-//     aux[0] = p; 
-//
-//     aux[1] = vertices_face[0];
-//     aux[2] = vertices_face[1];
-//     if (orientation(aux, d, 3) == 0 &&
-//         pd_intersects_face(vertices_face[0], vertices_face[1], p, d, drop_coord)) return 1;
-//
-//     aux[1] = vertices_face[1];
-//     aux[2] = vertices_face[2];
-//     if (orientation(aux, d, 3) == 0 &&
-//         pd_intersects_face(vertices_face[1], vertices_face[2], p, d, drop_coord)) return 1;
-//
-//     aux[1] = vertices_face[0];
-//     aux[2] = vertices_face[2];
-//     if (orientation(aux, d, 3) == 0 &&
-//         pd_intersects_face(vertices_face[0], vertices_face[2], p, d, drop_coord)) return 1;
-//     
-//     return 0;
-// }
-
-
 int point_in_face(double **vertices_face, double *p)
 {
     double n[3], d1[3], d2[3];
@@ -548,20 +485,6 @@ int point_in_tetra(s_setup *setup, double *x, s_ncell *nc)
         (s2 && s2 != ref) || (s3 && s3 != ref)   )
         return 0;
     
-    // if (abs(s0) + abs(s1) + abs(s2) + abs(s3) < 3) {
-    //     printf("ATTENTION: "); print_ncell(setup, nc);
-    //     printf("(%f, %f, %f), ", v0[0], v0[1], v0[2]);
-    //     printf("(%f, %f, %f), ", v1[0], v1[1], v1[2]);
-    //     printf("(%f, %f, %f), ", v2[0], v2[1], v2[2]);
-    //     printf("(%f, %f, %f)\n", v3[0], v3[1], v3[2]);
-    //     printf("p: (%f, %f, %f)\n", x[0], x[1], x[2]);
-    //
-    //     printf("orientation: %f\n", orient3d(v0, v1, v2, v3));
-    //     printf("%d, %d, %d, %d\n", s0, s1, s2, s3);
-    // }
-    // assert(abs(s0) + abs(s1) + abs(s2) + abs(s3) >= 3 && "point in edge!");
-    // if (s0 == 0 || s1 == 0 || s2 == 0 || s3 == 0) printf("\nIN FACE!!\n");
-
     return 1;
 }
 
@@ -628,51 +551,6 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p)
 }
 
 
-
-// s_ncell *in_ncell_walk(s_setup *setup, double *p)  // Should make sure that p is inside the convull of all points (inside an n-cell)
-// {
-//     s_ncell *current = setup->head;
-//     assert(setup->N_ncells >= 1 && "N_ncells < 1");
-//     int randi = (rand() % setup->N_ncells);
-//     for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
-//         current = current->next;
-//     }
-//
-//     // Create array for facet_vertices in static memory, CANNOT BE MULTI-THREADED! FIXME
-//     static int prev_dim = 0;
-//     static double **facet_vertices = NULL;
-//     if (setup->dim != prev_dim) {
-//         if (facet_vertices) free_matrix(facet_vertices, prev_dim);
-//         prev_dim = setup->dim;
-//         facet_vertices = malloc_matrix(setup->dim, setup->dim);
-//     }
-//
-//     STEP:
-//     for (int ii=0; ii<setup->dim+1; ii++) {
-//         double *opposite_vertex = setup->points[current->vertex_id[ii]];
-//
-//         s_ncell *next = current->opposite[ii];
-//         if (next) {
-//             extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
-//
-//             int o1 = orientation(facet_vertices, opposite_vertex, setup->dim);
-//             int o2 = orientation(facet_vertices, p, setup->dim);
-//             assert(o1 != 0);
-//             if (o2 == 0) {
-//                 if (point_in_tetra(setup, p, current)) return current;
-//                 // if (point_in_tetra(setup, p, next)) return next;
-//             } else if (o1 != o2) {
-//                 current = next;
-//                 goto STEP;
-//             }
-//         }
-//     }
-//     
-//     return current;
-// }
-
-
-
 int is_delaunay_3d(const s_setup *setup)
 {
     double STORAGE[4*3];
@@ -693,38 +571,6 @@ int is_delaunay_3d(const s_setup *setup)
     }
     return 1;
 }
-
-
-int is_delaunay_3d_old(const s_setup *setup)
-{
-    double STORAGE[4*3];
-    double *vertices_ncell[4] = {STORAGE, STORAGE + 3, STORAGE + 6, STORAGE + 9};
-
-    s_ncell *current = setup->head;
-    while (current) {
-        extract_vertices_ncell(setup, current, vertices_ncell);
-        s_ncell *query = current->next;
-        while (query) {
-            for (int ii=0; ii<4; ii++) {
-                if (!inarray(current->vertex_id, 4, query->vertex_id[ii])) {
-                    int in_sph = in_sphere(vertices_ncell, setup->points[query->vertex_id[ii]], 3);
-                    if (in_sph == 1) {
-                        printf("CONFLICT: (%d, %d, %d, %d) and %d, in_sphere: %d\n", 
-                                current->vertex_id[0], current->vertex_id[1], 
-                                current->vertex_id[2], current->vertex_id[3], 
-                                query->vertex_id[ii], in_sphere(vertices_ncell, 
-                                setup->points[query->vertex_id[ii]], 3));
-                        return 0;
-                    }
-                }
-            }
-            query = query->next;
-        }
-        current = current->next;
-    }
-    return 1;
-}
-
 
 
 void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell)

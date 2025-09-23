@@ -405,7 +405,7 @@ void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
     fprintf(pipe, "set output '%s.pdf'\n", f_name);
     fprintf(pipe, "splot ");
     plot_add_vcell(pipe, vcell, "w polygons fs transparent solid 0.6 notitle");
-    plot_add_bpoly(pipe, vdiag->bpoly, "w polygonf transparent solid 0.1 notitle");
+    plot_add_bpoly(pipe, vdiag->bpoly, "w polygons transparent solid 0.1 notitle");
     fprintf(pipe, "\n");
     pclose(pipe);
 }

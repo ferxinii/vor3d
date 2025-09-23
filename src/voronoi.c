@@ -8,7 +8,6 @@
 #include <assert.h>
 
 
-
 int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
 {
     double sum_vol = 0;

@@ -40,20 +40,6 @@ void stack_push(s_stack *stack, s_ncell *ncell)
 }
 
 
-// void stack_push_bottom(s_stack *stack, s_ncell *ncell, int vid)
-// {
-//     assert(stack->size < MAX_STACK_SIZE && "Reached stack limit.");
-//     for (int ii=0; ii<stack->size; ii++) {
-//         if (stack->entry[ii] == ncell) return;
-//     }
-//     for (int ii=stack->size; ii>0; --ii) {
-//         stack->entry[ii] = stack->entry[ii-1];
-//     }
-//     stack->entry[0] = ncell;
-//     stack->size++;
-// }
-
-
 s_ncell *stack_pop(s_stack *stack)
 {   
     if (stack->size == 0) return NULL;
@@ -170,7 +156,6 @@ void flip14(s_setup *setup, s_ncell *container_ncell, int point_id, s_stack *sta
     nc2->opposite[1] = opposite_aux[1];
     nc2->opposite[2] = nc3;
     nc2->opposite[3] = nc4;
-
     if (opposite_aux[1]) {  // This is untested? TODO
         aux = 1;
         face_localid_of_adjacent_ncell(setup, nc2, &aux, 2, 1, &opp_id); 

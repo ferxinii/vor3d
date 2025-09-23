@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdlib.h>
 
+
 int id_where_equal_int(const int *arr, int N, int entry) 
 {
     for (int ii=0; ii<N; ii++) {
