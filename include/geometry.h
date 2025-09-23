@@ -1,5 +1,5 @@
-#ifndef GEOMETRY_H
-#define GEOMETRY_H
+#ifndef VOR3D_GEOMETRY_H
+#define VOR3D_GEOMETRY_H
 
 #include "convhull_3d.h"
 
@@ -20,12 +20,10 @@ void closest_point_on_segment(double *p, double *A, double *B, double *OUT);
 int point_in_triangle_2d_NEW(double *v1, double *v2, double *v3, double *p);
 int point_in_triangle_2d(double *v1, double *v2, double *v3, double *p);
 int point_in_triangle_2d_candegenerate(double *v1, double *v2, double *v3, double *p);
-int ray_triangle_intersection_3d(double **triangle, const double *origin, const double *dir, double *intersection);
 ch_vertex *convert_points_to_chvertex(double **points, int Np);
 double **extract_normals_from_ch(ch_vertex *vertices, int *faces, int Nf, double *ch_CM);
 double **extract_normals_from_ch_UNNORMALIZED(ch_vertex *vertices, int *faces, int Nf, double *ch_CM);
 int is_inside_convhull(double *query, double **pch, int *faces, double **fnormals, int Nf);
-void inside_ray_convhull_intersection(double **pch, int *faces, double **fnormals, int Nf, double *origin, double *dir, double *OUT);
 int is_in_boundary_convhull(int *faces, int Nf, int vid);
 void random_point_uniform_3d(double *min, double *max, double *out);
 void random_point_inside_convhull(double **pch, int *faces, double **fnormals, int Nf, double *min, double *max, double *out);

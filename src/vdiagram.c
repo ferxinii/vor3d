@@ -1,7 +1,6 @@
 // [ ] TODO Improve malloc of vertices, or check if i have reached VCELL_MAX_VERTICES to increase size as needed
-#include "vd_3d.h"
+#include "vdiagram.h"
 #include "simplical_complex.h"
-#include "array_operations.h"
 #include "bpoly.h"
 #include "algebra.h"
 #include "geometry.h"
@@ -11,6 +10,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <math.h>
 
 
 void free_vcell(s_vcell *vcell)

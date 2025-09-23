@@ -1,0 +1,5 @@
+
+[ ] Plots using gnuplotc
+[ ] Seeds from array, instead of only Poisson disc sampled
+
+

@@ -3,10 +3,11 @@
 #include "algebra.h"
 #include "predicates.h"
 #include "convhull_3d.h"
-#include "array_operations.c"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
+#include <assert.h>
 
 
 int orientation(double **p, double *q, int dim)

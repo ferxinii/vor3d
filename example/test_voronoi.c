@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
-#include "voronoi.h"
+#include "vor3d.h"
 
 #define FILE_BP "bp_points.txt.aux"
 #define PLOT_VOLUMES(name) system("./plot_volumes.plt " name)

@@ -1,18 +1,14 @@
-#ifndef BPOLY_H
-#define BPOLY_H
+#ifndef VOR3D_BPOLY_H
+#define VOR3D_BPOLY_H
 
-#include "float.h"
-// #define TPH_POISSON_IMPLEMENTATION
-#include "poisson_disk.h"
-
-
+// Used for Poisson disc sampling inside bpoly:
 #define MAX_TRIAL_POINTS 10000
 #define MAX_TRIAL_TESTS 50
 typedef struct point {
     double coords[3];
 } s_point;
 
-
+// Main structure
 typedef struct bound_poly {
     int Np;
     double **points;
@@ -25,7 +21,6 @@ typedef struct bound_poly {
     double max[3];
     double volume;
 } s_bound_poly;
-
 
 void free_bpoly(s_bound_poly *bpoly);
 void add_noise_to_bp(s_bound_poly *bpoly);
@@ -41,23 +36,17 @@ void scale_bpoly_vertices(double **points, int Np, double s);
 s_bound_poly *scale_bpoly(s_bound_poly *bp, double factor);
 s_bound_poly *scale_bpoly_objective_volume(s_bound_poly *bp, double objective_volume);
 
-
 double compute_volume_bpoly(s_bound_poly *bpoly);
-
 
 void find_closest_point_on_bp(s_bound_poly *bp, double *p, double *OUT);
 
-
-
 int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3, double **all_seeds, int Ns, int seed_id);
 int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns);
-
 
 void random_point_uniform(double *min, double *max, s_point *out);
 void random_point_around(double *x, double r, double *out);
 int is_valid(s_bound_poly *bpoly, double *q, s_point *samples, int Nsamples, double (*rmax)(double *));
 double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*rmax)(double *), int *Np_generated);
-
 
 void generate_file_cube_bp(const char *filename, double length);
 void generate_file_tetrahedron_bp(const char *filename, double length);

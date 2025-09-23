@@ -1,11 +1,12 @@
-#include "voronoi.h"
+#include "vor3d.h"
 #include "simplical_complex.h"
-#include "dt_3d_incremental.h"
-#include "vd_3d.h"
+#include "delaunay.h"
+#include "vdiagram.h"
 #include "bpoly.h"
 #include "geometry.h"
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 
 
 int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
