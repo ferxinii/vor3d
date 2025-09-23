@@ -1,7 +1,7 @@
 
 #include "simplical_complex.h"
 #include "geometry.h"
-#include "array_operations.h"
+#include "algebra.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -207,9 +207,6 @@ void extract_face_center_and_normal(const s_setup *setup, const s_ncell *ncell, 
 
     double STORAGE2[4*3];
     double *ncell_v[4] = {STORAGE2, STORAGE2 + 3, STORAGE2 + 6, STORAGE2 + 9};
-
-
-
 
     extract_vertices_face(setup, ncell, &face_localid, 2, face_v);
     extract_vertices_ncell(setup, ncell, ncell_v);

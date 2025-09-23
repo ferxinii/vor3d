@@ -1,5 +1,5 @@
-#ifndef DT_3D_INCREMENTAL_H
-#define DT_3D_INCREMENTAL_H
+#ifndef VOR3D_DELAUNAY
+#define VOR3D_DELAUNAY
 
 #include "simplical_complex.h"
 

@@ -1,5 +1,6 @@
-CC      = clang
-CFLAGS  = -Wall -Wextra -Wpedantic -I../include 
+CC      = gcc
+CFLAGS  = -Wall -Wextra -Wpedantic -I../include \
+		  -Wl,--gc-sections,--print-gc-sections
 
 # default target
 all: test_voronoi

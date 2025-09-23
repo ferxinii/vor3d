@@ -7,7 +7,7 @@ OBJ_DIR = obj
 OBJ     = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRC))
 
 GEOM_PRED_LIB = geometric_predicates/build/Bin/libpredicates.a
-LIB     = voronoi3d.a
+LIB     = vor3d.a
 
 all: $(LIB)
 

@@ -1,7 +1,6 @@
 
-#include "dt_3d_incremental.h"
+#include "delaunay.h"
 #include "simplical_complex.h"
-#include "array_operations.h"
 #include "algebra.h"
 #include "geometry.h"
 #include <assert.h>

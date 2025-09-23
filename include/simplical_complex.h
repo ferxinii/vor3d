@@ -1,5 +1,5 @@
-#ifndef SIMPLICAL_COMPLEX_H
-#define SIMPLICAL_COMPLEX_H
+#ifndef VOR3D_SIMPLICAL_COMPLEX_H
+#define VOR3D_SIMPLICAL_COMPLEX_H
 
 #include <stdio.h>
 

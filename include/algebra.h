@@ -1,5 +1,8 @@
-#ifndef ALGEBRA_H
-#define ALGEBRA_H
+#ifndef VOR3D_ALGEBRA_H
+#define VOR3D_ALGEBRA_H
+
+int id_where_equal_int(const int *arr, int N, int entry);
+int inarray(const int *arr1, int N, int a);
 
 double **malloc_matrix(int N1, int N2);
 double **realloc_matrix(double **matrix, int old_rows, int new_rows, int ncols);
