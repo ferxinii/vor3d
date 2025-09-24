@@ -1,5 +1,6 @@
 
 [ ] Plots using gnuplotc
 [ ] Seeds from array, instead of only Poisson disc sampled
+[ ] Simplify new_bpoly_from_txt...
 
 
