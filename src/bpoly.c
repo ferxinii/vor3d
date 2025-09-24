@@ -130,7 +130,7 @@ s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise)
 }
 
 
-void new_bpoly_from_txt(const char *fname, double ***OUT_points, int *OUT_Np, s_bound_poly **OUT_bpoly, int add_noise)
+s_bound_poly *new_bpoly_from_txt(const char *fname)
 {
     FILE *f = fopen(fname, "r");
     if (!f) {
@@ -138,15 +138,15 @@ void new_bpoly_from_txt(const char *fname, double ***OUT_points, int *OUT_Np, s_
         exit(1);
     }
     
-    fscanf(f, "%d\n\n", OUT_Np);
+    int Np;
+    fscanf(f, "%d\n\n", &Np);
 
-    *OUT_points = malloc_matrix(*OUT_Np, 3);
-    for (int ii=0; ii<*OUT_Np; ii++) {
-        fscanf(f, "%lf, %lf, %lf\n", &(*OUT_points)[ii][0], &(*OUT_points)[ii][1], &(*OUT_points)[ii][2]); 
+    double **points = malloc_matrix(Np, 3);
+    for (int ii=0; ii<Np; ii++) {
+        fscanf(f, "%lf, %lf, %lf\n", &points[ii][0], &points[ii][1], &points[ii][2]); 
     }
 
-
-    *OUT_bpoly = new_bpoly_from_points(*OUT_points, *OUT_Np, add_noise);
+     return new_bpoly_from_points(points, Np, 0);
 }
 
 

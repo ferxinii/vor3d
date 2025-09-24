@@ -29,68 +29,94 @@ int valid_volumes(s_bound_poly *bp, s_vdiagram *vd)
 }
 
 
-s_vdiagram *construct_vd_from_txt(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries)
+
+// GENERALISED SEED HANDLING
+
+typedef struct {
+    int Ns;
+    double **seeds;
+} s_seed_set;
+
+typedef union {
+    s_seed_set seed_set;
+    double (*f_radius_poiss)(double *);
+} seed_userdata;
+
+typedef s_seed_set (*f_seed_generator)(s_bound_poly *bp, seed_userdata ud);
+
+static s_seed_set fixed_generator(s_bound_poly *bp, seed_userdata ud) {
+    (void)bp;
+    return ud.seed_set;
+}
+
+static s_seed_set PDS_generator(s_bound_poly *bp, seed_userdata ud) {
+    int Ns;
+    double **seeds = generate_nonuniform_poisson_dist_inside(bp, ud.f_radius_poiss, &Ns);
+    return (s_seed_set){Ns, seeds};
+}
+
+static s_vdiagram *vor3d_core(s_bound_poly *bp, int max_tries, f_seed_generator f_seeds, seed_userdata ud)
 {
-    for (int ii=0; ii<max_tries; ii++) {
-        double **points_bp;
-        int N_points_bp;
-        s_bound_poly *bp;
-        new_bpoly_from_txt(file_bounding_polyhedron, &points_bp, &N_points_bp, &bp, 0);
-        if (bp->Nf == 0) {
-            free_bpoly(bp);
+    s_bound_poly *bp_tmp = new_bpoly_copy(bp);
+    for (int ii = 0; ii < max_tries; ii++) {
+        s_seed_set seed_set = f_seeds(bp_tmp, ud);
+        double **seeds = seed_set.seeds;
+        int Ns = seed_set.Ns;
+        int Ns_extended = extend_sites_mirroring(bp_tmp, &seeds, Ns);
+
+        s_setup *dt = construct_dt_3d(seeds, Ns_extended);
+
+        s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp_tmp, Ns);
+        if (!vd) {  // Retry
+            free_bpoly(bp_tmp);
+            bp_tmp = new_bpoly_copy(bp);
             continue;
         }
 
-        int Ns;
-        double **seeds = generate_nonuniform_poisson_dist_inside(bp, f_radius_poiss, &Ns);
-        
-        int Ns_extended = extend_sites_mirroring(bp, &seeds, Ns);
-        
-        s_setup *dt = construct_dt_3d(seeds, Ns_extended);
-        
-        s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp, Ns);
-        if (!vd) continue;
-
-        // printf("DEBUG CONSTRUCT VD: NS=%d, vd=%p\n", Ns_extended, (void*)vd);
-
-        if (valid_volumes(bp, vd)) return vd;
-        else free_vdiagram(vd);
+        if (valid_volumes(bp, vd)) {  // Return, with original bp
+            free_bpoly(bp_tmp);
+            vd->bpoly = bp;
+            return vd;  
+        } else {
+            free_vdiagram(vd);
+            bp_tmp = new_bpoly_copy(bp);
+        }
     }
+    free_bpoly(bp_tmp);
     return NULL;
 }
 
 
-s_vdiagram *construct_vd_from_bp(double (*f_radius_poiss)(double *), s_bound_poly *bp, int max_tries)
-{
-    s_bound_poly *bp_tmp = new_bpoly_copy(bp);
-    for (int ii=0; ii<max_tries; ii++) {
-        int Ns;
-        if (bp_tmp->Nf == 0) {
-            puts("What??");
-        }
-        double **seeds = generate_nonuniform_poisson_dist_inside(bp_tmp, f_radius_poiss, &Ns);
-        
-        int Ns_extended = extend_sites_mirroring(bp_tmp, &seeds, Ns);
-        
-        printf("Ns_extended = %d\n", Ns_extended);
-
-        s_setup *dt = construct_dt_3d(seeds, Ns_extended);
-        
-        s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp_tmp, Ns);
-        if (!vd) {
-            bp_tmp = new_bpoly_copy(bp);
-            printf("DEBUG: %d\n", bp_tmp->Nf);
-            continue;
-        }
-
-        // printf("DEBUG CONSTRUCT VD: NS=%d, vd=%p\n", Ns_extended, (void*)vd);
-        // puts("CONTINUED!");
-
-        if (valid_volumes(bp, vd)) return vd;
-        else {free_vdiagram(vd); bp_tmp = new_bpoly_copy(bp);}
-    }
+s_vdiagram *vor3d_from_txt(double **seeds, int Ns, char *file_bounding_polyhedron, int max_tries)
+{   
+    s_bound_poly *bp = new_bpoly_from_txt(file_bounding_polyhedron);
+    if (bp->Nf == 0) { free_bpoly(bp); puts("Error: bp->Nf == 0..."); exit(1); }
     
-    free_bpoly(bp_tmp);
-    return NULL;
+    seed_userdata ud = {.seed_set = {Ns, seeds}};
+    return vor3d_core(bp, max_tries, &fixed_generator, ud);
+}
+
+
+s_vdiagram *vor3d_from_txt_PDS(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries)
+{   
+    s_bound_poly *bp = new_bpoly_from_txt(file_bounding_polyhedron);
+    if (bp->Nf == 0) { free_bpoly(bp); puts("Error: bp->Nf == 0..."); exit(1); }
+    
+    seed_userdata ud = {.f_radius_poiss = f_radius_poiss};
+    return vor3d_core(bp, max_tries, &PDS_generator, ud);
+}
+
+
+s_vdiagram *vor3d_from_bp(double **seeds, int Ns, s_bound_poly *bp, int max_tries)
+{
+    seed_userdata ud = {.seed_set = {Ns, seeds}};
+    return vor3d_core(bp, max_tries, &fixed_generator, ud);
+}
+
+
+s_vdiagram *vor3d_from_bp_PDS(double (*f_radius_poiss)(double *), s_bound_poly *bp, int max_tries)
+{   
+    seed_userdata ud = {.f_radius_poiss = f_radius_poiss};
+    return vor3d_core(bp, max_tries, &PDS_generator, ud);
 }
 

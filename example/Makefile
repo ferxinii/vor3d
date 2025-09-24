@@ -1,15 +1,14 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -Wpedantic -I../include \
-		  -Wl,--gc-sections,--print-gc-sections
+CFLAGS  = -Wall -Wextra -Wpedantic -I../include
 
 # default target
-all: test_voronoi
+all: example
 
-test_voronoi: test_voronoi.o ../voronoi3d.a
+example: example.o ../vor3d.a
 	$(CC) -o $@ $^ $(CFLAGS)
-	rm test_voronoi.o
+	rm example.o
 
 # compile source
-test_voronoi.o: test_voronoi.c
+example.o: example.c
 	$(CC) -c $< $(CFLAGS)
 
