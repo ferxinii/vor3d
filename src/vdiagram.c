@@ -372,10 +372,7 @@ void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
     gnuplot_config(interface,  "set pm3d depthorder",
                                "set pm3d border lc 'black' lw 0.1",
                                "set view 100, 10", 
-                               "set xyplane at 0",
-                               "set xlabel 'x'",
-                               "set ylabel 'y'",
-                               "set zlabel 'z'");
+                               "set xyplane at 0");
     if (ranges) {
         char buff[1024];
         snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
