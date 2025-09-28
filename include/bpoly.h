@@ -4,6 +4,7 @@
 // Used for Poisson disc sampling inside bpoly:
 #define MAX_TRIAL_POINTS 10000
 #define MAX_TRIAL_TESTS 50
+
 typedef struct point {
     double coords[3];
 } s_point;
@@ -28,9 +29,11 @@ void extract_dmax_bp(s_bound_poly *bpoly);
 void extract_CM_bp(s_bound_poly *bpoly);
 void extract_min_max_coord(s_bound_poly *bpoly, double *min, double *max);
 void extract_convhull_bp(s_bound_poly *bpoly);
-s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise);
+
+s_bound_poly *new_bpoly_from_points(double **points, double Np);
 s_bound_poly *new_bpoly_from_txt(const char *fname);
 s_bound_poly *new_bpoly_copy(s_bound_poly *in);
+
 void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **out);
 void scale_bpoly_vertices(double **points, int Np, double s);
 s_bound_poly *scale_bpoly(s_bound_poly *bp, double factor);
@@ -51,5 +54,6 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
 void generate_file_cube_bp(const char *filename, double length);
 void generate_file_tetrahedron_bp(const char *filename, double length);
 void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
-void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *f_name, double *ranges, char *color);
+
+void plot_bpoly_differentviews(s_bound_poly *bpoly, char *f_name, double *ranges, char *color);
 #endif

@@ -4,6 +4,7 @@
 #include "geometry.h"
 #include "float.h"
 #include "math.h"
+#include "gnuplotc.h"
 #include <assert.h>
 #include <string.h>
 #include <time.h>
@@ -111,7 +112,7 @@ double compute_volume_bpoly(s_bound_poly *bpoly)
 }
 
 
-s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise)
+s_bound_poly *new_bpoly_from_points(double **points, double Np)
 {
     s_bound_poly *bpoly = malloc(sizeof(s_bound_poly));
     bpoly->points = malloc_matrix(Np, 3);
@@ -119,7 +120,6 @@ s_bound_poly *new_bpoly_from_points(double **points, double Np, int add_noise)
     copy_matrix(points, bpoly->points, Np, 3);
     
     extract_dmax_bp(bpoly);
-    if (add_noise != 0) add_noise_to_bp(bpoly);
     extract_convhull_bp(bpoly);
     extract_CM_bp(bpoly);
     extract_min_max_coord(bpoly, bpoly->min, bpoly->max);
@@ -146,7 +146,7 @@ s_bound_poly *new_bpoly_from_txt(const char *fname)
         fscanf(f, "%lf, %lf, %lf\n", &points[ii][0], &points[ii][1], &points[ii][2]); 
     }
 
-     return new_bpoly_from_points(points, Np, 0);
+     return new_bpoly_from_points(points, Np);
 }
 
 
@@ -225,7 +225,7 @@ s_bound_poly *scale_bpoly(s_bound_poly *bp, double factor)
     scale_bpoly_vertices(new_p, (bp)->Np, factor);
 
     int Np = (bp)->Np;
-    return(new_bpoly_from_points(new_p, Np, 0));
+    return(new_bpoly_from_points(new_p, Np));
     printf("DEBUG SCALE_BPOLY: new volume = %f, old volume = %f\n", (bp)->volume, OLD_VOL);
 }
 
@@ -241,7 +241,7 @@ s_bound_poly *scale_bpoly_objective_volume(s_bound_poly *bp, double objective_vo
     scale_bpoly_vertices(new_p, (bp)->Np, s);
 
     int Np = (bp)->Np;
-    return(new_bpoly_from_points(new_p, Np, 0));
+    return(new_bpoly_from_points(new_p, Np));
 }
 
 
@@ -523,78 +523,50 @@ void generate_file_sphere_bp(const char *filename, double radius, int nTheta, in
 }
 
 
-void plot_bpoly_with_points(s_bound_poly *bpoly, double **points, int Np, char *f_name, double *ranges, char *color)
+void plot_bpoly(s_bound_poly *bpoly, char *f_name, double *ranges, char *color, char *view_command)
 {
-    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
-    fprintf(pipe, "set pm3d depthorder\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.1\n");
-    fprintf(pipe, "set xyplane at 0\n");
-    fprintf(pipe, "unset border\n");
-    fprintf(pipe, "unset xtics\n");
-    fprintf(pipe, "unset ytics\n");
-    fprintf(pipe, "unset ztics\n");
+    t_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
+    gnuplot_config(interface, "set pm3d depthorder", 
+                              "set pm3d border lc 'black' lw 0.1",
+                              "set xyplane at 0",
+                              "unset border",
+                              "unset xtics",
+                              "unset ytics",
+                              "unset ztics",
+                              view_command);
     if (ranges) {
-        fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-        fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-        fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+        char buff[1024];
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
+                 ranges[0], ranges[1], ranges[2], ranges[3], ranges[4], ranges[5]); 
+        gnuplot_config(interface, buff);
     }
-    fflush(pipe);
-
-    fprintf(pipe, "set view 100, 10, 1.5\n");
-    fprintf(pipe, "set output '%s_v0.pdf'\n", f_name);
-    fprintf(pipe, "splot ");
 
     for (int ii=0; ii<bpoly->Nf; ii++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", bpoly->points[bpoly->faces[ii*3]][0],
-                                         bpoly->points[bpoly->faces[ii*3]][1], 
-                                         bpoly->points[bpoly->faces[ii*3]][2]);
-            fprintf(pipe, "%f %f %f\\n", bpoly->points[bpoly->faces[ii*3+1]][0],
-                                         bpoly->points[bpoly->faces[ii*3+1]][1], 
-                                         bpoly->points[bpoly->faces[ii*3+1]][2]);
-            fprintf(pipe, "%f %f %f'\"", bpoly->points[bpoly->faces[ii*3+2]][0],
-                                         bpoly->points[bpoly->faces[ii*3+2]][1], 
-                                         bpoly->points[bpoly->faces[ii*3+2]][2]);
-            if (color) {
-                char buff[256];
-                snprintf(buff, 256, "w polygons fs transparent solid 0.2 fc '%s' notitle, ", color);
-                fprintf(pipe, "%s", buff);
-            } else {
-                fprintf(pipe, "w polygons fs transparent solid 0.2 fc 'blue' notitle, ");
-            }
+        char buff[256];
+        if (color) snprintf(buff, 256, "fs transparent solid 0.2 fc '%s'", color);
+        else snprintf(buff, 256, "fs transparent solid 0.2 fc 'blue'");
+
+        draw_solid_triangle_3d(interface, bpoly->points[bpoly->faces[ii*3]], 
+                bpoly->points[bpoly->faces[ii*3+1]], bpoly->points[bpoly->faces[ii*3+2]], buff);
     }
-    fprintf(pipe, "\n");
+    gnuplot_end(interface);
+}
 
-    fprintf(pipe, "set output '%s_v1.pdf'\n", f_name);
-    fprintf(pipe, "set view 100, 90, 1.5\n");
-    fprintf(pipe, "replot\n");
 
-    fprintf(pipe, "set output '%s_v2.pdf'\n", f_name);
-    fprintf(pipe, "set view 100, 180, 1.5\n");
-    fprintf(pipe, "replot\n");
+void plot_bpoly_differentviews(s_bound_poly *bpoly, char *f_name, double *ranges, char *color)
+{   
+    char real_name[256];
+    snprintf(real_name, 256, "%s_v1.png", f_name);
+    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 60, 1.5");
 
-    fprintf(pipe, "set output '%s_v3.pdf'\n", f_name);
-    fprintf(pipe, "set view 100, 270, 1.5\n");
-    fprintf(pipe, "replot\n");
+    snprintf(real_name, 256, "%s_v2.png", f_name);
+    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 90, 1.5");
 
-    // fprintf(pipe, "\"<echo \'");
-    // for (int ii=0; ii<bpoly->Np; ii++) {
-    //     fprintf(pipe, "%f %f %f\\n", bpoly->points[ii][0], bpoly->points[ii][1], bpoly->points[ii][2]);
-    // }
-    // fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
+    snprintf(real_name, 256, "%s_v3.png", f_name);
+    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 180, 1.5");
 
-    
-    if (points) {
-        fprintf(pipe, "\"<echo \'");
-        for (int ii=0; ii<Np; ii++) {
-            fprintf(pipe, "%f %f %f\\n", points[ii][0], points[ii][1], points[ii][2]);
-        }
-        fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
-    }
-
-    fprintf(pipe, "\n");
-    pclose(pipe);
+    snprintf(real_name, 256, "%s_v4.png", f_name);
+    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 270, 1.5");
 }
 
 

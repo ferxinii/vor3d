@@ -5,6 +5,7 @@
 #include "algebra.h"
 #include "geometry.h"
 #include "bpoly.h"
+#include "gnuplotc.h"
 #include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -335,216 +336,108 @@ int find_inside_which_vcell(s_vdiagram *vd, double *x)
 // --------------------------------------- PLOTS ------------------------------------------------
 // ----------------------------------------------------------------------------------------------
 
-
-void randomize_colors(int N, char array[N][20]) 
+void randomize_colors(int N, char **colors) 
 {
-    for (int ii=0; ii<N; ii++) {
-        int randi1 = rand() % N;
-        int randi2 = rand() % N;
-        char tmp[20];
-        strcpy(tmp, array[randi1]);
-        strcpy(array[randi1], array[randi2]);
-        strcpy(array[randi2], tmp);
+    for (int i = N - 1; i > 0; i--) {
+        int j = rand() % (i + 1);
+        char *tmp = colors[i];
+        colors[i] = colors[j];
+        colors[j] = tmp;
     }
 }
 
 
-void plot_add_vcell(FILE *pipe, const s_vcell *vcell, char *config)
+void plot_add_vcell(t_gnuplot *interface, const s_vcell *vcell, char *config)
 {
     for (int ii=0; ii<vcell->Nf; ii++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", vcell->vertices[vcell->faces[ii*3 + 0]][0],
-                                         vcell->vertices[vcell->faces[ii*3 + 0]][1],
-                                         vcell->vertices[vcell->faces[ii*3 + 0]][2]);
-            fprintf(pipe, "%f %f %f\\n", vcell->vertices[vcell->faces[ii*3 + 1]][0],
-                                         vcell->vertices[vcell->faces[ii*3 + 1]][1],
-                                         vcell->vertices[vcell->faces[ii*3 + 1]][2]);
-            fprintf(pipe, "%f %f %f\'\"", vcell->vertices[vcell->faces[ii*3 + 2]][0],
-                                          vcell->vertices[vcell->faces[ii*3 + 2]][1],
-                                          vcell->vertices[vcell->faces[ii*3 + 2]][2]);
-            fprintf(pipe, "%s, ", config);
+        draw_solid_triangle_3d(interface, vcell->vertices[vcell->faces[ii*3]], 
+                vcell->vertices[vcell->faces[ii*3+1]], vcell->vertices[vcell->faces[ii*3+2]], config);
         }
 }
 
 
-void plot_add_bpoly(FILE *pipe, const s_bound_poly *bpoly, char *config)
+void plot_add_bpoly(t_gnuplot *interface, const s_bound_poly *bpoly, char *config)
 {
     for (int ii=0; ii<bpoly->Nf; ii++) {
-        fprintf(pipe, "\"<echo \'");
-        fprintf(pipe, "%f %f %f\\n", bpoly->points[bpoly->faces[ii*3]][0],
-                                     bpoly->points[bpoly->faces[ii*3]][1], 
-                                     bpoly->points[bpoly->faces[ii*3]][2]);
-        fprintf(pipe, "%f %f %f\\n", bpoly->points[bpoly->faces[ii*3+1]][0],
-                                     bpoly->points[bpoly->faces[ii*3+1]][1], 
-                                     bpoly->points[bpoly->faces[ii*3+1]][2]);
-        fprintf(pipe, "%f %f %f'\"", bpoly->points[bpoly->faces[ii*3+2]][0],
-                                     bpoly->points[bpoly->faces[ii*3+2]][1], 
-                                     bpoly->points[bpoly->faces[ii*3+2]][2]);
-        fprintf(pipe, "%s, ", config);
+        draw_solid_triangle_3d(interface, bpoly->points[bpoly->faces[ii*3]], 
+                bpoly->points[bpoly->faces[ii*3+1]], bpoly->points[bpoly->faces[ii*3+2]], config);
     }
 }
 
 
 void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges)
 {
-    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
-    fprintf(pipe, "set output '%s.pdf'\n", f_name);
-    fprintf(pipe, "set pm3d depthorder\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.1\n");
-    fprintf(pipe, "set view 100, 10, \n");
-    fprintf(pipe, "set xyplane at 0\n");
-    fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-    fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-    fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
-    fprintf(pipe, "set xlabel 'x'\n");
-    fprintf(pipe, "set ylabel 'y'\n");
-    fprintf(pipe, "set zlabel 'z'\n");
-    fflush(pipe);
+    int size[2] = {1080, 1080};
+    t_gnuplot *interface = gnuplot_start(PNG_3D, f_name, size, 18);
+    gnuplot_config(interface,  "set pm3d depthorder",
+                               "set pm3d border lc 'black' lw 0.1",
+                               "set view 100, 10", 
+                               "set xyplane at 0",
+                               "set xlabel 'x'",
+                               "set ylabel 'y'",
+                               "set zlabel 'z'");
+    if (ranges) {
+        char buff[1024];
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
+                 ranges[0], ranges[1], ranges[2], ranges[3], ranges[4], ranges[5]); 
+        gnuplot_config(interface, buff);
+    }
 
-    fprintf(pipe, "set output '%s.pdf'\n", f_name);
-    fprintf(pipe, "splot ");
-    plot_add_vcell(pipe, vcell, "w polygons fs transparent solid 0.6 notitle");
-    plot_add_bpoly(pipe, vdiag->bpoly, "w polygons transparent solid 0.1 notitle");
-    fprintf(pipe, "\n");
-    pclose(pipe);
+    plot_add_vcell(interface, vcell, "fs transparent solid 0.6");
+    plot_add_bpoly(interface, vdiag->bpoly, "fs transparent solid 0.1");
+    gnuplot_end(interface);
 }
 
 
-void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_files, double **aux_points, int *N_aux)
+void plot_all_vcells(s_vdiagram *vdiagram, char *f_name, double *ranges, char *view_command)
 {
-    char colors[][20] = { "#000090", "#ee0000", "#7f0000", "#0090ff", "#0fffee", 
+    char buff[1024];
+    char *colors[] = { "#000090", "#ee0000", "#7f0000", "#0090ff", "#0fffee", 
         "#90ff70", "#ffee00", "#000fff",  "#ff7000" };
     randomize_colors(9, colors);
-    char buff[1024];
-
-    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    // fprintf(pipe, "set terminal pdfcairo enhanced font 'Arial,18' size 4,4 enhanced \n");
-    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 2160,2160 enhanced \n");
-    fprintf(pipe, "set pm3d depth\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.01\n");
-    fprintf(pipe, "set view 100, 10, 1.5\n");
-    fprintf(pipe, "unset border\n");
-    fprintf(pipe, "unset xtics\n");
-    fprintf(pipe, "unset ytics\n");
-    fprintf(pipe, "unset ztics\n");
-    fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-    fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-    fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
-    fflush(pipe);
-
-    // PLOT POINTS
-    if (aux_points) {
-        fprintf(pipe, "set output '%s_aux_0.pdf'\n", f_name);
-        fprintf(pipe, "splot ");
-
-        for (int jj=0; jj<vdiagram->N_vcells; jj++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[jj][0], vdiagram->seeds[jj][1], vdiagram->seeds[jj][2]);
-            fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-        }
-
-        fprintf(pipe, "\"<echo \'");
-        for (int jj=0; jj<*N_aux; jj++) {
-            fprintf(pipe, "%f %f %f\\n", aux_points[jj][0], aux_points[jj][1], aux_points[jj][2]);
-        }
-        fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
-
-        plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
-        fprintf(pipe, "\n");
-
-        fprintf(pipe, "set output '%s_aux_1.pdf'\n", f_name);
-        fprintf(pipe, "set view 100, 90, 1.5\n");
-        fprintf(pipe, "replot\n");
-
-        fprintf(pipe, "set output '%s_aux_2.pdf'\n", f_name);
-        fprintf(pipe, "set view 100, 180, 1.5\n");
-        fprintf(pipe, "replot\n");
-
-        fprintf(pipe, "set output '%s_aux_3.pdf'\n", f_name);
-        fprintf(pipe, "set view 100, 270, 1.5\n");
-        fprintf(pipe, "replot\n");
-    }
     
+    int size[2] = {2160, 2160};
+    t_gnuplot *interface = gnuplot_start(PNG_3D, f_name, size, 18);
+    gnuplot_config(interface,  "set pm3d depthorder",
+                               "set pm3d border lc 'black' lw 0.01",
+                               "unset border",
+                               "unset xtics",
+                               "unset ytics",
+                               "unset ztics",
+                               "set xlabel 'x'",
+                               "set ylabel 'y'",
+                               "set zlabel 'z'",
+                               view_command);
+    if (ranges) {
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
+                 ranges[0], ranges[1], ranges[2], ranges[3], ranges[4], ranges[5]); 
+        gnuplot_config(interface, buff);
+    }
 
 
-    // PLOT WITH ALL CELLS
-    fprintf(pipe, "set view 100, 60, \n");
-    fprintf(pipe, "set output '%s_v1.pdf'\n", f_name);
-    fprintf(pipe, "splot ");
     for (int ii=0; ii<vdiagram->N_vcells; ii++) {
         s_vcell *vcell = vdiagram->vcells[ii];
-        snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[ii%8]);
-        plot_add_vcell(pipe, vcell, buff);  
-    }       
-    // plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
-
-    if (aux_points) {
-        fprintf(pipe, "\"<echo \'");
-        for (int jj=0; jj<*N_aux; jj++) {
-            fprintf(pipe, "%f %f %f\\n", aux_points[jj][0], aux_points[jj][1], aux_points[jj][2]);
-        }
-        fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
+        snprintf(buff, 1024, "fs transparent solid 0.2 fc rgb '%s'", colors[ii%8]);
+        plot_add_vcell(interface, vcell, buff);  
     }
-
-    fprintf(pipe, "\n");
-
-    fprintf(pipe, "set output '%s_v2.pdf'\n", f_name);
-    fprintf(pipe, "set view 100, 90, 1.5\n");
-    fprintf(pipe, "replot\n");
-
-    fprintf(pipe, "set output '%s_v3.pdf'\n", f_name);
-    fprintf(pipe, "set view 100, 180, 1.5\n");
-    fprintf(pipe, "replot\n");
-
-    fprintf(pipe, "set output '%s_v4.pdf'\n", f_name);
-    fprintf(pipe, "set view 100, 270, 1.5\n");
-    fprintf(pipe, "replot\n");
-
-
-    // A NEW PLOT FOR EACH CELL (UNTIL MAX_FILES)
-    for (int ii=0; ii<vdiagram->N_vcells; ii++) {
-        if (ii >= max_files) break;
-
-        s_vcell *vcell = vdiagram->vcells[ii];
-        fprintf(pipe, "set output '%s_%d.pdf'\n", f_name, ii);
-        fprintf(pipe, "splot ");
-
-        snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[ii%8]);
-        plot_add_vcell(pipe, vcell, buff);
-
-        plot_add_bpoly(pipe, vdiagram->bpoly, "w polygons fs transparent solid 0.01 fc 'black' notitle");
-
-        for (int jj=0; jj<vdiagram->N_vcells; jj++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[jj][0], vdiagram->seeds[jj][1], vdiagram->seeds[jj][2]);
-            fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-        }
-
-        fprintf(pipe, "\"<echo \'");
-        fprintf(pipe, "%f %f %f\\n", vdiagram->seeds[ii][0], vdiagram->seeds[ii][1], vdiagram->seeds[ii][2]);
-        fprintf(pipe, "'\" pt 6 ps 2 lc rgb 'black' notitle, ");
-
-        if (aux_points) {
-            fprintf(pipe, "\"<echo \'");
-            for (int jj=0; jj<*N_aux; jj++) {
-                fprintf(pipe, "%f %f %f\\n", aux_points[jj][0], aux_points[jj][1], aux_points[jj][2]);
-            }
-            fprintf(pipe, "'\" pt 3 lc rgb 'red' notitle, ");
-    }
-
-        fprintf(pipe, "\n");
-    }
-
-    pclose(pipe);
+    gnuplot_end(interface);
 }
 
 
-void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files)
+void plot_vdiagram_differentviews(s_vdiagram *vdiagram, char *f_name, double *ranges)
 {
-    const s_bound_poly *bp = vdiagram->bpoly;
-    double ranges[6] = {bp->min[0], bp->max[0], bp->min[1], bp->max[1], bp->min[2], bp->max[2]};
-    plot_vdiagram(vdiagram, f_name, ranges, max_files, NULL, 0);
+    char final_name[1024];
+    snprintf(final_name, 1024, "%s_v1.png", f_name);
+    plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 60, 1.5"); 
+
+    snprintf(final_name, 1024, "%s_v2.png", f_name);
+    plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 90, 1.5");
+
+    snprintf(final_name, 1024, "%s_v3.png", f_name);
+    plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 180, 1.5");
+
+    snprintf(final_name, 1024, "%s_v4.png", f_name);
+    plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 270, 1.5");
 }
 
 

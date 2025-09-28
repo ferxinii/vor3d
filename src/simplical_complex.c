@@ -2,6 +2,7 @@
 #include "simplical_complex.h"
 #include "geometry.h"
 #include "algebra.h"
+#include "gnuplotc.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -593,125 +594,109 @@ double compute_volume_complex(s_setup *setup)
 // ----------------------------------------------------------------------------------------------
 
 
-void plot_add_ncell(FILE *pipe, s_setup *setup, s_ncell *ncell, char *config)
+void plot_add_ncell(t_gnuplot *interface, s_setup *setup, s_ncell *ncell, char *config)
 {
     double STORAGE[3*3];
     double *face_vertices[3] = {STORAGE, STORAGE + 3, STORAGE + 6};
-
     for (int ii=0; ii<4; ii++) {
         extract_vertices_face(setup, ncell, &ii, 2, face_vertices);
-        fprintf(pipe, "\"<echo \'");
-        fprintf(pipe, "%f %f %f\\n", face_vertices[0][0], face_vertices[0][1], face_vertices[0][2]);
-        fprintf(pipe, "%f %f %f\\n", face_vertices[1][0], face_vertices[1][1], face_vertices[1][2]);
-        fprintf(pipe, "%f %f %f'\"", face_vertices[2][0], face_vertices[2][1], face_vertices[2][2]);
-        fprintf(pipe, "%s, ", config);
+        draw_solid_triangle_3d(interface, face_vertices[0], face_vertices[1], face_vertices[2], config);
     }
 }
 
 
 void plot_ncell_3d(s_setup *setup, s_ncell *ncell, char *f_name, double *ranges)
 {
-    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
-    fprintf(pipe, "set pm3d depthorder\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
-    fprintf(pipe, "set view 100, 60, \n");
-    fprintf(pipe, "set xyplane at 0\n");
+    t_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
+    gnuplot_config(interface, "set pm3d depthorder",
+                              "set pm3d border lc 'black' lw 0.5",
+                              "set view 100, 60",
+                              "set xyplane at 0",
+                              "set xlabel 'x'",
+                              "set ylabel 'y'",
+                              "set zlabel 'z'");
     if (ranges) {
-        fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-        fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-        fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+        char buff[1024];
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
+                 ranges[0], ranges[1], ranges[2], ranges[3], ranges[4], ranges[5]); 
+        gnuplot_config(interface, buff);
     }
-    fprintf(pipe, "set xlabel 'x'\n");
-    fprintf(pipe, "set ylabel 'y'\n");
-    fprintf(pipe, "set zlabel 'z'\n");
-    fflush(pipe);
 
-    fprintf(pipe, "set output '%s.png'\n", f_name);
-    fprintf(pipe, "splot ");
-    plot_add_ncell(pipe, setup, ncell, "w polygons fs transparent solid 0.2 fc rgb '#000090' notitle");
-
-    fprintf(pipe, "\n");
-    pclose(pipe);
+    plot_add_ncell(interface, setup, ncell, "fs transparent solid 0.2 fc rgb '#000090'");
+    gnuplot_end(interface);
 }
 
 
-void plot_dt_3d(s_setup *setup, char *f_name, double *ranges, int max_files)
+void plot_all_ncells_3d(s_setup *setup, char *f_name, double *ranges, char *view_command)
 {
-    char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
+     char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
         "#90ff70", "#ffee00", "#ff7000", "#ee0000", "#7f0000" };
     char buff[1024];
 
-    FILE *pipe = popen("gnuplot -persistent 2>&1", "w");
-    fprintf(pipe, "set terminal pngcairo enhanced font 'Arial,18' size 1080,1080 enhanced \n");
-    fprintf(pipe, "set pm3d depthorder\n");
-    fprintf(pipe, "set pm3d border lc 'black' lw 0.5\n");
-    fprintf(pipe, "set view 100, 60, \n");
-    fprintf(pipe, "set xyplane at 0\n");
+    t_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
+    gnuplot_config(interface, "set pm3d depthorder",
+                              "set pm3d border lc 'black' lw 0.5",
+                              "set xyplane at 0",
+                              "set xlabel 'x'",
+                              "set ylabel 'y'",
+                              "set zlabel 'z'", 
+                              view_command);
     if (ranges) {
-        fprintf(pipe, "set xrange [%f:%f]\n", ranges[0], ranges[1]);
-        fprintf(pipe, "set yrange [%f:%f]\n", ranges[2], ranges[3]);
-        fprintf(pipe, "set zrange [%f:%f]\n", ranges[4], ranges[5]);
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
+                 ranges[0], ranges[1], ranges[2], ranges[3], ranges[4], ranges[5]); 
     }
-    fprintf(pipe, "set xlabel 'x'\n");
-    fprintf(pipe, "set ylabel 'y'\n");
-    fprintf(pipe, "set zlabel 'z'\n");
-    fflush(pipe);
-
-
-    // PLOT ALL CELLS
-    fprintf(pipe, "set output '%s_v1.png'\n", f_name);
-    fprintf(pipe, "splot ");
+    if (ranges) gnuplot_config(interface, buff);
 
     int it = 0;
     s_ncell *current = setup->head;
     while (current) {
-        snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[it%8]);
-        plot_add_ncell(pipe, setup, current, buff);
+        snprintf(buff, 1024, "fs transparent solid 0.2 fc rgb '%s'", colors[it%8]);
+        plot_add_ncell(interface, setup, current, buff);
         current = current->next;
         it++;
     }
-    fprintf(pipe, "\n");
+    gnuplot_end(interface);
+}
 
-    fprintf(pipe, "set output '%s_v2.png'\n", f_name);
-    fprintf(pipe, "set view 100, 90, 1.5\n");
-    fprintf(pipe, "replot\n");
 
-    fprintf(pipe, "set output '%s_v3.png'\n", f_name);
-    fprintf(pipe, "set view 100, 180, 1.5\n");
-    fprintf(pipe, "replot\n");
+void plot_dt_differentviews(s_setup *setup, char *f_name, double *ranges)
+{
+    char final_name[512];
+    snprintf(final_name, 512, "%s_v1.png", f_name);
+    plot_all_ncells_3d(setup, final_name, ranges, "set view 100, 60, 1.5");
 
-    fprintf(pipe, "set output '%s_v4.png'\n", f_name);
-    fprintf(pipe, "set view 100, 270, 1.5\n");
-    fprintf(pipe, "replot\n");
+    snprintf(final_name, 512, "%s_v2.png", f_name);
+    plot_all_ncells_3d(setup, final_name, ranges, "set view 100, 90, 1.5");
 
+    snprintf(final_name, 512, "%s_v3.png", f_name);
+    plot_all_ncells_3d(setup, final_name, ranges, "set view 100, 180, 1.5");
+
+    snprintf(final_name, 512, "%s_v4.png", f_name);
+    plot_all_ncells_3d(setup, final_name, ranges, "set view 100, 270, 1.5");
 
 
     // A NEW PLOT FOR EACH CELL (UNTIL MAX_FILES)
-    it = 0;
-    current = setup->head;
-    while (current) {
-        if (max_files != 0 && it > max_files) break;
-
-        fprintf(pipe, "set output '%s_%d.png'\n", f_name, it);
-        fprintf(pipe, "splot ");
-        
-        snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[it%8]);
-        plot_add_ncell(pipe, setup, current, buff);
-
-        for (int jj=0; jj<setup->N_points; jj++) {
-            fprintf(pipe, "\"<echo \'");
-            fprintf(pipe, "%f %f %f\\n", setup->points[jj][0], setup->points[jj][1], setup->points[jj][2]);
-            fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-        }
-        fprintf(pipe, "\n");
-
-        it++;
-        current = current->next;
-    }
-
-
-
-    pclose(pipe);
+    // int it = 0;
+    // current = setup->head;
+    // while (current) {
+    //     if (max_files != 0 && it > max_files) break;
+    //
+    //     fprintf(pipe, "set output '%s_%d.png'\n", f_name, it);
+    //     fprintf(pipe, "splot ");
+    //     
+    //     snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[it%8]);
+    //     plot_add_ncell(pipe, setup, current, buff);
+    //
+    //     for (int jj=0; jj<setup->N_points; jj++) {
+    //         fprintf(pipe, "\"<echo \'");
+    //         fprintf(pipe, "%f %f %f\\n", setup->points[jj][0], setup->points[jj][1], setup->points[jj][2]);
+    //         fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
+    //     }
+    //     fprintf(pipe, "\n");
+    //
+    //     it++;
+    //     current = current->next;
+    // }
+    // pclose(pipe);
 }
 
