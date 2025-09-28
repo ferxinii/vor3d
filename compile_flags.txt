@@ -1,1 +1,0 @@
-/Users/ferxinii/.config/nvim/lua/lsp/compile_flags.txt
