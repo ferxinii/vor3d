@@ -634,9 +634,6 @@ void plot_all_ncells_3d(s_setup *setup, char *f_name, double *ranges, char *view
     gnuplot_config(interface, "set pm3d depthorder",
                               "set pm3d border lc 'black' lw 0.5",
                               "set xyplane at 0",
-                              "set xlabel 'x'",
-                              "set ylabel 'y'",
-                              "set zlabel 'z'", 
                               view_command);
     if (ranges) {
         snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 

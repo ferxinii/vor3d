@@ -401,9 +401,6 @@ void plot_all_vcells(s_vdiagram *vdiagram, char *f_name, double *ranges, char *v
                                "unset xtics",
                                "unset ytics",
                                "unset ztics",
-                               "set xlabel 'x'",
-                               "set ylabel 'y'",
-                               "set zlabel 'z'",
                                view_command);
     if (ranges) {
         snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
