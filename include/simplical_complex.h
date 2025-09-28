@@ -52,6 +52,6 @@ s_ncell *in_ncell_walk(s_setup *setup, double *p);
 int is_delaunay_3d(const s_setup *setup);
 void add_ncell_volume_3d(s_setup *setup, s_ncell *ncell);
 double compute_volume_complex(s_setup *setup);
-void plot_dt_3d(s_setup *setup, char *f_name, double *ranges, int max_files);
+void plot_dt_3d_differentviews(s_setup *setup, char *f_name, double *ranges);
 
 #endif

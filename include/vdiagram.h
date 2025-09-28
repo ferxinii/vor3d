@@ -50,8 +50,8 @@ void compute_vcell_volume(s_vcell *vcell);
 s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, int Nreal);
 int find_inside_which_vcell(s_vdiagram *vd, double *x);
 void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges);
-void plot_vdiagram(s_vdiagram *vdiagram, char *f_name, double *ranges, int max_files, double **aux_points, int *N_aux);
-void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
+void plot_vdiagram_differentviews(s_vdiagram *vdiagram, char *f_name, double *ranges);
+
 void clear_volumes_file(char *fname);
 void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id);
 

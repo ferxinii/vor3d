@@ -1,5 +1,5 @@
 CC      = clang
-CFLAGS  = -Wall -Wextra -Wpedantic -Iinclude -Igeometric_predicates/include
+CFLAGS  = -Wall -Wextra -Wpedantic -Iinclude -Igeometric_predicates/include -O3
 AR      = ar
 
 SRC     = $(wildcard src/*.c)

@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -Wpedantic -I../include
+CFLAGS  = -Wall -Wextra -Wpedantic -I../include -O3
 
 # default target
 all: example
