@@ -1,5 +1,6 @@
 
 #include "algebra.h"
+#include "geometry.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -169,11 +170,9 @@ double max_distance(double **p, int N, int dim, double *q)
 }
 
 
-void normalize_inplace(double *v, int dim)
+s_point normalize_3d(s_point v)
 {
-    double norm = sqrt(norm_squared(v, dim));
-    for (int ii=0; ii<dim; ii++) {
-        v[ii] = v[ii] / norm;
-    }
+    double norm = sqrt(norm_squared(v.coords, 3));
+    return (s_point) {v.x/norm, v.y/norm, v.z/norm};
 }
 

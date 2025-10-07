@@ -14,9 +14,11 @@
 
 void free_bpoly(s_bound_poly *bpoly)
 {
-    free_matrix(bpoly->points, bpoly->Np);
+    // free_matrix(bpoly->points, bpoly->Np);
+    free(bpoly->points);
     free(bpoly->faces);
-    free_matrix(bpoly->fnormals, bpoly->Nf);
+    // free_matrix(bpoly->fnormals, bpoly->Nf);
+    free(bpoly->fnormals);
     free(bpoly);
 }
 
@@ -27,7 +29,9 @@ void add_noise_to_bp(s_bound_poly *bpoly)
     for (int ii=0; ii<bpoly->Np; ii++) {
         for (int jj=0; jj<3; jj++) {
             double aux = 2.0 * rand() / RAND_MAX - 1;  
-            bpoly->points[ii][jj] += s * bpoly->dmax * aux;
+            bpoly->points[ii].x += s * bpoly->dmax * aux;
+            bpoly->points[ii].y += s * bpoly->dmax * aux;
+            bpoly->points[ii].z += s * bpoly->dmax * aux;
         }
     }
 }
@@ -38,7 +42,7 @@ void extract_dmax_bp(s_bound_poly *bpoly)
     double dmax = 0; 
     for (int ii=0; ii<bpoly->Np-1; ii++) {
         for (int jj=ii+1; jj<bpoly->Np; jj++) {
-            double d = norm_difference_squared(bpoly->points[ii], bpoly->points[jj], 3);
+            double d = norm_difference_squared(bpoly->points[ii].coords, bpoly->points[jj].coords, 3);
             if (d > dmax) 
                 dmax = d;
         }
@@ -49,7 +53,7 @@ void extract_dmax_bp(s_bound_poly *bpoly)
 
 void extract_CM_bp(s_bound_poly *bpoly)
 {
-    find_center_mass(bpoly->points, bpoly->Np, 3, bpoly->CM);
+    bpoly->CM = find_center_mass(bpoly->points, bpoly->Np);
 }
 
 
@@ -58,13 +62,13 @@ void extract_min_max_coord(s_bound_poly *bpoly, double *min, double *max)
     min[0] = DBL_MAX;   min[1] = DBL_MAX;   min[2] = DBL_MAX;
     max[0] = -DBL_MAX;  max[1] = -DBL_MAX;  max[2] = -DBL_MAX;
     for (int ii=0; ii<bpoly->Np; ii++) {
-        if (bpoly->points[ii][0] < min[0]) min[0] = bpoly->points[ii][0];
-        if (bpoly->points[ii][1] < min[1]) min[1] = bpoly->points[ii][1];
-        if (bpoly->points[ii][2] < min[2]) min[2] = bpoly->points[ii][2];
+        if (bpoly->points[ii].x < min[0]) min[0] = bpoly->points[ii].x;
+        if (bpoly->points[ii].y < min[1]) min[1] = bpoly->points[ii].y;
+        if (bpoly->points[ii].z < min[2]) min[2] = bpoly->points[ii].z;
 
-        if (bpoly->points[ii][0] > max[0]) max[0] = bpoly->points[ii][0];
-        if (bpoly->points[ii][1] > max[1]) max[1] = bpoly->points[ii][1];
-        if (bpoly->points[ii][2] > max[2]) max[2] = bpoly->points[ii][2];
+        if (bpoly->points[ii].x > max[0]) max[0] = bpoly->points[ii].x;
+        if (bpoly->points[ii].y > max[1]) max[1] = bpoly->points[ii].y;
+        if (bpoly->points[ii].z > max[2]) max[2] = bpoly->points[ii].z;
     }
 }
 
@@ -76,9 +80,8 @@ void extract_convhull_bp(s_bound_poly *bpoly)
     convhull_3d_build(pch, bpoly->Np, &bpoly->faces, &bpoly->Nf);
     // printf("DEBUG: Nf = %d, Np = %d\n", bpoly->Nf, bpoly->Np);
     
-    double CM[3];
-    find_center_mass(bpoly->points, bpoly->Np, 3, CM);
-    double **normals = extract_normals_from_ch(pch, bpoly->faces, bpoly->Nf, CM);
+    s_point CM = find_center_mass(bpoly->points, bpoly->Np);
+    s_point *normals = extract_normals_from_ch(pch, bpoly->faces, bpoly->Nf, CM);
     bpoly->fnormals = normals;
     free(pch);
 }
@@ -92,32 +95,32 @@ double compute_volume_bpoly(s_bound_poly *bpoly)
         int i1 = 1;
         int i2 = 2;
 
-        double Nx = (bpoly->points[bpoly->faces[ii*3 + 1]][i1] -
-                     bpoly->points[bpoly->faces[ii*3 + 0]][i1]) *
-                    (bpoly->points[bpoly->faces[ii*3 + 2]][i2] -
-                     bpoly->points[bpoly->faces[ii*3 + 0]][i2]) 
+        double Nx = (bpoly->points[bpoly->faces[ii*3 + 1]].coords[i1] -
+                     bpoly->points[bpoly->faces[ii*3 + 0]].coords[i1]) *
+                    (bpoly->points[bpoly->faces[ii*3 + 2]].coords[i2] -
+                     bpoly->points[bpoly->faces[ii*3 + 0]].coords[i2]) 
                     -
-                    (bpoly->points[bpoly->faces[ii*3 + 1]][i2] -
-                     bpoly->points[bpoly->faces[ii*3 + 0]][i2]) *
-                    (bpoly->points[bpoly->faces[ii*3 + 2]][i1] -
-                     bpoly->points[bpoly->faces[ii*3 + 0]][i1]);
+                    (bpoly->points[bpoly->faces[ii*3 + 1]].coords[i2] -
+                     bpoly->points[bpoly->faces[ii*3 + 0]].coords[i2]) *
+                    (bpoly->points[bpoly->faces[ii*3 + 2]].coords[i1] -
+                     bpoly->points[bpoly->faces[ii*3 + 0]].coords[i1]);
 
         // Nx = bpoly->fnormals[ii][0];
-        vol += Nx * (bpoly->points[bpoly->faces[ii*3 + 0]][i0] +
-                     bpoly->points[bpoly->faces[ii*3 + 1]][i0] +
-                     bpoly->points[bpoly->faces[ii*3 + 2]][i0]);
+        vol += Nx * (bpoly->points[bpoly->faces[ii*3 + 0]].coords[i0] +
+                     bpoly->points[bpoly->faces[ii*3 + 1]].coords[i0] +
+                     bpoly->points[bpoly->faces[ii*3 + 2]].coords[i0]);
     }
 
     return vol/6;
 }
 
 
-s_bound_poly *new_bpoly_from_points(double **points, double Np)
+s_bound_poly *new_bpoly_from_points(const s_point *points, double Np)
 {
     s_bound_poly *bpoly = malloc(sizeof(s_bound_poly));
-    bpoly->points = malloc_matrix(Np, 3);
+    bpoly->points = malloc(sizeof(s_point) * Np);
+    memcpy(bpoly->points, points, Np * sizeof(s_point));
     bpoly->Np = Np;
-    copy_matrix(points, bpoly->points, Np, 3);
     
     extract_dmax_bp(bpoly);
     extract_convhull_bp(bpoly);
@@ -141,9 +144,9 @@ s_bound_poly *new_bpoly_from_txt(const char *fname)
     int Np;
     fscanf(f, "%d\n\n", &Np);
 
-    double **points = malloc_matrix(Np, 3);
+    s_point *points = malloc(Np * sizeof(s_point));
     for (int ii=0; ii<Np; ii++) {
-        fscanf(f, "%lf, %lf, %lf\n", &points[ii][0], &points[ii][1], &points[ii][2]); 
+        fscanf(f, "%lf, %lf, %lf\n", &points[ii].x, &points[ii].y, &points[ii].z); 
     }
 
      return new_bpoly_from_points(points, Np);

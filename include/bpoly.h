@@ -1,25 +1,23 @@
 #ifndef VOR3D_BPOLY_H
 #define VOR3D_BPOLY_H
 
+#include "geometry.h"
+
 // Used for Poisson disc sampling inside bpoly:
 #define MAX_TRIAL_POINTS 10000
 #define MAX_TRIAL_TESTS 50
 
-typedef struct point {
-    double coords[3];
-} s_point;
-
 // Main structure
 typedef struct bound_poly {
     int Np;
-    double **points;
+    s_point *points;
     int Nf;
     int *faces;  // Its flat! Nf x 3
-    double **fnormals;
+    s_point *fnormals;
     double dmax;  // Max distance between two pairs of points
-    double CM[3];
-    double min[3];
-    double max[3];
+    s_point CM;
+    s_point min;
+    s_point max;
     double volume;
 } s_bound_poly;
 
@@ -30,7 +28,7 @@ void extract_CM_bp(s_bound_poly *bpoly);
 void extract_min_max_coord(s_bound_poly *bpoly, double *min, double *max);
 void extract_convhull_bp(s_bound_poly *bpoly);
 
-s_bound_poly *new_bpoly_from_points(double **points, double Np);
+s_bound_poly *new_bpoly_from_points(const s_point *points, double Np);
 s_bound_poly *new_bpoly_from_txt(const char *fname);
 s_bound_poly *new_bpoly_copy(s_bound_poly *in);
 

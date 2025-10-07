@@ -1,6 +1,9 @@
 #ifndef VOR3D_ALGEBRA_H
 #define VOR3D_ALGEBRA_H
 
+#include "geometry.h"
+// TODO improve with s_point ??
+
 int id_where_equal_int(const int *arr, int N, int entry);
 int inarray(const int *arr1, int N, int a);
 
@@ -17,6 +20,6 @@ double norm_squared(const double *v, int dim);
 double norm_difference(const double *a, const double *b, int dim);
 double norm_difference_squared(const double *a, const double *b, int dim);
 double max_distance(double **p, int N, int dim, double *q);
-void normalize_inplace(double *v, int dim);
+s_point normalize_3d(s_point v);
 
 #endif
