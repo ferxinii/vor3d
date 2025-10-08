@@ -1,9 +1,7 @@
 
 #include "algebra.h"
-#include "geometry.h"
 #include <stdlib.h>
 #include <stdio.h>
-#include <math.h>
 #include <assert.h>
 
 
@@ -126,53 +124,5 @@ void print_matrix(double **array, int N1, int N2)
         }
         printf("\n");
     }
-}
-
-
-double norm_squared(const double *v, int dim)
-{
-    double out = 0;
-    for (int ii=0; ii<dim; ii++) {
-        out += v[ii] * v[ii];
-    }
-    return out;
-}
-
-
-double norm_difference(const double *a, const double *b, int dim)
-{
-    double out = 0;
-    for (int ii=0; ii<dim; ii++) {
-        out += (a[ii] - b[ii]) * (a[ii] - b[ii]);
-    }
-    return sqrt(out);
-}
-
-
-double norm_difference_squared(const double *a, const double *b, int dim)
-{
-    double out = 0;
-    for (int ii=0; ii<dim; ii++) {
-        out += (a[ii] - b[ii]) * (a[ii] - b[ii]);
-    }
-    return out;
-}
-
-
-double max_distance(double **p, int N, int dim, double *q)
-{   
-    double maxd = 0;
-    for (int ii=0; ii<N; ii++) {
-        double d = norm_difference_squared(p[ii], q, dim);
-        if (maxd < d) maxd = d;
-    }
-    return sqrt(maxd);
-}
-
-
-s_point normalize_3d(s_point v)
-{
-    double norm = sqrt(norm_squared(v.coords, 3));
-    return (s_point) {v.x/norm, v.y/norm, v.z/norm};
 }
 

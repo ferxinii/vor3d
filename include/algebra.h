@@ -1,9 +1,6 @@
 #ifndef VOR3D_ALGEBRA_H
 #define VOR3D_ALGEBRA_H
 
-#include "geometry.h"
-// TODO improve with s_point ??
-
 int id_where_equal_int(const int *arr, int N, int entry);
 int inarray(const int *arr1, int N, int a);
 
@@ -16,10 +13,5 @@ void free_matrix_int(int **array, int N1);
 void copy_matrix(double **in, double **out, int N1, int N2);
 void copy_matrix_int(int **in, int **out, int N1, int N2);
 void print_matrix(double **array, int N1, int N2);
-double norm_squared(const double *v, int dim);
-double norm_difference(const double *a, const double *b, int dim);
-double norm_difference_squared(const double *a, const double *b, int dim);
-double max_distance(double **p, int N, int dim, double *q);
-s_point normalize_3d(s_point v);
 
 #endif

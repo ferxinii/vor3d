@@ -6,14 +6,14 @@
 #include "bpoly.h"
 
 
-#define VCELL_BLOCK_VERTICES 1000
+#define VCELL_BLOCK_VERTICES 1000  // Used for efficient mallocing, incrementing by blocks if necessary
 
 
 typedef struct vdiagram {
-    int N_vcells;
+    int N;  // Number of vcells
     struct vcell **vcells;  // Array of pointers to the cells, N_vcells x 1
-    const struct bound_poly *bpoly;
-    double **seeds;
+    const struct bounding_polyhedron *bpoly;
+    s_point *seeds;  // TODO Ns? Or there should be as many seeds as vcells?
 } s_vdiagram;
 
 
@@ -21,8 +21,8 @@ typedef struct vcell {
     int seed_id;
     // struct vcell *next;     // linked list of vcells
     int Nv;
-    int Nv_capacity;
-    double **vertices;  // Nv x 3
+    int Nv_capacity;  // malloc limit
+    s_point *vertices;  // Nv x 3
     int **origin_vertices;  // Nv x 4, LAST column indicates the dual ncell if POSITIVE,
                             // if -1: comes from circumcenter delaunay. The rest of 
                             //        the columns indicate the delaunay indices of the 
@@ -35,22 +35,23 @@ typedef struct vcell {
                             //        intersection with bounding convex hull, and the first
                             //        columns correspond to face's vertex_id
     int Nf;
-    int *faces;
-    double **fnormals;
+    int *faces;  // Convex hull, 1 x 3*Nf
+    s_point *fnormals;
     double volume;
 } s_vcell;
 
 
 void free_vdiagram(s_vdiagram *vdiagram);
-void write_vd_file(s_vdiagram *vd, FILE *file);
-s_vdiagram *malloc_vdiagram(const s_setup *setup, int Nreal);
+void write_vd_file(const s_vdiagram *vd, FILE *file);
+s_vdiagram *malloc_vdiagram(const s_scplx *setup, int Nreal);  // TODO what is Nreal?
 void print_vdiagram(const s_vdiagram *vdiagram);
+
 s_vcell *malloc_vcell(int seed_id);
 void compute_vcell_volume(s_vcell *vcell);
-s_vdiagram *voronoi_from_delaunay_3d(const s_setup *setup, s_bound_poly *bpoly, int Nreal);
-int find_inside_which_vcell(s_vdiagram *vd, double *x);
-void plot_vcell(s_vdiagram *vdiag, s_vcell *vcell, char *f_name, double *ranges);
-void plot_vdiagram_differentviews(s_vdiagram *vdiagram, char *f_name, double *ranges);
+s_vdiagram *voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal);
+int find_inside_which_vcell(const s_vdiagram *vd, s_point x);
+void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, const s_point ranges[2]);
+void plot_vdiagram_differentviews(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2]);
 
 void clear_volumes_file(char *fname);
 void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id);

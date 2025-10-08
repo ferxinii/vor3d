@@ -1,8 +1,8 @@
 
 #include "geometry.h"
 #include "algebra.h"
-#include "predicates.h"
-#include "convhull_3d.h"
+#include "external/geometric_predicates/include/predicates.h"
+#include "external/convhull_3d/convhull_3d.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -31,6 +31,96 @@ int in_sphere(const s_point *p4, s_point q)
     if (aux > 0) return factor;
     else if (aux < 0) return -factor;
     else return 0;
+}
+
+
+double dot_prod(s_point u, s_point v)
+{
+    return u.x*v.x + u.y*v.y + u.z*v.z;
+}
+
+
+s_point cross_prod(s_point u, s_point v)
+{
+    s_point out;
+    out.x = u.y*v.z - u.z*v.y;
+    out.y = u.z*v.x - u.x*v.z;
+    out.z = u.x*v.y - u.y*v.x;
+    return out;
+}
+
+
+double norm_squared(s_point v)
+{
+    return dot_prod(v, v);
+}
+
+
+double norm(s_point v)
+{
+    return sqrt(norm_squared(v));
+}
+
+
+double distance_squared(s_point a, s_point b)
+{
+    s_point diff = subtract_points(a, b);
+    return norm_squared(diff);
+}
+
+
+double distance(s_point a, s_point b)
+{
+    return sqrt(distance_squared(a, b));
+}
+
+
+double max_distance(const s_point *p, int N, s_point query)
+{   
+    double maxd2 = 0;
+    for (int ii=0; ii<N; ii++) {
+        double d2 = distance_squared(p[ii], query);
+        if (maxd2 < d2) maxd2 = d2;
+    }
+    return sqrt(maxd2);
+}
+
+
+s_point normalize_3d(s_point v)
+{
+    double n = norm(v);
+    return (s_point){{{v.x/n, v.y/n, v.z/n}}};
+}
+
+
+s_point subtract_points(s_point u, s_point v)
+{
+    return (s_point){{{u.x - v.x, u.y - v.y, u.z - v.z}}};
+}
+
+
+s_point find_center_mass(const s_point *in, int N_points)
+{
+    s_point out = in[0];
+    for (int ii=1; ii<N_points; ii++) {
+        out.x += in[ii].x;
+        out.y += in[ii].y;
+        out.z += in[ii].z;
+    }
+    out.x /= N_points;
+    out.y /= N_points;
+    out.z /= N_points;
+    return out;
+}
+
+
+int coord_with_largest_component_3d(s_point x)
+{
+    double *n = x.coords;
+    int out = 2;
+    if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) out = 0;
+    else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) out = 1;
+    return out;
 }
 
 
@@ -111,76 +201,19 @@ int segments_intersect_2d(const s_point *AB, const s_point *pd)
 }
 
 
-s_point find_center_mass(const s_point *in, int N_points)
-{
-    s_point out = in[0];
-    for (int ii=1; ii<N_points; ii++) {
-        out.x += in[ii].x;
-        out.y += in[ii].y;
-        out.z += in[ii].z;
-    }
-    out.x /= N_points;
-    out.y /= N_points;
-    out.z /= N_points;
-    return out;
-}
-
-
-int coord_with_largest_component_3d(double *n)
-{
-    int out = 2;
-    if (fabs(n[0]) > fabs(n[1]) && fabs(n[0]) > fabs(n[2])) out = 0;
-    else if (fabs(n[1]) > fabs(n[0]) && fabs(n[1]) > fabs(n[2])) out = 1;
-    return out;
-}
-
-
-s_point cross_prod(s_point u, s_point v)
-{
-    s_point out;
-    out.x = u.y*v.z - u.z*v.y;
-    out.y = u.z*v.x - u.x*v.z;
-    out.z = u.x*v.y - u.y*v.x;
-    return out;
-}
-
-
-double dot_prod(s_point u, s_point v)
-{
-    return u.x*v.x + u.y*v.y + u.z*v.z;
-}
-
-
-s_point subtract_points(s_point u, s_point v)
-{
-    s_point out;
-    out.x = u.x - v.x;
-    out.y = u.y - v.y;
-    out.z = u.z - v.z;
-    return out;
-}
-
-
-double distance_squared(s_point a, s_point b)
-{
-    s_point diff = subtract_points(a, b);
-    return dot_prod(diff, diff);
-}
-
-
 s_point closest_point_on_triangle(const s_point *triangle, s_point p)
 {
     s_point A = triangle[0], B = triangle[1], C = triangle[2];
-    s_point AB = {B.x-A.x, B.y-A.y, B.z-A.z};
-    s_point AC = {C.x-A.x, C.y-A.y, C.z-A.z};
-    s_point AP = {p.x-A.x, p.y-A.y, p.z-A.z};
+    s_point AB = {{{B.x-A.x, B.y-A.y, B.z-A.z}}};
+    s_point AC = {{{C.x-A.x, C.y-A.y, C.z-A.z}}};
+    s_point AP = {{{p.x-A.x, p.y-A.y, p.z-A.z}}};
 
     // In vertex A
     double d1 = dot_prod(AB, AP), d2 = dot_prod(AC, AP);
     if (d1 <= 0 && d2 <= 0) return A;
 
     // In vertex B
-    s_point BP = { p.x-B.x, p.y-B.y, p.z-B.z };
+    s_point BP = {{{ p.x-B.x, p.y-B.y, p.z-B.z }}};
     double d3 = dot_prod(AB, BP), d4 = dot_prod(AC, BP);
     if (d3 >= 0 && d4 <= d3) return B;
 
@@ -188,11 +221,11 @@ s_point closest_point_on_triangle(const s_point *triangle, s_point p)
     double vc = d1*d4 - d3*d2;
     if (vc <= 0 && d1 >= 0 && d3 <= 0) {
         double v = d1 / (d1 - d3);
-        return (s_point) {A.x + v*AB.x, A.y + v*AB.y, A.z + v*AB.z};
+        return (s_point){{{A.x + v*AB.x, A.y + v*AB.y, A.z + v*AB.z}}};
     }
 
     // In vertex C
-    s_point CP = { p.x-C.x, p.y-C.y, p.z-C.z };
+    s_point CP = {{{ p.x-C.x, p.y-C.y, p.z-C.z }}};
     double d5 = dot_prod(AB, CP), d6 = dot_prod(AC, CP);
     if (d6 >= 0 && d5 <= d6) return C;
 
@@ -200,15 +233,15 @@ s_point closest_point_on_triangle(const s_point *triangle, s_point p)
     double vb = d5*d2 - d1*d6;
     if (vb <= 0 && d2 >= 0 && d6 <= 0) {
         double w = d2 / (d2 - d6);
-        return (s_point) {A.x + w*AC.x, A.y + w*AC.y, A.z + w*AC.z};
+        return (s_point){{{A.x + w*AC.x, A.y + w*AC.y, A.z + w*AC.z}}};
     }
 
     // In edge BC
     double va = d3*d6 - d5*d4;
     if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
-        s_point BC = { C.x-B.x, C.y-B.y, C.z-B.z };
+        s_point BC = {{{ C.x-B.x, C.y-B.y, C.z-B.z }}};
         double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return (s_point) {B.x + w*BC.x, B.y + w*BC.y, B.z + w*BC.z};
+        return (s_point){{{B.x + w*BC.x, B.y + w*BC.y, B.z + w*BC.z}}};
     }
 
     // Inside face region
@@ -217,7 +250,7 @@ s_point closest_point_on_triangle(const s_point *triangle, s_point p)
     assert(fabs(denom) > 1e-9  && "Triangle is degenerate?");  // Triangle is degenarate?
     double v = vb / denom;
     double w = vc / denom;
-    return (s_point) {A.x + AB.x*v + AC.x*w, A.y + AB.y*v + AC.y*w, A.z + AB.z*v + AC.z*w};
+    return (s_point){{{A.x + AB.x*v + AC.x*w, A.y + AB.y*v + AC.y*w, A.z + AB.z*v + AC.z*w}}};
 }
 
 
@@ -232,7 +265,7 @@ s_point closest_point_on_segment(const s_point *segment, s_point p)
     // If outside segment, clamp t (and therefore d) to the closest endpoint
     if (t < 0) t = 0;
     if (t > 1) t = 1;
-    return (s_point) {segment[0].x + t*AB.x, segment[0].y + t*AB.y, segment[0].z + t*AB.z};
+    return (s_point){{{segment[0].x + t*AB.x, segment[0].y + t*AB.y, segment[0].z + t*AB.z}}};
 }
 
 
@@ -278,15 +311,15 @@ s_point *extract_normals_from_ch(const ch_vertex *vertices, int *faces, int Nf, 
         ch_vertex v1 = vertices[faces[ii * 3 + 1]];
         ch_vertex v2 = vertices[faces[ii * 3 + 2]];
 
-        s_point d1 = { .x = v1.x - v0.x, .y = v1.y - v0.y, .z = v1.z - v0.z };
-        s_point d2 = { .x = v2.x - v0.x, .y = v2.y - v0.y, .z = v2.z - v0.z };
+        s_point d1 = {{{ v1.x-v0.x, v1.y-v0.y, v1.z-v0.z }}};
+        s_point d2 = {{{ v2.x-v0.x, v2.y-v0.y, v2.z-v0.z }}};
         s_point n = cross_prod(d1, d2);
         if (NORMALIZE != 0) n = normalize_3d(n);
 
         // Orientation check
-        s_point verts_face[3] = {(s_point) {v0.x, v0.y, v0.z}, 
-                                 (s_point) {v1.x, v1.y, v1.z}, 
-                                 (s_point) {v2.x, v2.y, v2.z}};
+        s_point verts_face[3] = { (s_point){{{v0.x, v0.y, v0.z}}}, 
+                                  (s_point){{{v1.x, v1.y, v1.z}}}, 
+                                  (s_point){{{v2.x, v2.y, v2.z}}} };
         int o = orientation(verts_face, ch_CM);
         assert(o != 0);
         if (o < 0) {
@@ -332,6 +365,17 @@ int is_in_boundary_convhull(const int *faces, int Nf, int vid)
 }
 
 
+int mark_inside_convhull(const s_point *query, int Np, const s_point *pch, const int *faces, int Nf, int *mark)
+{
+    memset(mark, 0, sizeof(int) * Np);
+    int count = 0;
+    for (int ii=0; ii<Np; ii++) {
+        if (is_inside_convhull(query[ii], pch, faces, Nf)) mark[ii] = 1;
+    }
+    return count;
+}
+
+
 s_point random_point_uniform_3d(s_point min, s_point max)
 {
     double ux = rand() / ((double) RAND_MAX + 1.0);
@@ -357,18 +401,6 @@ s_point random_point_inside_convhull(const s_point *pch, const int *faces, int N
         it++;
     }
     return out;
-}
-
-
-
-int mark_inside_convhull(const s_point *query, int Np, const s_point *pch, const int *faces, int Nf, int *mark)
-{
-    memset(mark, 0, sizeof(int) * Np);
-    int count = 0;
-    for (int ii=0; ii<Np; ii++) {
-        if (is_inside_convhull(query[ii], pch, faces, Nf)) mark[ii] = 1;
-    }
-    return count;
 }
 
 
@@ -410,7 +442,7 @@ double compute_volume_convhull_from_points(const s_point *points, int Np)
 }
 
 
-void extract_faces_convhull_from_points(const s_point *points, int Np, int **faces, s_point **fnormals, int *Nf)
+void convhull_from_points(const s_point *points, int Np, int **faces, s_point **fnormals, int *Nf)
 {
     ch_vertex *ch_vertices = malloc_points_to_chvertex(points, Np);
     convhull_3d_build(ch_vertices, Np, faces, Nf);

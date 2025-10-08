@@ -1,10 +1,9 @@
 
 #include "bpoly.h"
-#include "algebra.h"
 #include "geometry.h"
 #include "float.h"
 #include "math.h"
-#include "gnuplotc.h"
+#include "external/gnuplotC/gnuplotc.h"
 #include <assert.h>
 #include <string.h>
 #include <time.h>
@@ -12,37 +11,12 @@
 #include <stdio.h>
 
 
-void free_bpoly(s_bound_poly *bpoly)
-{
-    // free_matrix(bpoly->points, bpoly->Np);
-    free(bpoly->points);
-    free(bpoly->faces);
-    // free_matrix(bpoly->fnormals, bpoly->Nf);
-    free(bpoly->fnormals);
-    free(bpoly);
-}
-
-
-void add_noise_to_bp(s_bound_poly *bpoly)
-{   // ADD SOME NOISE TO AVOID COLINEARITIES... Necessary??
-    const double s = 0.01;
-    for (int ii=0; ii<bpoly->Np; ii++) {
-        for (int jj=0; jj<3; jj++) {
-            double aux = 2.0 * rand() / RAND_MAX - 1;  
-            bpoly->points[ii].x += s * bpoly->dmax * aux;
-            bpoly->points[ii].y += s * bpoly->dmax * aux;
-            bpoly->points[ii].z += s * bpoly->dmax * aux;
-        }
-    }
-}
-
-
-void extract_dmax_bp(s_bound_poly *bpoly)
+void extract_dmax_bp(s_bpoly *bpoly)
 {
     double dmax = 0; 
     for (int ii=0; ii<bpoly->Np-1; ii++) {
         for (int jj=ii+1; jj<bpoly->Np; jj++) {
-            double d = norm_difference_squared(bpoly->points[ii].coords, bpoly->points[jj].coords, 3);
+            double d = distance_squared(bpoly->points[ii], bpoly->points[jj]);
             if (d > dmax) 
                 dmax = d;
         }
@@ -51,43 +25,35 @@ void extract_dmax_bp(s_bound_poly *bpoly)
 }
 
 
-void extract_CM_bp(s_bound_poly *bpoly)
+void extract_CM_bp(s_bpoly *bpoly)
 {
     bpoly->CM = find_center_mass(bpoly->points, bpoly->Np);
 }
 
 
-void extract_min_max_coord(s_bound_poly *bpoly, double *min, double *max)
+void extract_min_max_coord(const s_bpoly *bpoly, s_point *min, s_point *max)
 {
-    min[0] = DBL_MAX;   min[1] = DBL_MAX;   min[2] = DBL_MAX;
-    max[0] = -DBL_MAX;  max[1] = -DBL_MAX;  max[2] = -DBL_MAX;
+    min->x = DBL_MAX;   min->y = DBL_MAX;   min->z = DBL_MAX;
+    max->x = -DBL_MAX;  max->y = -DBL_MAX;  max->z = -DBL_MAX;
     for (int ii=0; ii<bpoly->Np; ii++) {
-        if (bpoly->points[ii].x < min[0]) min[0] = bpoly->points[ii].x;
-        if (bpoly->points[ii].y < min[1]) min[1] = bpoly->points[ii].y;
-        if (bpoly->points[ii].z < min[2]) min[2] = bpoly->points[ii].z;
+        if (bpoly->points[ii].x < min->x) min->x = bpoly->points[ii].x;
+        if (bpoly->points[ii].y < min->y) min->y = bpoly->points[ii].y;
+        if (bpoly->points[ii].z < min->z) min->z = bpoly->points[ii].z;
 
-        if (bpoly->points[ii].x > max[0]) max[0] = bpoly->points[ii].x;
-        if (bpoly->points[ii].y > max[1]) max[1] = bpoly->points[ii].y;
-        if (bpoly->points[ii].z > max[2]) max[2] = bpoly->points[ii].z;
+        if (bpoly->points[ii].x > max->x) max->x = bpoly->points[ii].x;
+        if (bpoly->points[ii].y > max->y) max->y = bpoly->points[ii].y;
+        if (bpoly->points[ii].z > max->z) max->z = bpoly->points[ii].z;
     }
 }
 
 
-void extract_convhull_bp(s_bound_poly *bpoly)
+void extract_convhull_bp(s_bpoly *bp)
 {   
-    ch_vertex *pch = convert_points_to_chvertex(bpoly->points, bpoly->Np);
-
-    convhull_3d_build(pch, bpoly->Np, &bpoly->faces, &bpoly->Nf);
-    // printf("DEBUG: Nf = %d, Np = %d\n", bpoly->Nf, bpoly->Np);
-    
-    s_point CM = find_center_mass(bpoly->points, bpoly->Np);
-    s_point *normals = extract_normals_from_ch(pch, bpoly->faces, bpoly->Nf, CM);
-    bpoly->fnormals = normals;
-    free(pch);
+    convhull_from_points(bp->points, bp->Np, &bp->faces, &bp->fnormals, &bp->Nf);
 }
 
 
-double compute_volume_bpoly(s_bound_poly *bpoly)
+double compute_volume_bpoly(s_bpoly *bpoly)
 {
     double vol = 0;
     for (int ii=0; ii<bpoly->Nf; ii++) {
@@ -95,6 +61,7 @@ double compute_volume_bpoly(s_bound_poly *bpoly)
         int i1 = 1;
         int i2 = 2;
 
+        // Normals should be unnormalized!
         double Nx = (bpoly->points[bpoly->faces[ii*3 + 1]].coords[i1] -
                      bpoly->points[bpoly->faces[ii*3 + 0]].coords[i1]) *
                     (bpoly->points[bpoly->faces[ii*3 + 2]].coords[i2] -
@@ -105,19 +72,17 @@ double compute_volume_bpoly(s_bound_poly *bpoly)
                     (bpoly->points[bpoly->faces[ii*3 + 2]].coords[i1] -
                      bpoly->points[bpoly->faces[ii*3 + 0]].coords[i1]);
 
-        // Nx = bpoly->fnormals[ii][0];
         vol += Nx * (bpoly->points[bpoly->faces[ii*3 + 0]].coords[i0] +
                      bpoly->points[bpoly->faces[ii*3 + 1]].coords[i0] +
                      bpoly->points[bpoly->faces[ii*3 + 2]].coords[i0]);
     }
-
     return vol/6;
 }
 
 
-s_bound_poly *new_bpoly_from_points(const s_point *points, double Np)
-{
-    s_bound_poly *bpoly = malloc(sizeof(s_bound_poly));
+s_bpoly *new_bpoly_from_points(const s_point *points, double Np)
+{   // New copy of points inside!
+    s_bpoly *bpoly = malloc(sizeof(s_bpoly));
     bpoly->points = malloc(sizeof(s_point) * Np);
     memcpy(bpoly->points, points, Np * sizeof(s_point));
     bpoly->Np = Np;
@@ -125,7 +90,7 @@ s_bound_poly *new_bpoly_from_points(const s_point *points, double Np)
     extract_dmax_bp(bpoly);
     extract_convhull_bp(bpoly);
     extract_CM_bp(bpoly);
-    extract_min_max_coord(bpoly, bpoly->min, bpoly->max);
+    extract_min_max_coord(bpoly, &bpoly->min, &bpoly->max);
 
     bpoly->volume = compute_volume_bpoly(bpoly);
     
@@ -133,7 +98,7 @@ s_bound_poly *new_bpoly_from_points(const s_point *points, double Np)
 }
 
 
-s_bound_poly *new_bpoly_from_txt(const char *fname)
+s_bpoly *new_bpoly_from_txt(const char *fname)
 {
     FILE *f = fopen(fname, "r");
     if (!f) {
@@ -149,203 +114,141 @@ s_bound_poly *new_bpoly_from_txt(const char *fname)
         fscanf(f, "%lf, %lf, %lf\n", &points[ii].x, &points[ii].y, &points[ii].z); 
     }
 
-     return new_bpoly_from_points(points, Np);
+     s_bpoly *out = new_bpoly_from_points(points, Np);
+     free(points);
+     return out;
 }
 
 
-s_bound_poly *new_bpoly_copy(s_bound_poly *in)
+s_bpoly *new_bpoly_copy(s_bpoly *in)
 {
-    s_bound_poly *out = malloc(sizeof(s_bound_poly));
-    out->Np = in->Np;
+    s_bpoly *out = malloc(sizeof(s_bpoly));
 
-    out->points = malloc_matrix(in->Np, 3);
-    copy_matrix(in->points, out->points, in->Np, 3);
+    out->Np = in->Np;
+    out->points = malloc(in->Np * sizeof(s_point));
+    memcpy(out->points, in->points, sizeof(s_point) * in->Np);
 
     out->Nf = in->Nf;
     out->faces = malloc(sizeof(int) * in->Nf * 3);
-    copy_matrix_int(&in->faces, &out->faces, 1, in->Nf * 3);
+    memcpy(out->faces, in->faces, sizeof(int) * 3 * in->Nf);
 
-    out->fnormals = malloc_matrix(in->Nf, 3);
-    copy_matrix(in->fnormals, out->fnormals, in->Nf, 3);
+    out->fnormals = malloc(sizeof(s_point) * in->Nf);
+    memcpy(out->fnormals, in->fnormals, sizeof(s_point) * in->Nf);
 
     out->dmax = in->dmax;
-
     out->volume = in->volume;
-    
-    out->CM[0] = in->CM[0];
-    out->CM[1] = in->CM[1];
-    out->CM[2] = in->CM[2];
-
-    out->min[0] = in->min[0];
-    out->min[1] = in->min[1];
-    out->min[2] = in->min[2];
-
-    out->max[0] = in->max[0];
-    out->max[1] = in->max[1];
-    out->max[2] = in->max[2];
+    out->CM = in->CM;
+    out->min = in->min;
+    out->max = in->max;
 
     return out;
 }
 
 
-void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **out)
+void free_bpoly(s_bpoly *bpoly)
 {
-    out[0][0] = bpoly->points[face[0]][0];
-    out[0][1] = bpoly->points[face[0]][1];
-    out[0][2] = bpoly->points[face[0]][2];
-
-    out[1][0] = bpoly->points[face[1]][0];
-    out[1][1] = bpoly->points[face[1]][1];
-    out[1][2] = bpoly->points[face[1]][2];
-
-    out[2][0] = bpoly->points[face[2]][0];
-    out[2][1] = bpoly->points[face[2]][1];
-    out[2][2] = bpoly->points[face[2]][2];
+    free(bpoly->points);
+    free(bpoly->faces);
+    free(bpoly->fnormals);
+    free(bpoly);
 }
 
 
-void scale_bpoly_vertices(double **points, int Np, double s)
+void scale_points(s_point *points, int Np, double s)
 {
-    double CM[3];
-    find_center_mass(points, Np, 3, CM);
-    double b[3] = {(1-s)*CM[0],
-                   (1-s)*CM[1],
-                   (1-s)*CM[2]};
-    
+    s_point CM = find_center_mass(points, Np);
+    s_point b = {{{(1-s)*CM.x, (1-s)*CM.y, (1-s)*CM.z}}};
     for (int ii=0; ii<Np; ii++) {
-        points[ii][0] = s*points[ii][0] + b[0];
-        points[ii][1] = s*points[ii][1] + b[1];
-        points[ii][2] = s*points[ii][2] + b[2];
+        points[ii].x = s*points[ii].x + b.x;
+        points[ii].y = s*points[ii].y + b.y;
+        points[ii].z = s*points[ii].z + b.z;
     }
 }
 
 
-s_bound_poly *scale_bpoly(s_bound_poly *bp, double factor)
+s_bpoly *copy_bpoly_scaled(const s_bpoly *bp, double factor)
 {
-    double OLD_VOL = (bp)->volume;
-    double **new_p = malloc_matrix((bp)->Np, 3);
-    copy_matrix((bp)->points, new_p, (bp)->Np, 3);
-    scale_bpoly_vertices(new_p, (bp)->Np, factor);
-
-    int Np = (bp)->Np;
-    return(new_bpoly_from_points(new_p, Np));
-    printf("DEBUG SCALE_BPOLY: new volume = %f, old volume = %f\n", (bp)->volume, OLD_VOL);
+    // double OLD_VOL = bp->volume;
+    s_point *new_p = malloc(sizeof(s_point) * bp->Np);
+    memcpy(new_p, bp->points, sizeof(s_point) * bp->Np);
+    scale_points(new_p, bp->Np, factor);
+    s_bpoly *out = new_bpoly_from_points(new_p, bp->Np);
+    free(new_p);
+    return out;
 }
 
 
-s_bound_poly *scale_bpoly_objective_volume(s_bound_poly *bp, double objective_volume)
+s_bpoly *copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume)
 {
-    assert(fabs((bp)->volume) > 1e-6);
+    assert(fabs(bp->volume) > 1e-6);
     double F = objective_volume / (bp)->volume;
     double s = cbrt(F);
-
-    double **new_p = malloc_matrix((bp)->Np, 3);
-    copy_matrix((bp)->points, new_p, (bp)->Np, 3);
-    scale_bpoly_vertices(new_p, (bp)->Np, s);
-
-    int Np = (bp)->Np;
-    return(new_bpoly_from_points(new_p, Np));
+    return copy_bpoly_scaled(bp, s);
 }
 
 
-int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3, 
-                  double **all_seeds, int Ns, int seed_id)
+int should_mirror(s_point normal, double d_plane, s_point face[3], const s_point *all_seeds, int Ns, int seed_id)
 {
-    double dist = d - dot_3d(n, s);
-    // Projection onto the face's plane:
-    double p[3] = { s[0] + dist*n[0],
-                    s[1] + dist*n[1],
-                    s[2] + dist*n[2] };
-
-    // 2) find closest point c on triangle to p
-    double c[3];
-    closest_point_on_triangle(f1, f2, f3, p, c);
+    s_point s = all_seeds[seed_id];
+    double dist = d_plane - dot_prod(normal, s);
+    s_point proj_fplane = {{{s.x + dist*normal.x, s.y + dist*normal.y, s.z + dist*normal.z}}};
+    s_point c = closest_point_on_triangle(face, proj_fplane);
     
-    // 3) check nearest‐neighbor at c
-    double d_s = norm_difference_squared(c, s, 3);
+    // Check nearest‐neighbor at c
+    double d_s = distance_squared(c, s);
     for (int j = 0; j < Ns; j++) {
-        if (j != seed_id && norm_difference_squared(all_seeds[j], c, 3) + 1e-6 < d_s)
+        if (j != seed_id && distance(all_seeds[j], c) + 1e-6 < d_s)
             return 0;   // someone else is nearer
     }
-
     return 1;
 }
 
 
-int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns)
+int sites_mirroring_CORE(const s_bpoly *bp, const s_point *s, int Ns, s_point *out)
 {
-    // worst‐case 
-    double **out = malloc_matrix(Ns * (1 + bp->Nf), 3);
-
-    for (int ii=0; ii<Ns; ii++) {
-        out[ii][0] = (*s)[ii][0];
-        out[ii][1] = (*s)[ii][1];
-        out[ii][2] = (*s)[ii][2];
-    }
-    int kk = Ns;
-
-    // 1st order reflections
+    // out should be malloced beforehand with space for Ns+N_mirror. Two-passes!
+    int N_mirror = 0;
     for (int ff=0; ff<bp->Nf; ff++) {
-        int i0 = bp->faces[ff*3 + 0],
-            i1 = bp->faces[ff*3 + 1],
-            i2 = bp->faces[ff*3 + 2];
-        double *f1 = bp->points[i0],
-               *f2 = bp->points[i1],
-               *f3 = bp->points[i2];
-
-        double *n = bp->fnormals[ff];
-        // assert(fabs(norm_squared(n, 3)-1) < 1e-9);
-        double d = dot_3d(n, f1);
-
+        s_point face[3] = {bp->points[bp->faces[ff*3+0]],
+                           bp->points[bp->faces[ff*3+1]],
+                           bp->points[bp->faces[ff*3+2]]};
+        s_point normal = bp->fnormals[ff];
+        double plane_d = dot_prod(normal, face[0]);
         for (int jj=0; jj<Ns; jj++) {
-            double *sj = (*s)[jj];
-            if (!should_mirror(n, sj, d, f1, f2, f3, *s, Ns, jj))
-                continue;
-            
-            double factor = 2 * (d - dot_3d(n, sj));
-            // if (fabs(factor / 2.0) < 1e-9) continue;
+            if (!should_mirror(normal, plane_d, face, s, Ns, jj)) continue;
 
-            out[kk][0] = sj[0] + factor * n[0];
-            out[kk][1] = sj[1] + factor * n[1];
-            out[kk][2] = sj[2] + factor * n[2];
-            kk++;
+            if (out) {
+                s_point sj = s[jj];
+                double factor = 2 * (plane_d - dot_prod(normal, sj));
+                // if (fabs(factor / 2.0) < 1e-9) continue;
+                out[Ns+N_mirror].x = sj.x + factor * normal.x;
+                out[Ns+N_mirror].y = sj.y + factor * normal.y;
+                out[Ns+N_mirror].z = sj.z + factor * normal.z;
+            }
+            N_mirror++;
         }
     }
-    
-    // 2nd order reflections:
-    // precompute face adjacency: list of (fi,fj, shared_edge_vertices)
-    // FaceNeighbor **f_adjacency = compute_face_adjacency(bp);
-    // kk = extend_sites_double_reflection(bp, f_adjacency, out, Ns, kk);
+    return N_mirror;
+}
 
-    // 3rd order reflections:
-    // kk = extend_sites_triple_reflection(bp, out, Ns, kk);
 
-    free_matrix(*s, Ns);
-    *s = realloc_matrix(out, Ns * (1 + bp->Nf), kk, 3);
-    // printf("DEBUG: Reflected %d sites\n", kk-Ns);
-    return kk;
+int extend_sites_mirroring(const s_bpoly *bp, s_point **s, int Ns)
+{
+    int N_mirror = sites_mirroring_CORE(bp, *s, Ns, NULL);
+    *s = realloc(*s, sizeof(s_point) * (Ns+N_mirror));
+    sites_mirroring_CORE(bp, *s, Ns, *s);
+    // printf("DEBUG: Reflected %d sites\n", N_mirror);
+    return N_mirror;
 }
 
 
 
 // MY IMPLEMENTATION FOR POISSON DISK SAMPLING WITH WEIGHT FUNCTION
 
-void random_point_uniform(double *min, double *max, s_point *out)
-{
-    double ux = rand() / ((double) RAND_MAX + 1.0);
-    double uy = rand() / ((double) RAND_MAX + 1.0);
-    double uz = rand() / ((double) RAND_MAX + 1.0);
-
-    out->coords[0] = min[0] + (max[0] - min[0]) * ux;
-    out->coords[1] = min[1] + (max[1] - min[1]) * uy;
-    out->coords[2] = min[2] + (max[2] - min[2]) * uz;
-}
-
-
 // Generate a random candidate point around a given point p.
 // The candidate is generated uniformly in the spherical shell [r, 2r],
 // where r = r_of_x(p). We also perturb in all 3 dimensions.
-void random_point_around(double *x, double r, double *out)
+s_point random_point_around(s_point x, double r)
 {
     double radius = r + r * rand()/((double) RAND_MAX + 1);
 
@@ -354,41 +257,40 @@ void random_point_around(double *x, double r, double *out)
     if (aux >= 1) aux = 1;
     if (aux <= -1) aux = -1;
     double theta = acos(aux);  // polar angle, 0 <= theta <= pi.
-    double phi = 2.0 * M_PI * rand()/((double) RAND_MAX + 1);         // azimuthal, 0 <= phi < 2pi.
+    double phi = 2.0 * M_PI * rand()/((double) RAND_MAX + 1);  // azimuthal, 0 <= phi < 2pi.
     
-    out[0] = x[0] + radius * sin(theta) * cos(phi);
-    out[1] = x[1] + radius * sin(theta) * sin(phi);
-    out[2] = x[2] + radius * cos(theta);
+    s_point out;
+    out.x = x.x + radius * sin(theta) * cos(phi);
+    out.y = x.y + radius * sin(theta) * sin(phi);
+    out.z = x.z + radius * cos(theta);
+    return out;
 }
 
 
-int is_valid(s_bound_poly *bpoly, double *q, s_point *samples, int Nsamples, double (*rmax)(double *)) {
-    if (!is_inside_convhull(q, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf)) 
+int poisson_is_valid(const s_bpoly *bpoly, s_point query, s_point *samples, int Ns, double (*rmax)(double *))
+{
+    if (!is_inside_convhull(query, bpoly->points, bpoly->faces,bpoly->Nf)) 
         return 0;
 
-    double rq = rmax(q);
-    for (int ii = 0; ii<Nsamples; ii++) {
+    double rq = rmax(query.coords);
+    for (int ii = 0; ii<Ns; ii++) {
         double rx = rmax(samples[ii].coords);
         double minDist = fmin(rq, rx);
-        if (distance_squared(q, samples[ii].coords) < (minDist * minDist))
+        if (distance_squared(query, samples[ii]) < (minDist * minDist))
             return 0; // candidate too close to an existing sample
     }
     return 1; // valid candidate
 }
 
 
-double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*rmax)(double *), int *Np_generated)
+s_point *generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *), int *Np_generated)
 {
-    s_point samples[MAX_TRIAL_POINTS];
-    int Nsamples = 0;
+    s_point samples[MAX_TRIAL_POINTS], active_list[MAX_TRIAL_POINTS];
+    int Nsamples = 0, Nactive = 0;
 
-    s_point active_list[MAX_TRIAL_POINTS];
-    int Nactive = 0;
-
-    s_point x; // RANDOM!!
-    random_point_uniform(bpoly->min, bpoly->max, &x);
-    while (!is_inside_convhull(x.coords, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf)) {
-        random_point_uniform(bpoly->min, bpoly->max, &x);
+    s_point x = random_point_uniform_3d(bpoly->min, bpoly->max);
+    while (!is_inside_convhull(x, bpoly->points, bpoly->faces, bpoly->Nf)) {
+        x = random_point_uniform_3d(bpoly->min, bpoly->max);
     }
 
     samples[Nsamples++] = x;
@@ -401,9 +303,8 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
 
         double rp = rmax(p.coords);
         for (int ii=0; ii<MAX_TRIAL_TESTS; ii++) {
-            s_point q;
-            random_point_around(p.coords, rp, q.coords);
-            if (is_valid(bpoly, q.coords, samples, Nsamples, rmax)) {
+            s_point q = random_point_around(p, rp);
+            if (poisson_is_valid(bpoly, q, samples, Nsamples, rmax)) {
                 samples[Nsamples++] = q;
                 active_list[Nactive++] = q;
                 found = 1;
@@ -412,7 +313,8 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
         }
 
         if (Nsamples >= MAX_TRIAL_POINTS-1) {
-            fprintf(stderr, "WARNING! Max_trial_points in poisson sampling.\n");
+            puts("ERROR! Max_trial_points in poisson sampling.\n");
+            exit(1);
         }
         
         if (found == 0) {
@@ -423,45 +325,41 @@ double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*r
     }
 
     while (Nsamples < 4) {
-        random_point_uniform(bpoly->min, bpoly->max, &x);
-        while (!is_inside_convhull(x.coords, bpoly->points, bpoly->faces, bpoly->fnormals, bpoly->Nf)) {
-            random_point_uniform(bpoly->min, bpoly->max, &x);
+        x = random_point_uniform_3d(bpoly->min, bpoly->max);
+        while (!is_inside_convhull(x, bpoly->points, bpoly->faces, bpoly->Nf)) {
+            x = random_point_uniform_3d(bpoly->min, bpoly->max);
         }
         samples[Nsamples++] = x;
     }
 
-    double **out_points = malloc_matrix(Nsamples, 3);
+    s_point *out = malloc(sizeof(s_point) * Nsamples);
     for (int ii=0; ii<Nsamples; ii++) {
-        out_points[ii][0] = samples[ii].coords[0];
-        out_points[ii][1] = samples[ii].coords[1];
-        out_points[ii][2] = samples[ii].coords[2];
+        out[ii] = samples[ii];
     }
     
-    // printf("DEBUG POISSON: Nsamples = %d\n", Nsamples);
-    // if (Nsamples < 3) {
-    //     printf("WARNING! TOO FEW SAMPLES..., N = %d\n", Nsamples);
-    //     exit(1);
-    // }
     *Np_generated = Nsamples;
-    return out_points;
+    return out;
 }
 
 
-void find_closest_point_on_bp(s_bound_poly *bp, double *p, double *OUT)
+s_point find_closest_point_on_bp(const s_bpoly *bp, s_point p)
 {
-    OUT[0] = DBL_MAX; OUT[1] = DBL_MAX; OUT[2] = DBL_MAX;
+    assert(bp->Nf != 0 && bp->Np != 0);
+    s_point out;
+    double best_d2 = DBL_MAX;
+
     for (int f=0; f<bp->Nf; f++) {
-        double tmp[3];
-
-        double *A = bp->points[bp->faces[3*f + 0]];
-        double *B = bp->points[bp->faces[3*f + 1]];
-        double *C = bp->points[bp->faces[3*f + 2]];
-        closest_point_on_triangle(A, B, C, p, tmp);
-
-        if (distance_squared(p, tmp) < distance_squared(p, OUT)) {
-            OUT[0] = tmp[0]; OUT[1] = tmp[1]; OUT[2] = tmp[2];
+        s_point triangle[3] = {bp->points[bp->faces[3*f+0]],
+                               bp->points[bp->faces[3*f+1]],
+                               bp->points[bp->faces[3*f+2]]};
+        s_point tmp = closest_point_on_triangle(triangle, p);
+        double d2 = distance_squared(p, tmp);
+        if ( d2 < best_d2) {
+            out = tmp;
+            best_d2 = d2; 
         }
     }
+    return out;
 }
 
 
@@ -526,9 +424,9 @@ void generate_file_sphere_bp(const char *filename, double radius, int nTheta, in
 }
 
 
-void plot_bpoly(s_bound_poly *bpoly, char *f_name, double *ranges, char *color, char *view_command)
+void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, char *view_command)
 {
-    t_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
+    s_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
     gnuplot_config(interface, "set pm3d depthorder", 
                               "set pm3d border lc 'black' lw 0.1",
                               "set xyplane at 0",
@@ -540,7 +438,7 @@ void plot_bpoly(s_bound_poly *bpoly, char *f_name, double *ranges, char *color, 
     if (ranges) {
         char buff[1024];
         snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
-                 ranges[0], ranges[1], ranges[2], ranges[3], ranges[4], ranges[5]); 
+                 ranges[0].x, ranges[1].x, ranges[0].x, ranges[1].y, ranges[0].z, ranges[1].z); 
         gnuplot_config(interface, buff);
     }
 
@@ -549,14 +447,15 @@ void plot_bpoly(s_bound_poly *bpoly, char *f_name, double *ranges, char *color, 
         if (color) snprintf(buff, 256, "fs transparent solid 0.2 fc '%s'", color);
         else snprintf(buff, 256, "fs transparent solid 0.2 fc 'blue'");
 
-        draw_solid_triangle_3d(interface, bpoly->points[bpoly->faces[ii*3]], 
-                bpoly->points[bpoly->faces[ii*3+1]], bpoly->points[bpoly->faces[ii*3+2]], buff);
+        draw_solid_triangle_3d(interface, bpoly->points[bpoly->faces[ii*3]].coords, 
+                bpoly->points[bpoly->faces[ii*3+1]].coords, 
+                bpoly->points[bpoly->faces[ii*3+2]].coords, buff);
     }
     gnuplot_end(interface);
 }
 
 
-void plot_bpoly_differentviews(s_bound_poly *bpoly, char *f_name, double *ranges, char *color)
+void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color)
 {   
     char real_name[256];
     snprintf(real_name, 256, "%s_v1.png", f_name);

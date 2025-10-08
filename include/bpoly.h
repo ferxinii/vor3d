@@ -7,8 +7,8 @@
 #define MAX_TRIAL_POINTS 10000
 #define MAX_TRIAL_TESTS 50
 
-// Main structure
-typedef struct bound_poly {
+
+typedef struct bounding_polyhedron {
     int Np;
     s_point *points;
     int Nf;
@@ -19,39 +19,25 @@ typedef struct bound_poly {
     s_point min;
     s_point max;
     double volume;
-} s_bound_poly;
+} s_bpoly;
 
-void free_bpoly(s_bound_poly *bpoly);
-void add_noise_to_bp(s_bound_poly *bpoly);
-void extract_dmax_bp(s_bound_poly *bpoly);
-void extract_CM_bp(s_bound_poly *bpoly);
-void extract_min_max_coord(s_bound_poly *bpoly, double *min, double *max);
-void extract_convhull_bp(s_bound_poly *bpoly);
 
-s_bound_poly *new_bpoly_from_points(const s_point *points, double Np);
-s_bound_poly *new_bpoly_from_txt(const char *fname);
-s_bound_poly *new_bpoly_copy(s_bound_poly *in);
+s_bpoly *new_bpoly_from_points(const s_point *points, double Np);  // (Different copy of array *points inside)
+s_bpoly *new_bpoly_from_txt(const char *fname);
+s_bpoly *new_bpoly_copy(s_bpoly *in);
+s_bpoly *copy_bpoly_scaled(const s_bpoly *bp, double factor);
+s_bpoly *copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume);
+void free_bpoly(s_bpoly *bpoly);
 
-void extract_vertices_face_bpoly(const s_bound_poly *bpoly, int *face, double **out);
-void scale_bpoly_vertices(double **points, int Np, double s);
-s_bound_poly *scale_bpoly(s_bound_poly *bp, double factor);
-s_bound_poly *scale_bpoly_objective_volume(s_bound_poly *bp, double objective_volume);
-
-double compute_volume_bpoly(s_bound_poly *bpoly);
-
-void find_closest_point_on_bp(s_bound_poly *bp, double *p, double *OUT);
-
-int should_mirror(double *n, double *s, double d, double *f1, double *f2, double *f3, double **all_seeds, int Ns, int seed_id);
-int extend_sites_mirroring(s_bound_poly *bp, double ***s, int Ns);
-
-void random_point_uniform(double *min, double *max, s_point *out);
-void random_point_around(double *x, double r, double *out);
-int is_valid(s_bound_poly *bpoly, double *q, s_point *samples, int Nsamples, double (*rmax)(double *));
-double **generate_nonuniform_poisson_dist_inside(s_bound_poly *bpoly, double (*rmax)(double *), int *Np_generated);
+s_point *generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *), int *Np_generated);
+int extend_sites_mirroring(const s_bpoly *bp, s_point **s, int Ns);
+s_point find_closest_point_on_bp(const s_bpoly *bp, s_point p);
 
 void generate_file_cube_bp(const char *filename, double length);
 void generate_file_tetrahedron_bp(const char *filename, double length);
 void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
 
-void plot_bpoly_differentviews(s_bound_poly *bpoly, char *f_name, double *ranges, char *color);
+void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color);
+void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, char *view_command);
+
 #endif

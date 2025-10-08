@@ -24,7 +24,7 @@ double r_fun(double *x)
 void check_volume(s_vdiagram *vd)
 {
     double sum_vol = 0;
-    for (int ii=0; ii<vd->N_vcells; ii++) {
+    for (int ii=0; ii<vd->N; ii++) {
         sum_vol += vd->vcells[ii]->volume;
         if (vd->vcells[ii]->volume <= 0) {
             printf("VOL %d : %f\n", ii, vd->vcells[ii]->volume);
@@ -34,11 +34,11 @@ void check_volume(s_vdiagram *vd)
 }
 
 
-void generate_statistics(s_bound_poly *bp, int N_simu, char *FILE_VOLS)
+void generate_statistics(s_bpoly *bp, int N_simu, char *FILE_VOLS)
 {
     clear_volumes_file(FILE_VOLS);
     for (int ii=0; ii<N_simu; ii++) {
-        s_bound_poly *bp_tmp = new_bpoly_copy(bp);
+        s_bpoly *bp_tmp = new_bpoly_copy(bp);
         printf("%d, Nf = %d\n", ii, bp_tmp->Nf);
         s_vdiagram *vd = vor3d_from_bp_PDS(&r_fun, bp_tmp, 5);
         append_volumes_to_file(vd, FILE_VOLS, ii);
@@ -94,17 +94,17 @@ int main(void)
 
     // ------------------ LEFT LUNG ---------------------
     puts("\nLEFT LUNG:");
-    s_bound_poly *bp_L = new_bpoly_from_txt("lobes/L.txt");
+    s_bpoly *bp_L = new_bpoly_from_txt("lobes/L.txt");
     printf("volume: %f\n", bp_L->volume);
-    printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_L->min[0], bp_L->min[1], bp_L->min[2], bp_L->max[0], bp_L->max[1], bp_L->max[2]);
+    printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_L->min.x, bp_L->min.y, bp_L->min.z, bp_L->max.x, bp_L->max.y, bp_L->max.z);
     plot_bpoly_differentviews(bp_L, "plots/bp_L.png", NULL, "blue");
 
     
     int Nsimu = 10;
     // ADULT:
-    s_bound_poly *bp_L_adult = scale_bpoly(bp_L, 1.06);
-    z0 = bp_L_adult->min[2];
-    zf = bp_L_adult->max[2];
+    s_bpoly *bp_L_adult = copy_bpoly_scaled(bp_L, 1.06);
+    z0 = bp_L_adult->min.z;
+    zf = bp_L_adult->max.z;
     r_mean = 1.1;
     generate_statistics(bp_L_adult, Nsimu, "virtual_population/L_adult.txt");
         // PLOT
@@ -114,23 +114,23 @@ int main(void)
         free_vdiagram(vd_L);
 
     // 13 Y.O.:
-    s_bound_poly *bp_L_13 = scale_bpoly(bp_L, 0.94);
-    z0 = bp_L_13->min[2];
-    zf = bp_L_13->max[2];
+    s_bpoly *bp_L_13 = copy_bpoly_scaled(bp_L, 0.94);
+    z0 = bp_L_13->min.z;
+    zf = bp_L_13->max.z;
     r_mean = 1;
     generate_statistics(bp_L_13, Nsimu, "virtual_population/L_13yo.txt");
 
     // 8 Y.O.:
-    s_bound_poly *bp_L_8 = scale_bpoly(bp_L, 0.71);
-    z0 = bp_L_8->min[2];
-    zf = bp_L_8->max[2];
+    s_bpoly *bp_L_8 = copy_bpoly_scaled(bp_L, 0.71);
+    z0 = bp_L_8->min.z;
+    zf = bp_L_8->max.z;
     r_mean = 0.9;
     generate_statistics(bp_L_8, Nsimu, "virtual_population/L_8yo.txt");
 
     // 3 Y.O.:
-    s_bound_poly *bp_L_3 = scale_bpoly(bp_L, 0.52);
-    z0 = bp_L_3->min[2];
-    zf = bp_L_3->max[2];
+    s_bpoly *bp_L_3 = copy_bpoly_scaled(bp_L, 0.52);
+    z0 = bp_L_3->min.z;
+    zf = bp_L_3->max.z;
     r_mean = 0.7;
     generate_statistics(bp_L_3, Nsimu, "virtual_population/L_3yo.txt");
 
@@ -138,15 +138,15 @@ int main(void)
 
     // ------------------ LEFT LUNG ---------------------
     puts("\nRIGHT LUNG");
-    s_bound_poly *bp_R = new_bpoly_from_txt("lobes/R.txt");
+    s_bpoly *bp_R = new_bpoly_from_txt("lobes/R.txt");
     printf("volume: %f\n", bp_R->volume);
-    printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_R->min[0], bp_R->min[1], bp_R->min[2], bp_R->max[0], bp_R->max[1], bp_R->max[2]);
+    printf("min: (%f, %f, %f)\n max: (%f, %f, %f)\n", bp_R->min.x, bp_R->min.y, bp_R->min.z, bp_R->max.x, bp_R->max.y, bp_R->max.z);
     plot_bpoly_differentviews(bp_R, "plots/bp_R.png", NULL, "orange");
 
     // ADULT:
-    s_bound_poly *bp_R_adult = scale_bpoly(bp_R, 1.06);
-    z0 = bp_R_adult->min[2];
-    zf = bp_R_adult->max[2];
+    s_bpoly *bp_R_adult = copy_bpoly_scaled(bp_R, 1.06);
+    z0 = bp_R_adult->min.z;
+    zf = bp_R_adult->max.z;
     r_mean = 1.1;
     generate_statistics(bp_L_adult, Nsimu, "virtual_population/R_adult.txt");
         // PLOT
@@ -156,23 +156,23 @@ int main(void)
         free_vdiagram(vd_R);
 
     // 13 Y.O.:
-    s_bound_poly *bp_R_13 = scale_bpoly(bp_R, 0.94);
-    z0 = bp_R_13->min[2];
-    zf = bp_R_13->max[2];
+    s_bpoly *bp_R_13 = copy_bpoly_scaled(bp_R, 0.94);
+    z0 = bp_R_13->min.z;
+    zf = bp_R_13->max.z;
     r_mean = 1;
     generate_statistics(bp_R_13, Nsimu, "virtual_population/R_13yo.txt");
 
     // 8 Y.O.:
-    s_bound_poly *bp_R_8 = scale_bpoly(bp_R, 0.72);
-    z0 = bp_R_8->min[2];
-    zf = bp_R_8->max[2];
+    s_bpoly *bp_R_8 = copy_bpoly_scaled(bp_R, 0.72);
+    z0 = bp_R_8->min.z;
+    zf = bp_R_8->max.z;
     r_mean = 0.9;
     generate_statistics(bp_R_8, Nsimu, "virtual_population/R_8yo.txt");
 
     // 3 Y.O.:
-    s_bound_poly *bp_R_3 = scale_bpoly(bp_R, 0.52);
-    z0 = bp_R_3->min[2];
-    zf = bp_R_3->max[2];
+    s_bpoly *bp_R_3 = copy_bpoly_scaled(bp_R, 0.52);
+    z0 = bp_R_3->min.z;
+    zf = bp_R_3->max.z;
     r_mean = 0.7;
     generate_statistics(bp_R_3, Nsimu, "virtual_population/R_3yo.txt");
 
