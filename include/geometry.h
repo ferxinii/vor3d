@@ -34,10 +34,11 @@ int segments_intersect_2d(const s_point *AB, const s_point *pd);
 s_point closest_point_on_triangle(const s_point *triangle, s_point p);
 s_point closest_point_on_segment(const s_point *segment, s_point p);
 int point_in_triangle_2d(const s_point *triangle, s_point p);
+int point_in_triangle_3d(const s_point *triangle, s_point p);
 
 void convhull_from_points(const s_point *points, int Np, int **faces, s_point **fnormals, int *Nf);  // fnormals out is optional
 // s_point *extract_normals_from_ch(const ch_vertex *vertices, int *faces, int Nf, s_point ch_CM, int NORMALIZE);  // TODO remove visibility of this! only used in externally in vdiagram.
-int is_inside_convhull(s_point query, const s_point *pch, const int *faces, int Nf);
+int is_inside_convhull(s_point query, const s_point *pch, const int *faces, int Nf);  // 1: inside, 0: outise, -1: in boundary
 int is_in_boundary_convhull(const int *faces, int Nf, int vid);
 int mark_inside_convhull(const s_point *query, int Np, const s_point *pch, const int *faces, int Nf, int *mark);
 

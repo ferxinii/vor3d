@@ -14,12 +14,29 @@
 #include <math.h>
 
 
+// DEBUG:
+void dump_setup_points(const s_scplx *setup, const int *ids, int n)
+{
+    for (int i = 0; i < n; ++i) {
+        int id = ids[i];
+        if (id < 0 || id >= setup->N_points) {
+            fprintf(stderr, "dump: bad id %d\n", id);
+            continue;
+        }
+        s_point p = setup->points[id];
+        fprintf(stderr, "setup->points[%d] = (%g, %g, %g)\n", id, p.x, p.y, p.z);
+    }
+}
+
+
 void free_vcell(s_vcell *vcell)
 {
     free(vcell->vertices);
     free_matrix_int(vcell->origin_vertices, vcell->Nv_capacity);
-    free(vcell->faces);
-    free(vcell->fnormals);
+    if (vcell->faces) {
+        free(vcell->faces);
+        free(vcell->fnormals);
+    }
     free(vcell);
 }
 
@@ -27,11 +44,16 @@ void free_vcell(s_vcell *vcell)
 void free_vdiagram(s_vdiagram *vdiagram)
 {
     for (int ii=0; ii<vdiagram->N; ii++) {
+        // printf("Freing vcell %d\n", ii);
         if (vdiagram->vcells[ii]) free_vcell(vdiagram->vcells[ii]);
     }
+    // puts("Freeing vcells");
     free(vdiagram->vcells);
+    // puts("Freeing seeds");
     free(vdiagram->seeds);
+    // puts("Freeing bpoly");
     free_bpoly((s_bpoly *)vdiagram->bpoly);
+    // puts("Freeing vdiagram");
     free(vdiagram);
 }
 
@@ -97,7 +119,7 @@ void print_vdiagram(const s_vdiagram *vdiagram)
 {
     puts("------- VORONOI DIAGRAM ------");
     for (int ii=0; ii<vdiagram->N; ii++) {
-        print_vcell(vdiagram->vcells[ii]);
+        if (vdiagram->vcells[ii]) print_vcell(vdiagram->vcells[ii]);
     }
     puts("------------------------------");
 }
@@ -136,6 +158,19 @@ int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *
     s_point v[4];
     extract_vertices_ncell(setup, ncell, v);
 
+    // int ids[] = { ncell->vertex_id[0], ncell->vertex_id[1],
+    //           ncell->vertex_id[2], ncell->vertex_id[3] };
+    // dump_setup_points(setup, ids, 4);
+    // // Debug: print the original four points from the ncell
+    // fprintf(stderr, "DEBUG: add_vvertex_from_ncell: ncell->count=%d, vertex_ids = [%d,%d,%d,%d]\n",
+    //         ncell->count,
+    //         ncell->vertex_id[0], ncell->vertex_id[1],
+    //         ncell->vertex_id[2], ncell->vertex_id[3]);
+    // for (int i=0;i<4;i++) {
+    //     fprintf(stderr, "  v[%d] = (%g, %g, %g)\n", i, v[i].x, v[i].y, v[i].z);
+    // }
+
+
     s_point a = subtract_points(v[1], v[0]);
     s_point b = subtract_points(v[2], v[0]);
     s_point c = subtract_points(v[3], v[0]);
@@ -151,8 +186,6 @@ int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *
     double f = 2 * dot_prod(ab, c);
     if (fabs(f) < 1e-9) {
         // printf("circumcenter: NEARLY SINGULAR!\n");
-        // printf("ab: (%f, %f, %f), c: (%f, %f, %f), denom: %.16f\n", ab[0], ab[1], ab[2], c[0], c[1], c[2],f);
-        // print_matrix(v, 4, 3);
         return -1;
     }
     f = 1.0 / f;
@@ -164,7 +197,7 @@ int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *
     }}};
 
     for (int ii=0; ii<vcell->Nv; ii++) {
-        if (distance(circumcenter, vcell->vertices[ii]) < 1e-3) {
+        if (distance_squared(circumcenter, vcell->vertices[ii]) < 1e-5) {
             return -1;
         }
     }
@@ -251,7 +284,7 @@ s_vcell *extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly
     s_vcell *vcell = malloc_vcell(vertex_id);
     int out = bounded_extraction(setup, vcell);
     if (out == 0) {
-        puts("ERROR EXTRACTING VCELL!");
+        puts("extract_voronoi_cell: ERROR extracting convhull of cell!");
         // print_vcell(vcell);
         free_vcell(vcell);
         return NULL;
@@ -259,7 +292,8 @@ s_vcell *extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly
     
     // Snap into bp if cell spikes outward, KNOWN PROBLEM FIXME TODO
     for (int ii=0; ii<vcell->Nv; ii++) {
-        if (!is_inside_convhull(vcell->vertices[ii], bp->points, bp->faces, bp->Nf)) {
+        if (!is_inside_convhull(vcell->vertices[ii], bp->points, bp->faces, bp->Nf)) {  
+            // (If -1 (on face) dont do anything)
             vcell->vertices[ii] = find_closest_point_on_bp(bp, vcell->vertices[ii]);
             // if (!is_inside_convhull(new, bp->points, bp->faces, bp->fnormals, bp->Nf)) {
             //     puts("WARNING! SNAP IS STILL OUTSIDE?");
@@ -269,6 +303,7 @@ s_vcell *extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly
 
     // Compute volume
     compute_vcell_volume(vcell);
+    // printf("VOL: %f\n", vcell->volume);
     return vcell;
 }
 
@@ -282,14 +317,17 @@ s_vdiagram *voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly,
     vdiagram->bpoly = bpoly;
     
     for (int ii=0; ii<Nreal; ii++) {
+        // print_vdiagram(vdiagram);
         for (int tries = 0; tries < 2; tries ++) { 
             vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii, bpoly);
             if (vdiagram->vcells[ii] == NULL) continue;
             else break;
         }
         if (vdiagram->vcells[ii] == NULL || vdiagram->vcells[ii]->volume <= 0) {
-            puts("OBS: Could not construct vdiagram.");
-            // free_vdiagram(vdiagram);
+            // printf("%p, %f\n", (void*)vdiagram->vcells[ii], vdiagram->vcells[ii]->volume);
+            // print_vcell(vdiagram->vcells[ii]);
+            puts("ERROR: Could not construct vdiagram. Exiting voronoi_from_delaunay_3d");
+            free_vdiagram(vdiagram);
             return NULL;
         }
     }

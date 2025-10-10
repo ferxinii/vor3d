@@ -237,8 +237,8 @@ int extend_sites_mirroring(const s_bpoly *bp, s_point **s, int Ns)
     int N_mirror = sites_mirroring_CORE(bp, *s, Ns, NULL);
     *s = realloc(*s, sizeof(s_point) * (Ns+N_mirror));
     sites_mirroring_CORE(bp, *s, Ns, *s);
-    // printf("DEBUG: Reflected %d sites\n", N_mirror);
-    return N_mirror;
+    // printf("DEBUG: Reflected %d sites, total sites now: %d\n", N_mirror, Ns+N_mirror);
+    return Ns+N_mirror;
 }
 
 
@@ -269,7 +269,7 @@ s_point random_point_around(s_point x, double r)
 
 int poisson_is_valid(const s_bpoly *bpoly, s_point query, s_point *samples, int Ns, double (*rmax)(double *))
 {
-    if (!is_inside_convhull(query, bpoly->points, bpoly->faces,bpoly->Nf)) 
+    if (is_inside_convhull(query, bpoly->points, bpoly->faces,bpoly->Nf) != 1) 
         return 0;
 
     double rq = rmax(query.coords);
@@ -289,7 +289,7 @@ s_point *generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
     int Nsamples = 0, Nactive = 0;
 
     s_point x = random_point_uniform_3d(bpoly->min, bpoly->max);
-    while (!is_inside_convhull(x, bpoly->points, bpoly->faces, bpoly->Nf)) {
+    while (is_inside_convhull(x, bpoly->points, bpoly->faces, bpoly->Nf) != 1) {
         x = random_point_uniform_3d(bpoly->min, bpoly->max);
     }
 
@@ -326,7 +326,7 @@ s_point *generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
 
     while (Nsamples < 4) {
         x = random_point_uniform_3d(bpoly->min, bpoly->max);
-        while (!is_inside_convhull(x, bpoly->points, bpoly->faces, bpoly->Nf)) {
+        while (is_inside_convhull(x, bpoly->points, bpoly->faces, bpoly->Nf) != 1) {
             x = random_point_uniform_3d(bpoly->min, bpoly->max);
         }
         samples[Nsamples++] = x;

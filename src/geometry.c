@@ -293,10 +293,30 @@ int point_in_triangle_2d(const s_point *triangle, s_point p)
 }
 
 
+int point_in_triangle_3d(const s_point *triangle, s_point p)
+{
+    s_point aux = closest_point_on_triangle(triangle, p);
+    if (distance_squared(aux, p) < 1e-6) return 1;
+    else return 0;
+}
+
+
+
 ch_vertex *malloc_points_to_chvertex(const s_point *points, int Np)
 {
-    ch_vertex *out = malloc(Np * sizeof(ch_vertex));
-    memcpy(out, points, Np * sizeof(ch_vertex));
+    // ch_vertex *out = malloc(Np * sizeof(ch_vertex));
+    // memcpy(out, points, Np * sizeof(ch_vertex));
+    // return out;
+    if (Np <= 0) return NULL;
+    ch_vertex *out = malloc((size_t)Np * sizeof(ch_vertex));
+    if (!out) { puts("ERROR: malloc_points_to_chvertex"); return NULL; }
+
+    for (int i = 0; i < Np; ++i) {
+        out[i].x = (CH_FLOAT) points[i].x;
+        out[i].y = (CH_FLOAT) points[i].y;
+        out[i].z = (CH_FLOAT) points[i].z;
+        /* OR: out[i].v[0] = (CH_FLOAT)points[i].coords[0]; ... */
+    }
     return out;
 }
 
@@ -321,6 +341,11 @@ s_point *extract_normals_from_ch(const ch_vertex *vertices, int *faces, int Nf, 
                                   (s_point){{{v1.x, v1.y, v1.z}}}, 
                                   (s_point){{{v2.x, v2.y, v2.z}}} };
         int o = orientation(verts_face, ch_CM);
+        // if (o == 0) {
+        //     printf("%f, %f, %f\n", verts_face[0].x, verts_face[0].y, verts_face[0].z);
+        //     printf("%f, %f, %f\n", verts_face[1].x, verts_face[1].y, verts_face[1].z);
+        //     printf("%f, %f, %f\n", verts_face[2].x, verts_face[2].y, verts_face[2].z);
+        // }
         assert(o != 0);
         if (o < 0) {
             n.x = -n.x;  n.y = -n.y;  n.z = -n.z;
@@ -337,6 +362,7 @@ s_point *extract_normals_from_ch(const ch_vertex *vertices, int *faces, int Nf, 
 
 int is_inside_convhull(s_point query, const s_point *pch, const int *faces, int Nf)
 {   
+    // 1: inside, 0: outise, -1: in boundary
     if (Nf == 0) { puts("Error: is_inside_convhull: Nf == 0"); exit(1); }
 
     int prev_sign = 0;
@@ -347,7 +373,11 @@ int is_inside_convhull(s_point query, const s_point *pch, const int *faces, int 
         
         int sign = orientation(pf, query);
 
-        if (sign == 0) continue;  // treat on-face as inside
+        if (sign == 0) {  // Point is coplanar
+            if (point_in_triangle_3d(pf, query)) {
+                return -1;
+            } else continue;
+        }
 
         // if we've already seen a non-zero sign, it must match
         if (prev_sign == 0) prev_sign = sign;
@@ -395,7 +425,7 @@ s_point random_point_inside_convhull(const s_point *pch, const int *faces, int N
     int MAX_IT = 10000;
     int it = 0;
     s_point out = random_point_uniform_3d(min, max);
-    while (!is_inside_convhull(out, pch, faces, Nf)) {
+    while (is_inside_convhull(out, pch, faces, Nf) != 1) {
         out = random_point_uniform_3d(min, max);
         assert(it < MAX_IT && "Reached maximum iters looking for point inside convhull.");
         it++;

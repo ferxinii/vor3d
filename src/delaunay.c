@@ -665,7 +665,6 @@ int determine_case(const s_point vertices_face[3], s_point p, s_point d)
 s_scplx *initialize_setup(const s_point *points, int N_points, int dim)
 {
     assert(dim == 3 && "Only supports 3D");
-
     // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL, PUT AT THE BEGINNING!
     s_point *setup_points = malloc(sizeof(s_point) * (N_points + dim + 1));
     for (int ii=0; ii<N_points; ii++) {
@@ -759,7 +758,7 @@ void remove_point_setup(s_scplx *setup, int point_id)
             setup->points[ii] = setup->points[ii+1];
         }
     }
-    setup->points = realloc(setup->points, setup->N_points-1);
+    setup->points = realloc(setup->points, sizeof(s_point) * setup->N_points-1);
     setup->N_points--;
 }
 
@@ -832,7 +831,7 @@ void remove_big_tetra(s_scplx *setup)
     for (int ii=0; ii<setup->N_points-4; ii++) {
         setup->points[ii] = setup->points[ii+4];
     }
-    setup->points = realloc(setup->points, setup->N_points-4);
+    setup->points = realloc(setup->points, sizeof(s_point) * (setup->N_points-4));
     setup->N_points -= 4;
 
     // Reindex all remaining tetrahedra so their vertex_id points at correct coords
@@ -871,7 +870,6 @@ s_scplx *construct_dt_3d(const s_point *points, int N_points)
     
     int ii = 4;  // First 4 are big tetra, which already is inserted!
     while (ii < setup->N_points) {
-        // printf("Inserting ii=%d\n", ii);
         if (insert_one_point(setup, ii, stack, stack_blocked)) {
             // SHOULD ALWAYS BE DELAUNAY!
             ii++;
@@ -890,6 +888,7 @@ s_scplx *construct_dt_3d(const s_point *points, int N_points)
         assert(current->volume != 0);
         current = current->next;
     }
+    
 
     return setup;
 }

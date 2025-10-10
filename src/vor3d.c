@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 
 
 int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd)
@@ -44,9 +45,20 @@ typedef union {
 
 typedef s_seed_set (*f_seed_generator)(s_bpoly *bp, seed_userdata ud);
 
-static s_seed_set fixed_generator(s_bpoly *bp, seed_userdata ud) {
-    (void)bp;
-    return ud.seed_set;
+static s_seed_set fixed_generator(s_bpoly *bp, seed_userdata ud) 
+{
+    s_point *seed_copy = malloc(ud.seed_set.Ns * sizeof(s_point));
+
+    int count = 0;
+    for (int ii = 0; ii < ud.seed_set.Ns; ii++) {
+        if (is_inside_convhull(ud.seed_set.seeds[ii], bp->points, bp->faces, bp->Nf) == 1) {
+            seed_copy[count++] = ud.seed_set.seeds[ii];
+        } else {
+            // printf("Point %d not strictly inside\n", ii);
+        }
+    }
+    seed_copy = realloc(seed_copy, count * sizeof(s_point));
+    return (s_seed_set) {count, seed_copy};
 }
 
 static s_seed_set PDS_generator(s_bpoly *bp, seed_userdata ud) {
@@ -59,6 +71,7 @@ static s_vdiagram *vor3d_core(s_bpoly *bp, int max_tries, f_seed_generator f_see
 {
     s_bpoly *bp_tmp = new_bpoly_copy(bp);
     for (int ii = 0; ii < max_tries; ii++) {
+        if (ii > 0) puts("Retrying to build voronoi diagram.");
         s_seed_set seed_set = f_seeds(bp_tmp, ud);
         s_point *seeds = seed_set.seeds;
         int Ns = seed_set.Ns;
@@ -68,7 +81,7 @@ static s_vdiagram *vor3d_core(s_bpoly *bp, int max_tries, f_seed_generator f_see
 
         s_vdiagram *vd = voronoi_from_delaunay_3d(dt, bp_tmp, Ns);
         if (!vd) {  // Retry
-            free_bpoly(bp_tmp);
+            // free_bpoly(bp_tmp);
             bp_tmp = new_bpoly_copy(bp);
             continue;
         }

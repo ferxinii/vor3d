@@ -55,10 +55,17 @@ int main(void)
     
     int MAX_TRIES = 5;
 
+    // s_point test_s[] = {{{{-0.75,  0.00, -0.75}}},
+    //                     {{{-0.90, -0.30, -0.30}}},
+    //                     {{{-0.30,  0.60,  0.30}}},
+    //                     {{{-0.60,  0.30, -0.60}}},
+    //                     {{{-0.45,  0.45,  0.15}}}};
+    // int Ns = 5;
     
     puts("\nTETRAHEDON:");
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_vdiagram *vd_tet = vor3d_from_txt_PDS(&r_const, FILE_BP, MAX_TRIES);
+    // s_vdiagram *vd_tet = vor3d_from_txt(test_s, Ns, FILE_BP, MAX_TRIES);
     if (!vd_tet) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(vd_tet);
     plot_vdiagram_differentviews(vd_tet, "plots/tet", NULL);
