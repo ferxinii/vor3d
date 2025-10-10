@@ -1,0 +1,3 @@
+[submodule "external/gnuplotC"]
+	path = external/gnuplotC
+	url = https://github.com/ferxinii/gnuplotC
