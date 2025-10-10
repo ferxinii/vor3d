@@ -14,25 +14,9 @@
 #include <math.h>
 
 
-// DEBUG:
-void dump_setup_points(const s_scplx *setup, const int *ids, int n)
-{
-    for (int i = 0; i < n; ++i) {
-        int id = ids[i];
-        if (id < 0 || id >= setup->N_points) {
-            fprintf(stderr, "dump: bad id %d\n", id);
-            continue;
-        }
-        s_point p = setup->points[id];
-        fprintf(stderr, "setup->points[%d] = (%g, %g, %g)\n", id, p.x, p.y, p.z);
-    }
-}
-
-
 void free_vcell(s_vcell *vcell)
 {
     free(vcell->vertices);
-    free_matrix_int(vcell->origin_vertices, vcell->Nv_capacity);
     if (vcell->faces) {
         free(vcell->faces);
         free(vcell->fnormals);
@@ -44,16 +28,11 @@ void free_vcell(s_vcell *vcell)
 void free_vdiagram(s_vdiagram *vdiagram)
 {
     for (int ii=0; ii<vdiagram->N; ii++) {
-        // printf("Freing vcell %d\n", ii);
         if (vdiagram->vcells[ii]) free_vcell(vdiagram->vcells[ii]);
     }
-    // puts("Freeing vcells");
     free(vdiagram->vcells);
-    // puts("Freeing seeds");
     free(vdiagram->seeds);
-    // puts("Freeing bpoly");
     free_bpoly((s_bpoly *)vdiagram->bpoly);
-    // puts("Freeing vdiagram");
     free(vdiagram);
 }
 
@@ -101,15 +80,11 @@ void print_vcell(const s_vcell *vcell)
 {
     puts("VCELL");
     printf("Seed: %d, Nv = %d, vol = %f\n", vcell->seed_id, vcell->Nv, vcell->volume);
-    printf("%f, %f, %f; %d, %d, %d, %d\n", vcell->vertices[0].x, vcell->vertices[0].y,
-                            vcell->vertices[0].z, vcell->origin_vertices[0][3],
-                            vcell->origin_vertices[0][0], vcell->origin_vertices[0][1], 
-                            vcell->origin_vertices[0][2]);
+    printf("%f, %f, %f\n", vcell->vertices[0].x, vcell->vertices[0].y,
+                            vcell->vertices[0].z);
     for (int ii=1; ii<vcell->Nv; ii++) {
-        printf("%f, %f, %f; %d, %d, %d, %d\n", vcell->vertices[ii].x, vcell->vertices[ii].y, 
-                            vcell->vertices[ii].z, vcell->origin_vertices[ii][3],
-                            vcell->origin_vertices[ii][0], vcell->origin_vertices[ii][1],
-                            vcell->origin_vertices[ii][2]);
+        printf("%f, %f, %f\n", vcell->vertices[ii].x, vcell->vertices[ii].y, 
+                            vcell->vertices[ii].z);
     }
     printf("\n");
 }
@@ -132,7 +107,6 @@ s_vcell *malloc_vcell(int seed_id)
     out->Nv = 0;
     out->Nv_capacity = VCELL_BLOCK_VERTICES;
     out->vertices = malloc(sizeof(s_point) * VCELL_BLOCK_VERTICES);
-    out->origin_vertices = malloc_matrix_int(VCELL_BLOCK_VERTICES, 4);
     return out;
 }
 
@@ -144,7 +118,6 @@ void increase_num_vertices_if_needed(s_vcell *vcell)
         int new_capacity = vcell->Nv_capacity + VCELL_BLOCK_VERTICES;
 
         vcell->vertices = realloc(vcell->vertices, sizeof(s_point) * new_capacity);
-        vcell->origin_vertices = realloc_matrix_int(vcell->origin_vertices, vcell->Nv, new_capacity, 4);
         // printf("DEBUG: Increased ncell capacity: old=%d, new=%d\n", vcell->Nv_capacity, new_capacity);
         vcell->Nv_capacity = new_capacity;
     }
@@ -204,7 +177,6 @@ int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *
 
     vcell->vertices[vcell->Nv] = circumcenter;
 
-    vcell->origin_vertices[vcell->Nv][3] = ncell->count;
     vcell->Nv++;
 
     return vcell->Nv - 1;

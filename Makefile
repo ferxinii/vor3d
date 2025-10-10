@@ -7,7 +7,8 @@ CFLAGS  = -Iinclude -I. -Wall -Wextra -Wpedantic -O3
 EXT_INC = -Iexternal/gnuplotC/include \
           -Iexternal/convhull_3d \
           -Iexternal/geometric_predicates/include
-EXT_SRC = external/gnuplotC/gnuplotc.c external/convhull_3d/convhull_3d.c
+EXT_SRC = external/gnuplotC/gnuplotc.c \
+		  external/convhull_3d/convhull_3d.c
 EXT_OBJ = 
 EXT_LIB = external/geometric_predicates/build/Bin/libpredicates.a
 

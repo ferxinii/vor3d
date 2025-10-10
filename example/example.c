@@ -51,17 +51,10 @@ void generate_statistics(s_bpoly *bp, int N_simu, char *FILE_VOLS)
 int main(void)
 {
     srand(time(NULL));
-    system("rm -f plots/*");
+    // system("rm -f plots/*");
     
     int MAX_TRIES = 5;
 
-    // s_point test_s[] = {{{{-0.75,  0.00, -0.75}}},
-    //                     {{{-0.90, -0.30, -0.30}}},
-    //                     {{{-0.30,  0.60,  0.30}}},
-    //                     {{{-0.60,  0.30, -0.60}}},
-    //                     {{{-0.45,  0.45,  0.15}}}};
-    // int Ns = 5;
-    
     puts("\nTETRAHEDON:");
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_vdiagram *vd_tet = vor3d_from_txt_PDS(&r_const, FILE_BP, MAX_TRIES);
@@ -115,10 +108,10 @@ int main(void)
     r_mean = 1.1;
     generate_statistics(bp_L_adult, Nsimu, "virtual_population/L_adult.txt");
         // PLOT
-        s_vdiagram *vd_L = vor3d_from_txt_PDS(&r_fun, "lobes/L.txt", 5);
-        check_volume(vd_L);
-        plot_vdiagram_differentviews(vd_L, "plots/L", NULL);
-        free_vdiagram(vd_L);
+        // s_vdiagram *vd_L = vor3d_from_txt_PDS(&r_fun, "lobes/L.txt", 5);
+        // check_volume(vd_L);
+        // plot_vdiagram_differentviews(vd_L, "plots/L", NULL);
+        // free_vdiagram(vd_L);
 
     // 13 Y.O.:
     s_bpoly *bp_L_13 = copy_bpoly_scaled(bp_L, 0.94);
@@ -157,10 +150,10 @@ int main(void)
     r_mean = 1.1;
     generate_statistics(bp_L_adult, Nsimu, "virtual_population/R_adult.txt");
         // PLOT
-        s_vdiagram *vd_R = vor3d_from_txt_PDS(&r_fun, "lobes/R.txt", 5);
-        check_volume(vd_R);
-        plot_vdiagram_differentviews(vd_R, "plots/R", NULL);
-        free_vdiagram(vd_R);
+        // s_vdiagram *vd_R = vor3d_from_txt_PDS(&r_fun, "lobes/R.txt", 5);
+        // check_volume(vd_R);
+        // plot_vdiagram_differentviews(vd_R, "plots/R", NULL);
+        // free_vdiagram(vd_R);
 
     // 13 Y.O.:
     s_bpoly *bp_R_13 = copy_bpoly_scaled(bp_R, 0.94);

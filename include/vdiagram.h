@@ -5,35 +5,21 @@
 #include "simplical_complex.h"
 #include "bpoly.h"
 
-
 #define VCELL_BLOCK_VERTICES 1000  // Used for efficient mallocing, incrementing by blocks if necessary
-
 
 typedef struct vdiagram {
     int N;  // Number of vcells
-    struct vcell **vcells;  // Array of pointers to the cells, N_vcells x 1
+    s_point *seeds;  
+    struct vcell **vcells;  // Array of pointers to the cells
     const struct bounding_polyhedron *bpoly;
-    s_point *seeds;  // TODO Ns? Or there should be as many seeds as vcells?
 } s_vdiagram;
 
 
 typedef struct vcell {
     int seed_id;
-    // struct vcell *next;     // linked list of vcells
     int Nv;
     int Nv_capacity;  // malloc limit
     s_point *vertices;  // Nv x 3
-    int **origin_vertices;  // Nv x 4, LAST column indicates the dual ncell if POSITIVE,
-                            // if -1: comes from circumcenter delaunay. The rest of 
-                            //        the columns indicate the delaunay indices of the 
-                            //        face whose normal was extended, 
-                            // if -2: ARTIFICIAL extension, first column is id of face of
-                            //        convhull of setup points
-                            // if -3: it is from the bounding polyhedron, and the first 
-                            //        index is the point id 
-                            // if -4: it comes from some coords, supposedly from the ray 
-                            //        intersection with bounding convex hull, and the first
-                            //        columns correspond to face's vertex_id
     int Nf;
     int *faces;  // Convex hull, 1 x 3*Nf
     s_point *fnormals;
@@ -43,7 +29,7 @@ typedef struct vcell {
 
 void free_vdiagram(s_vdiagram *vdiagram);
 void write_vd_file(const s_vdiagram *vd, FILE *file);
-s_vdiagram *malloc_vdiagram(const s_scplx *setup, int Nreal);  // TODO what is Nreal?
+s_vdiagram *malloc_vdiagram(const s_scplx *setup, int Nreal);  // Nreal is the N seeds without reflection!
 void print_vdiagram(const s_vdiagram *vdiagram);
 
 s_vcell *malloc_vcell(int seed_id);
