@@ -1,3 +1,5 @@
 example/plots/
 vor3d.a
 obj/*.o
+example/example
+example/virtual_population/*

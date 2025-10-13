@@ -1,7 +1,7 @@
 
-#include "geometry.h"
+#include "convh.h"
 #include "algebra.h"
-#include "external/geometric_predicates/include/predicates.h"
+#include "external/geometry/geometry.h"
 #include "external/convhull_3d/convhull_3d.h"
 #include <stdio.h>
 #include <string.h>

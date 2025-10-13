@@ -1,7 +1,6 @@
 #ifndef VOR3D_CONVH_H
 #define VOR3D_CONVH_H
 
-// #include "external/convhull_3d/convhull_3d.h"
 #include "external/geometry/geometry.h"
 
 void convhull_from_points(const s_point *points, int Np, int **faces, s_point **fnormals, int *Nf);  // fnormals out is optional

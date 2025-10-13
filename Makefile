@@ -11,7 +11,7 @@ EXT_INC = -Iexternal/gnuplotC/include \
 EXT_SRC = external/gnuplotC/gnuplotc.c \
 		  external/convhull_3d/convhull_3d.c
 EXT_OBJ = 
-EXT_LIB = external/geometric_predicates/build/Bin/libpredicates.a
+EXT_LIB = external/geometry/geometry.a
 
 
 SRC     = $(wildcard src/*.c)
