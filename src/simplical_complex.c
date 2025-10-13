@@ -1,7 +1,8 @@
 
 #include "simplical_complex.h"
-#include "geometry.h"
+#include "external/geometry/geometry.h"
 #include "algebra.h"
+#include "convh.h"
 #include "external/gnuplotC/gnuplotc.h"
 #include <stdlib.h>
 #include <stdio.h>

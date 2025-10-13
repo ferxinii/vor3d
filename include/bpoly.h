@@ -1,7 +1,7 @@
 #ifndef VOR3D_BPOLY_H
 #define VOR3D_BPOLY_H
 
-#include "geometry.h"
+#include "external/geometry/geometry.h"
 
 // Used for Poisson disc sampling inside bpoly:
 #define MAX_TRIAL_POINTS 10000

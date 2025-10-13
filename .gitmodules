@@ -1,3 +1,6 @@
 [submodule "external/gnuplotC"]
 	path = external/gnuplotC
 	url = https://github.com/ferxinii/gnuplotC
+[submodule "external/geometry"]
+	path = external/geometry
+	url = git@github.com:ferxinii/geometry.git

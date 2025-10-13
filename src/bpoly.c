@@ -1,6 +1,7 @@
 
 #include "bpoly.h"
-#include "geometry.h"
+#include "external/geometry/geometry.h"
+#include "convh.h"
 #include "float.h"
 #include "math.h"
 #include "external/gnuplotC/gnuplotc.h"

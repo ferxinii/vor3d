@@ -6,7 +6,8 @@ CFLAGS  = -Iinclude -I. -Wall -Wextra -Wpedantic -O3
 # EXTERNAL DEPENDENCIES:
 EXT_INC = -Iexternal/gnuplotC/include \
           -Iexternal/convhull_3d \
-          -Iexternal/geometric_predicates/include
+          -Iexternal/geometry \
+          -Iexternal/geometry/predicates/include/
 EXT_SRC = external/gnuplotC/gnuplotc.c \
 		  external/convhull_3d/convhull_3d.c
 EXT_OBJ = 

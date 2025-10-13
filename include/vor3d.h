@@ -1,7 +1,7 @@
 #ifndef VOR3D_MAIN_H
 #define VOR3D_MAIN_H
 
-#include "geometry.h"
+#include "convh.h"
 #include "vdiagram.h"
 #include "bpoly.h"
 

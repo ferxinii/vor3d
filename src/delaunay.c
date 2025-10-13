@@ -2,7 +2,7 @@
 #include "delaunay.h"
 #include "simplical_complex.h"
 #include "algebra.h"
-#include "geometry.h"
+#include "external/geometry/geometry.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
