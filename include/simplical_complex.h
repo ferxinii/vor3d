@@ -2,7 +2,7 @@
 #define VOR3D_SIMPLICAL_COMPLEX_H
 
 #include <stdio.h>
-#include "external/geometry/geometry.h"
+#include "geometry.h"
 
 typedef struct simplical_complex {
     int dim;

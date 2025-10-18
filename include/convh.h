@@ -1,7 +1,7 @@
 #ifndef VOR3D_CONVH_H
 #define VOR3D_CONVH_H
 
-#include "external/geometry/geometry.h"
+#include "geometry.h"
 
 void convhull_from_points(const s_point *points, int Np, int **faces, s_point **fnormals, int *Nf);  // fnormals out is optional
 // s_point *extract_normals_from_ch(const ch_vertex *vertices, int *faces, int Nf, s_point ch_CM, int NORMALIZE);  // TODO remove visibility of this! only used in externally in vdiagram.

@@ -1,10 +1,10 @@
 
 #include "bpoly.h"
-#include "external/geometry/geometry.h"
+#include "geometry.h"
 #include "convh.h"
 #include "float.h"
 #include "math.h"
-#include "external/gnuplotC/gnuplotc.h"
+#include "gnuplotc.h"
 #include <assert.h>
 #include <string.h>
 #include <time.h>

@@ -1,13 +1,13 @@
 // [ ] TODO Improve malloc of vertices, or check if i have reached VCELL_MAX_VERTICES to increase size as needed
-#include "external/geometry/geometry.h"
+#include "geometry.h"
 #include "simplical_complex.h"
 #include "bpoly.h"
 #include "algebra.h"
-#include "external/geometry/geometry.h"
+#include "geometry.h"
 #include "vdiagram.h"
 #include "convh.h"
 #include "bpoly.h"
-#include "external/gnuplotC/gnuplotc.h"
+#include "gnuplotc.h"
 #include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
