@@ -23,7 +23,14 @@ In the following example, we see how the code has been used to generate secondar
 </p>
 
 ## Usage
-An example of how to use this is found in *./example/.
+An example of how to use this is found in *example/*.
+
+From *example/*, compile using:
+```
+cmake -S . -b build
+cmake --build build
+```
+Then you may run from *example/build/* the *.example* executable.
 
 The most high-level interface is in *voronoi.h*. One can pass either an array of seeds or generate them inside of the Bounding Polyhedron using the method of *Poisson disc sampling* with a user specified sizing function (local minimum distance between points). The output is the corresponding Voronoi diagram structure (*vd_3d.h*). 
 
