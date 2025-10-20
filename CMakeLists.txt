@@ -1,9 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 project(vor3d LANGUAGES C)
 
-add_subdirectory(external/convhull_3d)
-add_subdirectory(external/geometry)
-add_subdirectory(external/gnuplotC)
+if (NOT TARGET convhull_3d)
+    add_subdirectory(external/convhull_3d)
+endif()
+
+if (NOT TARGET geometry)
+    add_subdirectory(external/geometry)
+endif()
+
+if (NOT TARGET gnuplotC)
+    add_subdirectory(external/gnuplotC)
+endif()
 
 add_library(vor3d STATIC
     src/algebra.c
