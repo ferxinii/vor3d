@@ -1,5 +1,5 @@
 #include "vor3d.h"
-#include "simplical_complex.h"
+#include "scplx.h"
 #include "delaunay.h"
 #include "vdiagram.h"
 #include "bpoly.h"
@@ -70,8 +70,9 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator 
         extend_sites_mirroring(bp, &seeds);
 
         s_scplx dt = construct_dt_3d(&seeds);
-
         vd = voronoi_from_delaunay_3d(&dt, bp, Nreal);
+        free_complex(&dt);
+
         if (vd.seeds.N == 0) continue;  // Retry
 
         if (valid_volumes(bp, &vd)) return vd;

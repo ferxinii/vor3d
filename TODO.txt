@@ -1,1 +1,3 @@
-[ ] Rename center_mass -> points_average
+[ ] Update walk algorithm with improved "in_ncell" test
+[ ] Remove all malloc_matrix?
+

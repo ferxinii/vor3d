@@ -2,7 +2,7 @@
 #define VOR3D_VDIAGRAM_H
 
 #include <float.h>
-#include "simplical_complex.h"
+#include "scplx.h"
 #include "bpoly.h"
 #include "convh.h"
 

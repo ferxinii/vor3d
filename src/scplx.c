@@ -1,32 +1,25 @@
 
-#include "simplical_complex.h"
+#include "scplx.h"
 #include "geometry.h"
 #include "algebra.h"
 #include "gnuplotc.h"
-#include "convh.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
 
 
-s_ncell *malloc_ncell(const s_scplx *setup)
+s_ncell *malloc_ncell(void)
 {
     s_ncell *out = malloc(sizeof(s_ncell));
-    out->vertex_id = malloc(sizeof(int) * (setup->dim + 1));
-    out->opposite = malloc(sizeof(s_ncell*) * (setup->dim + 1));
-    out->next = NULL;
-    out->prev = NULL;
-    out->mark = 0;
-    assert(out->vertex_id && out->opposite && "Could not malloc ncell!");
+    assert(out && "Could not malloc ncell");
+    memset(out, 0, sizeof(s_ncell));
     return out;
 }
 
 
 void free_ncell(s_ncell *ncell)
 {
-    free(ncell->vertex_id);
-    free(ncell->opposite);
     free(ncell);
 }
 
@@ -46,28 +39,28 @@ void free_complex(s_scplx *setup)
 }
 
 
-void print_ncell(const s_scplx *setup, const s_ncell *ncell)
+void print_ncell(const s_ncell *ncell)
 {
     printf("%p, ( ", (void*)ncell);
-    for (int ii=0; ii<setup->dim+1; ii++) {
+    for (int ii=0; ii<4; ii++) {
         printf("%d ", ncell->vertex_id[ii]);
     }
     printf(") \n");
 }
 
 
-void print_ncells(const s_scplx *setup)
+void print_scomplex(const s_scplx *setup)
 {
     puts("NCELLS");
     s_ncell *current = setup->head;
     int ii = 0;
     while (current) {
         printf("%d  |  p : %p  |  prev : %p  |  marked : %d  |  vertex_ids :", ii, (void*)current, (void*)current->prev, current->mark);
-        for (int jj=0; jj<setup->dim+1; jj++) {
+        for (int jj=0; jj<4; jj++) {
             printf(" %d", current->vertex_id[jj]);
         }
         printf("  |  opposite :");
-        for (int jj=0; jj<setup->dim+1; jj++) {
+        for (int jj=0; jj<4; jj++) {
             printf(" %p", (void*)current->opposite[jj]);
         }
         printf("\n");
@@ -78,7 +71,7 @@ void print_ncells(const s_scplx *setup)
 }
 
 
-void write_ncell3d_file(s_scplx *setup, s_ncell *ncell, FILE *file)
+void write_ncell3d_file(const s_scplx *setup, const s_ncell *ncell, FILE *file)
 {
     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
                                 setup->points.p[ncell->vertex_id[0]].y,
@@ -122,7 +115,7 @@ void write_ncell3d_file(s_scplx *setup, s_ncell *ncell, FILE *file)
 }
 
 
-void write_dt3d_file(s_scplx *setup, FILE *file)
+void write_scomplex_file(const s_scplx *setup, FILE *file)
 {
     s_ncell *current = setup->head;
     while (current) {
@@ -145,7 +138,7 @@ void initialize_ncells_counter(const s_scplx *setup)
 }
 
 
-void initialize_ncells_mark(const s_scplx *setup)  // TODO CHECK IF THIS WORKS?
+void initialize_ncells_mark(const s_scplx *setup)
 {  
     s_ncell *current = setup->head;
     for (int ii=0; ii<setup->N_ncells; ii++) {
@@ -182,19 +175,24 @@ int count_marked(const s_scplx *setup)
 }
 
 
-void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point *out)
+void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point out[4])
 {
-    for (int ii=0; ii<setup->dim+1; ii++) {
+    for (int ii=0; ii<4; ii++) {
         out[ii] = setup->points.p[ncell->vertex_id[ii]];
     }
 }
 
 
-void extract_ids_face(const s_scplx *setup, const s_ncell *ncell, const int *v_localid, int dim_face, int *out)
+void extract_ids_face(const s_ncell *ncell, int dim_face, const int *v_localid, int *out)
 {   // v_localid[dim-dim_face], out[dim_face+1]
+    if (dim_face < 0 || dim_face >= 3) {
+        fprintf(stderr, "dim_face must be >= 0 && < 3\n");
+        exit(1);
+    }
+
     int kk = 0;
-    for (int ii=0; ii<setup->dim+1; ii++) {
-        if (!inarray(v_localid, setup->dim - dim_face, ii)) {
+    for (int ii=0; ii<4; ii++) {
+        if (!inarray(v_localid, 3 - dim_face, ii)) {
             out[kk] = ncell->vertex_id[ii];
             kk++;
         }
@@ -202,57 +200,36 @@ void extract_ids_face(const s_scplx *setup, const s_ncell *ncell, const int *v_l
 }
 
 
-void extract_vertices_face(const s_scplx *setup, const s_ncell *ncell, const int *v_localid, int dim_face, s_point *out)
-{   // v_localid[dim-dim_face], out[dim_face+1][dim]
+void extract_vertices_face(const s_scplx *setup, const s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_point out[dim_face+1])
+{   // v_localid[dim-dim_face], out[dim_face+1]
+    if (dim_face < 0 || dim_face >= 3) {
+        fprintf(stderr, "dim_face must be >= 0 && < 3\n");
+        exit(1);
+    }
+
     int face_vertex_id[dim_face+1];
-    extract_ids_face(setup, ncell, v_localid, dim_face, face_vertex_id);
+    extract_ids_face(ncell, dim_face, v_localid, face_vertex_id);
     for (int ii=0; ii<dim_face+1; ii++) {
         out[ii] = setup->points.p[face_vertex_id[ii]];
     }
+
 }
 
 
-void extract_face_center_and_normal(const s_scplx *setup, const s_ncell *ncell, int face_localid, s_point *fc, s_point *n)
+void face_localid_of_adjacent_ncell(const s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], int id_adjacent, int out_v_localid[3-dim_face])
 {
-    assert(setup->dim == 3 && "Currently only supports 3D");
-    s_point face_v[3];
-    s_point ncell_v[4];
+    if (dim_face < 0 || dim_face >= 3) {
+        fprintf(stderr, "dim_face must be >= 0 && < 3\n");
+        exit(1);
+    }
 
-    extract_vertices_face(setup, ncell, &face_localid, 2, face_v);
-    extract_vertices_ncell(setup, ncell, ncell_v);
-
-    s_point d1 = subtract_points(face_v[1], face_v[0]);
-    s_point d2 = subtract_points(face_v[2], face_v[0]);
-    *n = cross_prod(d1, d2);
-
-    s_points p_face_v = {3, face_v};
-    *fc = point_average(&p_face_v);
-
-    s_points p_ncell_v = {4, ncell_v};
-    s_point cc = point_average(&p_ncell_v);
-
-    s_point v = subtract_points(*fc, cc);
-
-    double dir_aux = dot_prod(v, *n);
-    assert(dir_aux != 0 && "Vectors are perpendicular?");
-    if (dir_aux < 0) {
-        (*n).x = -(*n).x;
-        (*n).y = -(*n).y;
-        (*n).z = -(*n).z;
-    } 
-}
-
-
-void face_localid_of_adjacent_ncell(const s_scplx *setup, const s_ncell *ncell, const int *v_localid,
-                                         int dim_face, int id_adjacent, int *out_v_localid)
-{
     s_ncell *adjacent = ncell->opposite[id_adjacent];
 
     int vertex_id_face[dim_face+1];
-    extract_ids_face(setup, ncell, v_localid, dim_face, vertex_id_face);
+    extract_ids_face(ncell, dim_face, v_localid, vertex_id_face);
 
     int kk = 0;
-    for (int ii=0; ii<setup->dim+1; ii++) {
+    for (int ii=0; ii<4; ii++) {
         if (!inarray(vertex_id_face, dim_face+1, adjacent->vertex_id[ii])) {
             out_v_localid[kk] = ii;
             kk++;
@@ -261,92 +238,72 @@ void face_localid_of_adjacent_ncell(const s_scplx *setup, const s_ncell *ncell, 
 }
 
 
-s_ncell *next_ncell_ridge_cycle(const s_scplx *setup, const s_ncell *ncell, int v_localid_main, int v_localid_2, 
-                                int *new_v_localid_main, int *new_v_localid_2)
+s_ncell *next_ncell_ridge_cycle(const s_ncell *ncell, int v_localid_main, int v_localid_2, int *new_v_localid_main, int *new_v_localid_2)
 {
     s_ncell *next = ncell->opposite[v_localid_main];
-    *new_v_localid_main = id_where_equal_int(next->vertex_id, setup->dim+1, ncell->vertex_id[v_localid_2]);
-    for (int ii=0; ii<setup->dim+1; ii++) {
+    *new_v_localid_main = id_where_equal_int(next->vertex_id, 4, ncell->vertex_id[v_localid_2]);
+    for (int ii=0; ii<4; ii++) {
         if (next->opposite[ii] == ncell) {
             *new_v_localid_2 = ii;
             return next;
         }
     }
-    assert(1 == 0 && "Could not find next ncell around ridge."); 
+    fprintf(stderr, "Could not find next ncell around ridge.\n"); 
     exit(1);
 }
 
 
-int count_cycle_ridge(const s_scplx *setup, const s_ncell *ncell, int v_localid_main, int v_localid_2)  // local 0:dim
-{   
-    int counter = 1;
-    int maxit = 10000;
-    const s_ncell *current = ncell;
-    while (counter < maxit) {
-        int new_v_localid_main, new_v_localid_2;
-        if (current->opposite[v_localid_main] == NULL) {
-            return -1;
-        }
-
-        s_ncell *next = next_ncell_ridge_cycle(setup, current, v_localid_main, v_localid_2, 
-                                              &new_v_localid_main, &new_v_localid_2);
-        if (next == ncell) return counter;
-        counter++;
-        current = next;
-        v_localid_main = new_v_localid_main;
-        v_localid_2 = new_v_localid_2;
-    }
-    assert(1==0 && "Reached maximum iterations in ridge cycle?");
-    exit(1);
-}
-
-
-void mark_ncells_incident_face_STEP(const s_scplx *setup, const s_ncell *ncell, const int *v_localid, int dim_face)
+void mark_ncells_incident_face_STEP(const s_ncell *ncell, int dim_face, const int v_localid[3-dim_face])
 {
-    for (int ii=0; ii<setup->dim+1; ii++) {
-        if (inarray(v_localid, setup->dim - dim_face, ii)) {
+    for (int ii=0; ii<4; ii++) {
+        if (inarray(v_localid, 3-dim_face, ii)) {
             s_ncell *adjacent_ncell = ncell->opposite[ii];  // This ncell should already share the face!
             if (adjacent_ncell && adjacent_ncell->mark == 0) {
                 adjacent_ncell->mark = 1;
                 
-                int new_v_localid[setup->dim - dim_face];
-                face_localid_of_adjacent_ncell(setup, ncell, v_localid, dim_face, ii, new_v_localid);
+                int new_v_localid[3-dim_face];
+                face_localid_of_adjacent_ncell(ncell, dim_face, v_localid, ii, new_v_localid);
 
                 // Recursion
-                mark_ncells_incident_face_STEP(setup, adjacent_ncell, new_v_localid, dim_face);
+                mark_ncells_incident_face_STEP(adjacent_ncell, dim_face, new_v_localid);
             }
         }
     }
 }
 
 
-void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, const int *v_localid, int dim_face)
+void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face])
 {
+    if (dim_face < 0 || dim_face >= 3) {
+        fprintf(stderr, "dim_face must be >= 0 && < 3\n");
+        exit(1);
+    }
+
     initialize_ncells_mark(setup);
     ncell->mark = 1;
     
     // Recursion:
-    mark_ncells_incident_face_STEP(setup, ncell, v_localid, dim_face);
+    mark_ncells_incident_face_STEP(ncell, dim_face, v_localid);
 }
 
 
 int are_locally_delaunay_strict(const s_scplx *setup, const s_ncell *ncell, int id_opposite)
 {   // I.E., only return true if the point is INSIDE circumscr., not on it.
-    assert(setup->dim == 3 && "Currently only supports 3D");
     s_point coords1[4];
     s_point coords2[4];
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
 
-    assert(!(orientation(coords1, coords1[3]) == 0 && 
-             orientation(coords2, coords2[3]) == 0));
+    assert(!( orientation(coords1, coords1[3]) == 0 && 
+              orientation(coords2, coords2[3]) == 0 ) && 
+           "Cannot check delaunayness, both ncells are degenerate.");
 
     if (orientation(coords1, coords1[3]) == 0 || 
         orientation(coords2, coords2[3]) == 0) return 0;
 
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
+    face_localid_of_adjacent_ncell(ncell, 2, &id_opposite, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
     int in1 = in_sphere(coords1, setup->points.p[opp_face_vertex_id]);
@@ -357,21 +314,21 @@ int are_locally_delaunay_strict(const s_scplx *setup, const s_ncell *ncell, int 
 
 int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, int id_opposite)
 {   // Points on circumscribed sphere are VALID
-    assert(setup->dim == 3 && "Currently only supports 3D");
     s_point coords1[4];
     s_point coords2[4];
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
 
     assert(!(orientation(coords1, coords1[3]) == 0 && 
-             orientation(coords2, coords2[3]) == 0));
+             orientation(coords2, coords2[3]) == 0) &&
+           "Cannot check delaunayness, both ncells are degenerate.");
 
     if (orientation(coords1, coords1[3]) == 0 || 
         orientation(coords2, coords2[3]) == 0) return 0;
 
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
+    face_localid_of_adjacent_ncell(ncell, 2, &id_opposite, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
     int in1 = in_sphere(coords1, setup->points.p[opp_face_vertex_id]);
@@ -380,90 +337,32 @@ int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, i
 }
 
 
-int point_in_face(s_point vertices_face[3], s_point p)
-{
-    s_point d1 = subtract_points(vertices_face[1], vertices_face[0]);
-    s_point d2 = subtract_points(vertices_face[2], vertices_face[0]);
-    s_point n = cross_prod(d1, d2);
-
-    int drop_coord = coord_with_largest_component_3d(n);
-
-    if (orientation(vertices_face, p) != 0) return 0;
-
-    int i1, i2;
-    if (drop_coord == 0) {      i1 = 1;     i2 = 2; }
-    else if (drop_coord == 1) { i1 = 2;     i2 = 0; }
-    else {                      i1 = 0;     i2 = 1; }
-    
-    s_point v1 = {{{vertices_face[0].coords[i1], vertices_face[0].coords[i2], 0}}};
-    s_point v2 = {{{vertices_face[1].coords[i1], vertices_face[1].coords[i2], 0}}};
-    s_point v3 = {{{vertices_face[2].coords[i1], vertices_face[2].coords[i2], 0}}};
-    s_point triangle[3] = {v1, v2, v3};
-    s_point paux = {{{p.coords[i1], p.coords[i2], 0}}};
-
-    return point_in_triangle_2d(triangle, paux);
-}
-
-
-int point_in_tetra(const s_scplx *setup, s_point x, const s_ncell *nc)
+int in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query)
 {   // TODO Assumes consisten ordering of vertices?
-    assert(setup->dim == 3 && "Only supports 3D");
-    s_point v0 = setup->points.p[nc->vertex_id[0]];
-    s_point v1 = setup->points.p[nc->vertex_id[1]];
-    s_point v2 = setup->points.p[nc->vertex_id[2]];
-    s_point v3 = setup->points.p[nc->vertex_id[3]];
-
-    // compute signed volumes (orientation)
-    s_point facet_vertices[3];
-
-    facet_vertices[0] = v1; facet_vertices[1] = v2; facet_vertices[2] = v3; 
-    int s0 = orientation(facet_vertices, x);  // face opposite v0
-
-    facet_vertices[0] = v0; facet_vertices[1] = v3; facet_vertices[2] = v2; 
-    int s1 = orientation(facet_vertices, x);  // face opposite v0
-                                                 //
-    facet_vertices[0] = v0; facet_vertices[1] = v1; facet_vertices[2] = v3; 
-    int s2 = orientation(facet_vertices, x);  // face opposite v0
-
-    facet_vertices[0] = v0; facet_vertices[1] = v2; facet_vertices[2] = v1; 
-    int s3 = orientation(facet_vertices, x);  // face opposite v0
-
-    // find a nonzero reference sign
-    int ref = 0;
-    if (s0 != 0) ref = s0;
-    else if (s1 != 0) ref = s1;
-    else if (s2 != 0) ref = s2;
-    else if (s3 != 0) ref = s3;
-    if (ref == 0) {
-        puts("DEGENERATE!");
-        exit(1);
-    }
-
-    // if any nonzero sign disagrees, x is outside
-    if ((s0 && s0 != ref) || (s1 && s1 != ref) ||
-        (s2 && s2 != ref) || (s3 && s3 != ref)   )
-        return 0;
+    s_point v0 = setup->points.p[ncell->vertex_id[0]];
+    s_point v1 = setup->points.p[ncell->vertex_id[1]];
+    s_point v2 = setup->points.p[ncell->vertex_id[2]];
+    s_point v3 = setup->points.p[ncell->vertex_id[3]];
     
-    return 1;
-}
+    s_point tetra[4] = {v0, v1, v2, v3};
+    return in_tetrahedron(tetra, query);
+ }
 
 
 s_ncell *bruteforce_find_ncell_containing(const s_scplx *setup, s_point p)
 {
     s_ncell *current = setup->head;
     while (current) {
-        if (point_in_tetra(setup, p, current)) return current;
+        if (in_ncell(setup, current, p)) return current;
         current = current->next;
     }
-    puts("DID NOT FIND CONTAINER NCELL!");
+    fprintf(stderr, "did not find container ncell.\n");
     exit(1);
 }
 
 
 s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
 {
-    assert(setup->dim == 3 && "Only supports 3D");
-
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
     int randi = (rand() % setup->N_ncells);
@@ -474,12 +373,12 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
     s_point facet_vertices[3];
     s_ncell *prev = current;
     STEP:
-    for (int ii=0; ii<setup->dim+1; ii++) {
+    for (int ii=0; ii<4; ii++) {
         s_point opposite_vertex = setup->points.p[current->vertex_id[ii]];
 
         s_ncell *next = current->opposite[ii];
         if (next) {
-            extract_vertices_face(setup, current, &ii, setup->dim-1, facet_vertices);
+            extract_vertices_face(setup, current, 2, &ii, facet_vertices);
 
             int o1 = orientation(facet_vertices, opposite_vertex);
             int o2 = orientation(facet_vertices, p);
@@ -491,7 +390,7 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
             } else if (o1 == 0) continue;
 
             if (o2 == 0) {
-                if (point_in_tetra(setup, p, current)) { return current; }
+                if (in_ncell(setup, current, p)) { return current; }
                 else if (next != prev) {
                     prev = current;
                     current = next;
@@ -529,21 +428,6 @@ int is_delaunay_3d(const s_scplx *setup)
 }
 
 
-void add_ncell_volume_3d(const s_scplx *setup, s_ncell *ncell)
-{   // THIS IS JUST FOR DEBUGGING!!
-    ncell->volume = volume_tetrahedron_approx(
-                    setup->points.p[ncell->vertex_id[0]], 
-                    setup->points.p[ncell->vertex_id[1]],
-                    setup->points.p[ncell->vertex_id[2]],
-                    setup->points.p[ncell->vertex_id[3]]);
-}
-
-
-double compute_volume_complex(s_scplx *setup)
-{
-    return volume_convhull_from_points(&setup->points);
-}
-
 
 
 
@@ -556,7 +440,7 @@ void plot_add_ncell(s_gnuplot *interface, const s_scplx *setup, const s_ncell *n
 {
     s_point face_vertices[3];
     for (int ii=0; ii<4; ii++) {
-        extract_vertices_face(setup, ncell, &ii, 2, face_vertices);
+        extract_vertices_face(setup, ncell, 2, &ii, face_vertices);
         draw_solid_triangle_3d(interface, face_vertices[0].coords, face_vertices[1].coords,
                                face_vertices[2].coords, config);
     }
@@ -626,29 +510,5 @@ void plot_dt_differentviews(s_scplx *setup, char *f_name, s_point ranges[2])
     snprintf(final_name, 512, "%s_v4.png", f_name);
     plot_all_ncells_3d(setup, final_name, ranges, "set view 100, 270, 1.5");
 
-
-    // A NEW PLOT FOR EACH CELL (UNTIL MAX_FILES)
-    // int it = 0;
-    // current = setup->head;
-    // while (current) {
-    //     if (max_files != 0 && it > max_files) break;
-    //
-    //     fprintf(pipe, "set output '%s_%d.png'\n", f_name, it);
-    //     fprintf(pipe, "splot ");
-    //     
-    //     snprintf(buff, 1024, "w polygons fs transparent solid 0.2 fc rgb '%s' notitle", colors[it%8]);
-    //     plot_add_ncell(pipe, setup, current, buff);
-    //
-    //     for (int jj=0; jj<setup->N_points; jj++) {
-    //         fprintf(pipe, "\"<echo \'");
-    //         fprintf(pipe, "%f %f %f\\n", setup->points[jj][0], setup->points[jj][1], setup->points[jj][2]);
-    //         fprintf(pipe, "'\" pt 7 lc rgb 'black' notitle, ");
-    //     }
-    //     fprintf(pipe, "\n");
-    //
-    //     it++;
-    //     current = current->next;
-    // }
-    // pclose(pipe);
 }
 

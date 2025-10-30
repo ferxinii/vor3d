@@ -1,6 +1,6 @@
 
 #include "delaunay.h"
-#include "simplical_complex.h"
+#include "scplx.h"
 #include "algebra.h"
 #include "geometry.h"
 #include <assert.h>
@@ -15,37 +15,33 @@
 
 #define MAX_STACK_SIZE 10000
 
-typedef struct del_stack {
+typedef struct dstack {
     s_ncell *entry[MAX_STACK_SIZE];
     int size;
-} s_del_stack;
+} s_dstack;
 
-static s_del_stack *stack_create(void);
-static void stack_free(s_del_stack *stack);
-static void stack_push(s_del_stack *stack, s_ncell *ncell);
-static s_ncell *stack_pop(s_del_stack *stack);
-static void stack_remove_ncell(s_del_stack *stack, s_ncell *ncell);
-// static s_ncell *stack_peek(s_del_stack *stack);
-// static void stack_shuffle(s_del_stack *stack);
-// static void stack_remove_entry(s_del_stack *stack, int id);
-// static void stack_print(s_del_stack *stack);
+static s_dstack *stack_create(void);
+static void stack_free(s_dstack *stack);
+static void stack_push(s_dstack *stack, s_ncell *ncell);
+static s_ncell *stack_pop(s_dstack *stack);
+static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell);
 
 
-static s_del_stack *stack_create(void)
+static s_dstack *stack_create(void)
 {
-    s_del_stack *stack = malloc(sizeof(s_del_stack));
+    s_dstack *stack = malloc(sizeof(s_dstack));
     stack->size = 0;
     return stack;
 }
 
 
-static void stack_free(s_del_stack *stack)
+static void stack_free(s_dstack *stack)
 {
     free(stack->entry);
 }
 
 
-static void stack_push(s_del_stack *stack, s_ncell *ncell)
+static void stack_push(s_dstack *stack, s_ncell *ncell)
 {
     assert(stack->size < MAX_STACK_SIZE && "Reached stack limit.");
     for (int ii=0; ii<stack->size; ii++) {
@@ -56,7 +52,7 @@ static void stack_push(s_del_stack *stack, s_ncell *ncell)
 }
 
 
-static s_ncell *stack_pop(s_del_stack *stack)
+static s_ncell *stack_pop(s_dstack *stack)
 {   
     if (stack->size == 0) return NULL;
     stack->size--;
@@ -65,7 +61,7 @@ static s_ncell *stack_pop(s_del_stack *stack)
 }
 
 
-static void stack_remove_ncell(s_del_stack *stack, s_ncell *ncell) {
+static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
     int newSize = 0;
     // Iterate over all entries in the stack.
     for (int ii = 0; ii < stack->size; ii++) {
@@ -78,69 +74,26 @@ static void stack_remove_ncell(s_del_stack *stack, s_ncell *ncell) {
 }
 
 
-// static s_ncell *stack_peek(s_del_stack *stack)
-// {   
-//     if (stack->size == 0) return NULL;
-//     s_ncell *ncell = stack->entry[stack->size-1];
-//     return ncell;
-// }
-//
-//
-// static void stack_shuffle(s_del_stack *stack)
-// {
-//     int n = stack->size;
-//     if (n <= 1) return;
-//
-//     for (int ii = n-1; ii>0; --ii) {
-//         int jj = rand() % (ii + 1);
-//
-//         s_ncell *tmp_cell    = stack->entry[ii];
-//         stack->entry[ii]      = stack->entry[jj];
-//         stack->entry[jj]      = tmp_cell;
-//      }
-// }
-//
-//
-// static void stack_remove_entry(s_del_stack *stack, int id) 
-// {
-//     // Shift everything above id down one slot
-//     for (int ii=id; ii<stack->size-1; ii++) {
-//         stack->entry[ii] = stack->entry[ii+1];
-//     }
-//     stack->size--;
-// }
-//
-//
-// static void stack_print(s_del_stack *stack)
-// {
-//     puts("STACK:");
-//     for (int ii=0; ii<stack->size; ii++) {
-//         printf("%d, %p\n", ii, (void*)stack->entry[ii]);
-//     }
-//     puts("");
-// }
-
-
 
 // ---------------------------------------------------------------------------------------
 // ----------------------------------- FLIPS ---------------------------------------------
 // ---------------------------------------------------------------------------------------
 
-static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_del_stack *stack);
-static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell **OUT_PTRS);
+static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_dstack *stack);
+static void flip23(s_scplx *setup, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell **OUT_PTRS);
 static int can_perform_flip32(const s_scplx *setup, const s_ncell *ncell, int opp_cell_id, int *ridge_id_2);
-static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocked, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell **OUT_PTRS);
+static void flip32(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell **OUT_PTRS);
 static int can_perform_flip44(const s_scplx *setup, const s_ncell *ncell, s_point *vertices_face, int opp_cell_id, int *ridge_id_2);
-static void flip44(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocked, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS);
+static void flip44(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS);
 
 
-static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_del_stack *stack)
+static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_dstack *stack)
 {   
     setup->N_ncells += 3;
 
-    s_ncell *nc2 = malloc_ncell(setup);
-    s_ncell *nc3 = malloc_ncell(setup);
-    s_ncell *nc4 = malloc_ncell(setup);
+    s_ncell *nc2 = malloc_ncell();
+    s_ncell *nc3 = malloc_ncell();
+    s_ncell *nc4 = malloc_ncell();
     
     // Update linked-list of ncells
     // ---- NC1 ----------------------------
@@ -183,7 +136,7 @@ static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_del
     nc2->opposite[3] = nc4;
     if (opposite_aux[1]) {  // This is untested? TODO
         aux = 1;
-        face_localid_of_adjacent_ncell(setup, nc2, &aux, 2, 1, &opp_id); 
+        face_localid_of_adjacent_ncell(nc2, 2, &aux, 1, &opp_id); 
         opposite_aux[1]->opposite[opp_id] = nc2;
     }
 
@@ -197,7 +150,7 @@ static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_del
     nc3->opposite[3] = nc4;
     if (opposite_aux[2]) {
         aux = 2;
-        face_localid_of_adjacent_ncell(setup, nc3, &aux, 2, 2, &opp_id); 
+        face_localid_of_adjacent_ncell(nc3, 2, &aux, 2, &opp_id); 
         (nc3->opposite[2])->opposite[opp_id] = nc3;
     }
 
@@ -211,7 +164,7 @@ static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_del
     nc4->opposite[3] = opposite_aux[3];
     if (opposite_aux[3]) {
         aux = 3;
-        face_localid_of_adjacent_ncell(setup, nc4, &aux, 2, 3, &opp_id); 
+        face_localid_of_adjacent_ncell(nc4, 2, &aux, 3, &opp_id); 
         (nc4->opposite[3])->opposite[opp_id] = nc4;
     }
 
@@ -222,12 +175,12 @@ static void flip14(s_scplx *setup, s_ncell *container_ncell, int point_id, s_del
 }
 
 
-static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell **OUT_PTRS)
+static void flip23(s_scplx *setup, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell **OUT_PTRS)
 {   
     setup->N_ncells += 1;
 
     s_ncell *nc2 = nc1->opposite[opp_cell_id];
-    s_ncell *nc3 = malloc_ncell(setup);
+    s_ncell *nc3 = malloc_ncell();
 
     // Update linked-list of ncells
     // ---- NC1 ----- NC2 ---------------- 
@@ -239,7 +192,7 @@ static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cel
     nc2->next = nc3;
 
     int face_vertex_id[3];
-    extract_ids_face(setup, nc1, &opp_cell_id, 2, face_vertex_id);
+    extract_ids_face(nc1, 2, &opp_cell_id, face_vertex_id);
 
     int a = face_vertex_id[0];
     int b = face_vertex_id[1];
@@ -265,7 +218,7 @@ static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cel
     nc_aux = opp_2_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc1->vertex_id, 4, p);
-        face_localid_of_adjacent_ncell(setup, nc1, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc1, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc1;
     }
 
@@ -279,7 +232,7 @@ static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cel
     nc_aux = opp_1_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc2->vertex_id, 4, d);
-        face_localid_of_adjacent_ncell(setup, nc2, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc2, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc2;
     }
 
@@ -294,7 +247,7 @@ static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cel
     nc_aux = opp_1_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc3->vertex_id, 4, d);
-        face_localid_of_adjacent_ncell(setup, nc3, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc3, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc3;
     }
 
@@ -302,7 +255,7 @@ static void flip23(s_scplx *setup, s_del_stack *stack, s_ncell *nc1, int opp_cel
     nc_aux = opp_2_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc3->vertex_id, 4, p);
-        face_localid_of_adjacent_ncell(setup, nc3, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc3, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc3;
     }
     
@@ -322,10 +275,10 @@ static int can_perform_flip32(const s_scplx *setup, const s_ncell *ncell, int op
     if (setup->N_ncells < 3) return 0;
 
     int face_vertex_id[3];
-    extract_ids_face(setup, ncell, &opp_cell_id, 2, face_vertex_id);
+    extract_ids_face(ncell, 2, &opp_cell_id, face_vertex_id);
     
     int opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, ncell, &opp_cell_id, 2, opp_cell_id, &opp_face_localid);
+    face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
     
     s_ncell *opp_ncell = ncell->opposite[opp_cell_id];
     for (int ii=0; ii<4; ii++) {
@@ -342,13 +295,13 @@ static int can_perform_flip32(const s_scplx *setup, const s_ncell *ncell, int op
 }
 
 
-static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocked, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell **OUT_PTRS)
+static void flip32(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell **OUT_PTRS)
 {
     setup->N_ncells -= 1;
 
     int v2_main, v2_2, v3_main, v3_2;
-    s_ncell *nc2 = next_ncell_ridge_cycle(setup, nc1, opp_cell_id, ridge_id_2, &v2_main, &v2_2);
-    s_ncell *nc3 = next_ncell_ridge_cycle(setup, nc2, v2_main, v2_2, &v3_main, &v3_2);
+    s_ncell *nc2 = next_ncell_ridge_cycle(nc1, opp_cell_id, ridge_id_2, &v2_main, &v2_2);
+    s_ncell *nc3 = next_ncell_ridge_cycle(nc2, v2_main, v2_2, &v3_main, &v3_2);
 
     // ------ NC3->PREV ----- NC3 ------- NC3->NEXT ------
     s_ncell *nc3_next = nc3->next;
@@ -359,7 +312,7 @@ static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocke
 
     int localids_ridge[2] = {opp_cell_id, ridge_id_2};
     int vertices_ridge[2];
-    extract_ids_face(setup, nc1, localids_ridge, 1, vertices_ridge);
+    extract_ids_face(nc1, 1, localids_ridge, vertices_ridge);
 
     int p = nc1->vertex_id[opp_cell_id];
     int a = nc1->vertex_id[ridge_id_2];
@@ -403,7 +356,7 @@ static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocke
     if (nc_aux) {
         aux2 = id_where_equal_int(nc1->vertex_id, 4, p);
         assert(aux2 == opp_cell_id);
-        face_localid_of_adjacent_ncell(setup, nc1, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc1, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc1;
     }
 
@@ -411,7 +364,7 @@ static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocke
     nc_aux = opp_3_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc1->vertex_id, 4, a);
-        face_localid_of_adjacent_ncell(setup, nc1, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc1, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc1;
     }
 
@@ -425,7 +378,7 @@ static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocke
     nc_aux = opp_1_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc2->vertex_id, 4, d);
-        face_localid_of_adjacent_ncell(setup, nc2, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc2, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc2;
     }
 
@@ -433,7 +386,7 @@ static void flip32(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocke
     nc_aux = opp_3_old[aux];
     if (nc_aux) {
         aux2 = id_where_equal_int(nc2->vertex_id, 4, a);
-        face_localid_of_adjacent_ncell(setup, nc2, &aux2, 2, aux2, &v_localid_opp);
+        face_localid_of_adjacent_ncell(nc2, 2, &aux2, aux2, &v_localid_opp);
         nc_aux->opposite[v_localid_opp] = nc2;
     }
     
@@ -459,12 +412,12 @@ static int can_perform_flip44(const s_scplx *setup, const s_ncell *ncell, s_poin
     
     s_ncell *opp = ncell->opposite[opp_cell_id];
     int opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, ncell, &opp_cell_id, 2, opp_cell_id, &opp_face_localid);
+    face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
 
 
     // DETERMINE RIDGE 
     int face_vertex_id[4];
-    extract_ids_face(setup, ncell, &opp_cell_id, 2, face_vertex_id);
+    extract_ids_face(ncell, 2, &opp_cell_id, face_vertex_id);
 
     s_point aux[3];
     aux[0] = setup->points.p[ncell->vertex_id[opp_cell_id]]; 
@@ -487,25 +440,25 @@ static int can_perform_flip44(const s_scplx *setup, const s_ncell *ncell, s_poin
     
 
     int nc2_id1, nc2_id2;
-    s_ncell *nc2 = next_ncell_ridge_cycle(setup, ncell, opp_cell_id, *ridge_id_2, &nc2_id1, &nc2_id2);
+    s_ncell *nc2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &nc2_id1, &nc2_id2);
 
     int nc3_id1, nc3_id2;
-    s_ncell *nc3 = next_ncell_ridge_cycle(setup, nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
+    s_ncell *nc3 = next_ncell_ridge_cycle(nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
 
     int nc4_id1, nc4_id2;
-    s_ncell *nc4 = next_ncell_ridge_cycle(setup, nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
+    s_ncell *nc4 = next_ncell_ridge_cycle(nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
 
     if (nc4->opposite[nc4_id1] == ncell) return 1;
     else return 0;
 }
 
 
-static void flip44(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocked, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS) 
+static void flip44(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS) 
 {
 
     // FIRST, A FLIP23
     int opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, ncell, &id_ridge_1, 2, id_ridge_1, &opp_face_localid);
+    face_localid_of_adjacent_ncell(ncell, 2, &id_ridge_1, id_ridge_1, &opp_face_localid);
     int opp_face_vertexid = ncell->opposite[id_ridge_1]->vertex_id[opp_face_localid];  // Store before flip23!
 
     int id_a, id_c;
@@ -567,9 +520,9 @@ static void flip44(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocke
     s_ncell *nc3 = nc5->opposite[id_where_equal_int(nc5->vertex_id, 4, ncell->vertex_id[id_ridge_1])];
     int nc3_id1 = id_where_equal_int(nc3->vertex_id, 4, opp_face_vertexid);
     int nc3_id2;
-    face_localid_of_adjacent_ncell(setup, nc5, &nc5_p, 2, nc5_p, &nc3_id2);
+    face_localid_of_adjacent_ncell(nc5, 2, &nc5_p, nc5_p, &nc3_id2);
     int nc3_opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, nc3, &nc3_id1, 2, nc3_id1, &nc3_opp_face_localid);
+    face_localid_of_adjacent_ncell(nc3, 2, &nc3_id1, nc3_id1, &nc3_opp_face_localid);
 
     s_ncell *FLIP32_PTRS[2];
     flip32(setup, stack, stack_blocked, nc3, nc3_id1, nc3_id2, nc3_opp_face_localid, FLIP32_PTRS);
@@ -697,52 +650,51 @@ static int determine_case(const s_point vertices_face[3], s_point p, s_point d)
 // --------------------------------- ALGORITHM -------------------------------------------
 // ---------------------------------------------------------------------------------------
 
-static s_scplx initialize_setup(const s_points *points, int dim);
-static int flip_tetrahedra(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocked, s_ncell *ncell, int opp_cell_id);
+static s_scplx initialize_setup(const s_points *points);
+static int flip_tetrahedra(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *ncell, int opp_cell_id);
 static void remove_point_setup(s_scplx *setup, int point_id);
-static int insert_one_point(s_scplx *setup, int point_id, s_del_stack *stack, s_del_stack *stack_blocked);
+static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, s_dstack *stack_blocked);
 static void remove_big_tetra(s_scplx *setup);
 
 
-static s_scplx initialize_setup(const s_points *points, int dim)
+static s_scplx initialize_setup(const s_points *points)
 {
-    assert(dim == 3 && "Only supports 3D");
     // setup->points is EXTENDED FOR THE EXTRA NODES OF BIG_NCELL, PUT AT THE BEGINNING!
-    s_points setup_points = { .N = points->N + dim + 1, 
-                              .p = malloc(sizeof(s_point) * (points->N + dim + 1)) };
+    s_points setup_points = { .N = points->N + 4, 
+                              .p = malloc(sizeof(s_point) * (points->N + 4)) };
     for (int ii=0; ii<points->N; ii++) {
-        setup_points.p[ii+dim+1] = points->p[ii];
+        setup_points.p[ii+4] = points->p[ii];
     }
     
     s_point CM = point_average(points);
     double maxd = max_distance(points, CM);
 
     // Build the vertices of a regular simplex in R^(dim+1) with circumsphere of radius s centered at origin
-    double s = 3 * maxd * dim * sqrt((dim+1.0)/dim);  // Scale so that inradius = 1.5 * maxd, original norm = sqrt(dim/(dim+1))
-    double **V = malloc_matrix(dim+1, dim+1); 
-    for (int ii = 0; ii < dim+1; ii++) {
-        for (int jj = 0; jj < dim+1; jj++) {
-            V[ii][jj] = ((ii == jj) ? 1.0 : 0.0) - 1.0/(dim+1);
-            V[ii][jj] *= s;
-        }
+    int dim = 3;
+    double s = 3 * maxd * dim * sqrt((dim+1.0)/dim);
+    int nvert = dim + 1;
+    double shift = 1.0 / (dim + 1);
+
+    for (int ii = 0; ii < nvert; ++ii) {
+        // compute only the first 3 coordinates (we drop the last one)
+        double v0 = ((ii == 0) ? 1.0 : 0.0) - shift;
+        double v1 = ((ii == 1) ? 1.0 : 0.0) - shift;
+        double v2 = ((ii == 2) ? 1.0 : 0.0) - shift;
+        // note: v3 = ((ii==3)?1.0:0.0) - shift exists but we drop it
+
+        double jitter = 0.001 * s;
+        setup_points.p[ii].x = CM.x + v0 * s + jitter;
+        setup_points.p[ii].y = CM.y + v1 * s + jitter;
+        setup_points.p[ii].z = CM.z + v2 * s + jitter;
     }
-    // Project in Rn by removing the last coordinate, and add CM to center around points
-    for (int ii=0; ii<dim+1; ii++) {
-        // double aux = 2.0 * rand() / RAND_MAX - 1;  // ADD SOME NOISE TO AVOID COLINEARITIES
-        // setup_points[ii][jj] = CM[jj] + V[ii][jj] + 0.001 * aux * s ; 
-        setup_points.p[ii].x = CM.x + V[ii][0] + 0.001 * s;
-        setup_points.p[ii].y = CM.y + V[ii][1] + 0.001 * s;
-        setup_points.p[ii].z = CM.z + V[ii][2] + 0.001 * s;
-    }
-    free_matrix(V, dim+1);
+
     
     s_scplx setup;
-    setup.dim = dim;
     setup.points.N = points->N + dim + 1;
     setup.points = setup_points;
 
-    s_ncell *big_ncell = malloc_ncell(&setup);
-    for (int ii=0; ii<setup.dim+1; ii++) {
+    s_ncell *big_ncell = malloc_ncell();
+    for (int ii=0; ii<4; ii++) {
         big_ncell->vertex_id[ii] = ii;
         big_ncell->opposite[ii] = NULL;
     }
@@ -753,14 +705,14 @@ static s_scplx initialize_setup(const s_points *points, int dim)
 }
 
 
-static int flip_tetrahedra(s_scplx *setup, s_del_stack *stack, s_del_stack *stack_blocked, s_ncell *ncell, int opp_cell_id)
+static int flip_tetrahedra(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *ncell, int opp_cell_id)
 {
     s_point coords_face[3];
-    extract_vertices_face(setup, ncell, &opp_cell_id, 2, coords_face);
+    extract_vertices_face(setup, ncell, 2, &opp_cell_id, coords_face);
 
     // Extract id of vertex in opposite cell corresponding to the face
     int opp_face_localid;
-    face_localid_of_adjacent_ncell(setup, ncell, &opp_cell_id, 2, opp_cell_id, &opp_face_localid);
+    face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[opp_cell_id])->vertex_id[opp_face_localid];
 
     s_point p = setup->points.p[ncell->vertex_id[opp_cell_id]];
@@ -806,12 +758,12 @@ static void remove_point_setup(s_scplx *setup, int point_id)
 }
 
 
-static int insert_one_point(s_scplx *setup, int point_id, s_del_stack *stack, s_del_stack *stack_blocked)
+static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, s_dstack *stack_blocked)
 {
     s_point point = setup->points.p[point_id];
     s_ncell *container_ncell = in_ncell_walk(setup, point);
 
-    double EPS2 = 1e-6;
+    double EPS2 = 1e-12;
     if (distance_squared(setup->points.p[container_ncell->vertex_id[0]], point) < EPS2 || 
         distance_squared(setup->points.p[container_ncell->vertex_id[1]], point) < EPS2 ||
         distance_squared(setup->points.p[container_ncell->vertex_id[2]], point) < EPS2 ||
@@ -894,9 +846,9 @@ static void remove_big_tetra(s_scplx *setup)
 
 s_scplx construct_dt_3d(const s_points *points)
 {
-    s_del_stack *stack = stack_create();
-    s_del_stack *stack_blocked = stack_create();
-    s_scplx setup = initialize_setup(points, 3);
+    s_dstack *stack = stack_create();
+    s_dstack *stack_blocked = stack_create();
+    s_scplx setup = initialize_setup(points);
     
     int ii = 4;  // First 4 are big tetra, which already is inserted!
     while (ii < setup.points.N) {
@@ -910,14 +862,6 @@ s_scplx construct_dt_3d(const s_points *points)
     stack_free(stack);  
     remove_big_tetra(&setup);
 
-    // DEBUG: COMPUTE VOLUMES!
-    s_ncell *current = setup.head;
-    while (current) {
-        add_ncell_volume_3d(&setup, current);
-        assert(current->volume != 0);
-        current = current->next;
-    }
-    
     return setup;
 }
 

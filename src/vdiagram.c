@@ -1,7 +1,7 @@
 // [ ] TODO Improve malloc of vertices, or check if i have reached VCELL_MAX_VERTICES to increase size as needed
 #include "geometry.h"
 #include "convh.h"
-#include "simplical_complex.h"
+#include "scplx.h"
 #include "bpoly.h"
 #include "algebra.h"
 #include "geometry.h"
@@ -228,7 +228,7 @@ static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s
     }
     // Mark incident ncells to this point
     initialize_ncells_mark(setup);
-    mark_ncells_incident_face(setup, ncell, v_localid_COMP, 0);
+    mark_ncells_incident_face(setup, ncell, 0, v_localid_COMP);
 
 
     s_vcell out;

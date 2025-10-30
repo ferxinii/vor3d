@@ -14,7 +14,7 @@ add_library(vor3d STATIC
     src/vor3d.c
     src/bpoly.c
     src/delaunay.c
-    src/simplical_complex.c
+    src/scplx.c
     src/vdiagram.c
 )
 
