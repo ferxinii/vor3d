@@ -1,5 +1,6 @@
 // [ ] TODO Improve malloc of vertices, or check if i have reached VCELL_MAX_VERTICES to increase size as needed
 #include "geometry.h"
+#include "convh.h"
 #include "simplical_complex.h"
 #include "bpoly.h"
 #include "algebra.h"
@@ -16,135 +17,45 @@
 #include <math.h>
 
 
-void free_vcell(s_vcell *vcell)
+typedef struct vertex_buff {
+    int max;
+    int N;
+    s_point *v;
+} s_vbuff;
+
+
+static s_vbuff init_vbuff()
 {
-    free(vcell->vertices);
-    if (vcell->faces) {
-        free(vcell->faces);
-        free(vcell->fnormals);
-    }
-    free(vcell);
+    s_vbuff vbuff;
+    vbuff.max = VCELL_BLOCK_VERTICES;
+    vbuff.N = 0;
+    vbuff.v = malloc(sizeof(s_point) * VCELL_BLOCK_VERTICES);
+    return vbuff;
 }
 
 
-void free_vdiagram(s_vdiagram *vdiagram)
+static void free_vbuff(s_vbuff *vbuff)
 {
-    for (int ii=0; ii<vdiagram->N; ii++) {
-        if (vdiagram->vcells[ii]) free_vcell(vdiagram->vcells[ii]);
-    }
-    free(vdiagram->vcells);
-    free(vdiagram->seeds);
-    free_bpoly((s_bpoly *)vdiagram->bpoly);
-    free(vdiagram);
+    free(vbuff->v);
+    memset(vbuff, 0, sizeof(s_vbuff));
 }
 
 
-void write_vcell_file(const s_vcell *vcell, FILE *file)
+static void increase_vbuff_if_needed(s_vbuff *vbuff)
 {
-    for (int ii=0; ii<vcell->Nf; ii++) {
-        fprintf(file, "%f %f %f\n", vcell->vertices[vcell->faces[ii*3 + 0]].x,
-                                    vcell->vertices[vcell->faces[ii*3 + 0]].y,
-                                    vcell->vertices[vcell->faces[ii*3 + 0]].z);
-        fprintf(file, "%f %f %f\n", vcell->vertices[vcell->faces[ii*3 + 1]].x,
-                                    vcell->vertices[vcell->faces[ii*3 + 1]].y,
-                                    vcell->vertices[vcell->faces[ii*3 + 1]].z);
-        fprintf(file, "%f %f %f\n\n", vcell->vertices[vcell->faces[ii*3 + 2]].x,
-                                      vcell->vertices[vcell->faces[ii*3 + 2]].y,
-                                      vcell->vertices[vcell->faces[ii*3 + 2]].z);
+    if (vbuff->N + 1 >= vbuff->max) {
+        vbuff->max += VCELL_BLOCK_VERTICES;
+        vbuff->v = realloc(vbuff->v, sizeof(s_point) * vbuff->max);
     }
 }
 
 
-void write_vd_file(const s_vdiagram *vd, FILE *file)
-{
-    for (int ii=0; ii<vd->N; ii++) {
-        write_vcell_file(vd->vcells[ii], file);
-        fprintf(file, "\n\n");
-    }
-}
-
-
-s_vdiagram *malloc_vdiagram(const s_scplx *setup, int Nreal)
-{
-    s_vdiagram *out = malloc(sizeof(s_vdiagram));
-    out->seeds = malloc(sizeof(s_point) * setup->N_points);
-    memcpy(out->seeds, setup->points, setup->N_points * sizeof(s_point));
-
-    out->N = Nreal;
-    out->vcells = malloc(sizeof(s_vcell*) * Nreal);
-    for (int ii=0; ii<Nreal; ii++) out->vcells[ii] = NULL;
-    out->bpoly = NULL;
-    return out;
-}
-
-
-void print_vcell(const s_vcell *vcell)
-{
-    puts("VCELL");
-    printf("Seed: %d, Nv = %d, vol = %f\n", vcell->seed_id, vcell->Nv, vcell->volume);
-    printf("%f, %f, %f\n", vcell->vertices[0].x, vcell->vertices[0].y,
-                            vcell->vertices[0].z);
-    for (int ii=1; ii<vcell->Nv; ii++) {
-        printf("%f, %f, %f\n", vcell->vertices[ii].x, vcell->vertices[ii].y, 
-                            vcell->vertices[ii].z);
-    }
-    printf("\n");
-}
-
-
-void print_vdiagram(const s_vdiagram *vdiagram)
-{
-    puts("------- VORONOI DIAGRAM ------");
-    for (int ii=0; ii<vdiagram->N; ii++) {
-        if (vdiagram->vcells[ii]) print_vcell(vdiagram->vcells[ii]);
-    }
-    puts("------------------------------");
-}
-
-
-s_vcell *malloc_vcell(int seed_id)
-{
-    s_vcell *out = malloc(sizeof(s_vcell));
-    out->seed_id = seed_id;
-    out->Nv = 0;
-    out->Nv_capacity = VCELL_BLOCK_VERTICES;
-    out->vertices = malloc(sizeof(s_point) * VCELL_BLOCK_VERTICES);
-    return out;
-}
-
-
-void increase_num_vertices_if_needed(s_vcell *vcell)
-{
-   // Check if we need to increase the capacity.
-    if (vcell->Nv + 1 >= vcell->Nv_capacity) {
-        int new_capacity = vcell->Nv_capacity + VCELL_BLOCK_VERTICES;
-
-        vcell->vertices = realloc(vcell->vertices, sizeof(s_point) * new_capacity);
-        // printf("DEBUG: Increased ncell capacity: old=%d, new=%d\n", vcell->Nv_capacity, new_capacity);
-        vcell->Nv_capacity = new_capacity;
-    }
-}
-
-
-int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *vcell)
+static int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vbuff *vbuff)
 {   // Returns the index of the vertex
-    increase_num_vertices_if_needed(vcell);
+    increase_vbuff_if_needed(vbuff);
 
     s_point v[4];
     extract_vertices_ncell(setup, ncell, v);
-
-    // int ids[] = { ncell->vertex_id[0], ncell->vertex_id[1],
-    //           ncell->vertex_id[2], ncell->vertex_id[3] };
-    // dump_setup_points(setup, ids, 4);
-    // // Debug: print the original four points from the ncell
-    // fprintf(stderr, "DEBUG: add_vvertex_from_ncell: ncell->count=%d, vertex_ids = [%d,%d,%d,%d]\n",
-    //         ncell->count,
-    //         ncell->vertex_id[0], ncell->vertex_id[1],
-    //         ncell->vertex_id[2], ncell->vertex_id[3]);
-    // for (int i=0;i<4;i++) {
-    //     fprintf(stderr, "  v[%d] = (%g, %g, %g)\n", i, v[i].x, v[i].y, v[i].z);
-    // }
-
 
     s_point a = subtract_points(v[1], v[0]);
     s_point b = subtract_points(v[2], v[0]);
@@ -161,7 +72,7 @@ int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *
     double f = 2 * dot_prod(ab, c);
     if (fabs(f) < 1e-9) {
         // printf("circumcenter: NEARLY SINGULAR!\n");
-        return -1;
+        return EXIT_FAILURE;
     }
     f = 1.0 / f;
 
@@ -171,68 +82,134 @@ int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, s_vcell *
         f * ( a2 * bc.z + b2 * ca.z + c2 * ab.z) + v[0].z,
     }}};
 
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (distance_squared(circumcenter, vcell->vertices[ii]) < 1e-5) {
-            return -1;
+    for (int ii=0; ii<vbuff->N; ii++) {
+        if (distance_squared(circumcenter, vbuff->v[ii]) < 1e-6) {
+            return EXIT_FAILURE;
         }
     }
 
-    vcell->vertices[vcell->Nv] = circumcenter;
+    vbuff->v[vbuff->N++] = circumcenter;
 
-    vcell->Nv++;
-
-    return vcell->Nv - 1;
+    return EXIT_SUCCESS;
 }
 
 
-void compute_vcell_volume(s_vcell *vcell)
+static s_convhull convhull_from_vbuff(s_vbuff *vbuff)
 {
-    double vol = 0;
-    for (int ii=0; ii<vcell->Nf; ii++) {
-        int i0 = 0;
-        int i1 = 1;
-        int i2 = 2;
-
-        double Nx = (vcell->vertices[vcell->faces[ii*3 + 1]].coords[i1] -
-                     vcell->vertices[vcell->faces[ii*3 + 0]].coords[i1]) *
-                    (vcell->vertices[vcell->faces[ii*3 + 2]].coords[i2] -
-                     vcell->vertices[vcell->faces[ii*3 + 0]].coords[i2]) 
-                    -
-                    (vcell->vertices[vcell->faces[ii*3 + 1]].coords[i2] -
-                     vcell->vertices[vcell->faces[ii*3 + 0]].coords[i2]) *
-                    (vcell->vertices[vcell->faces[ii*3 + 2]].coords[i1] -
-                     vcell->vertices[vcell->faces[ii*3 + 0]].coords[i1]);
-
-        vol += Nx * (vcell->vertices[vcell->faces[ii*3 + 0]].coords[i0] +
-                     vcell->vertices[vcell->faces[ii*3 + 1]].coords[i0] +
-                     vcell->vertices[vcell->faces[ii*3 + 2]].coords[i0]);
-    }
-    vcell->volume = vol / 6;
+    s_points points = {.N = vbuff->N, .p = vbuff->v};
+    // Makes copy of points inside.
+    return convhull_from_points(&points);
 }
 
 
-int add_convex_hull_vcell(s_vcell *vcell)
+static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
 {
-    convhull_from_points(vcell->vertices, vcell->Nv, &vcell->faces, &vcell->fnormals, &vcell->Nf);
-    if(!vcell->faces) return 0;
-    return 1;
-}
+    assert(Nreal <= setup->points.N && "Nreal needs to be <= than setup->N"); 
 
+    s_vdiagram out;
 
-int bounded_extraction(const s_scplx *setup, s_vcell *vcell)
-{
-    s_ncell *current = setup->head;
-    while (current) {
-        if (current->mark == 1) add_vvertex_from_ncell(setup, current, vcell);
-        current = current->next;
-    }
-    // printf("DEBUG: NV=%d\n", vcell->Nv);
-    int out = add_convex_hull_vcell(vcell);
+    // setup->points may have more points... Need to copy manually.
+    out.seeds = (s_points) { .N = Nreal,
+                             .p = malloc(sizeof(s_point) * Nreal) };
+    memcpy(out.seeds.p, setup->points.p, sizeof(s_point) * Nreal);
+    
+    out.vcells = malloc(sizeof(s_vcell) * Nreal);
+    memset(out.vcells, 0, sizeof(s_vcell) * Nreal);
+
+    memset(&out.bpoly, 0, sizeof(s_bpoly));
     return out;
 }
 
 
-s_vcell *extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly *bp)
+void free_vcell(s_vcell *vcell)
+{
+    free_convhull(&vcell->convh);
+    memset(vcell, 0, sizeof(s_vcell));
+}
+
+
+void free_vdiagram(s_vdiagram *vdiagram)
+{
+    for (int ii=0; ii<vdiagram->seeds.N; ii++) {
+        if (vdiagram->vcells[ii].seed_id != 0) free_vcell(&vdiagram->vcells[ii]);
+    }
+    free(vdiagram->vcells);
+    free_points(&vdiagram->seeds);
+    free_bpoly(&vdiagram->bpoly);
+    memset(vdiagram, 0, sizeof(s_vdiagram));
+}
+
+
+void write_vcell_file(const s_vcell *vcell, FILE *file)
+{
+    for (int ii=0; ii<vcell->convh.Nf; ii++) {
+        s_point face[3];
+        convh_get_face(&vcell->convh, ii, face);
+        fprintf(file, "%f %f %f\n", face[0].x, face[0].y, face[0].z);
+        fprintf(file, "%f %f %f\n", face[1].x, face[1].y, face[1].z);
+        fprintf(file, "%f %f %f\n\n", face[2].x, face[2].y, face[2].z);
+    }
+}
+
+
+void write_vd_file(const s_vdiagram *vd, FILE *file)
+{
+    for (int ii=0; ii<vd->seeds.N; ii++) {
+        write_vcell_file(&vd->vcells[ii], file);
+        fprintf(file, "\n\n");
+    }
+}
+
+
+void print_vcell(const s_vcell *vcell)
+{
+    puts("VCELL");
+    printf("Seed: %d, Nv = %d, vol = %f\n", vcell->seed_id, vcell->convh.points.N, vcell->volume);
+    printf("%f, %f, %f\n", vcell->convh.points.p[0].x, vcell->convh.points.p[0].y, vcell->convh.points.p[0].z);
+    for (int ii=1; ii<vcell->convh.points.N; ii++) {
+        printf("%f, %f, %f\n", vcell->convh.points.p[ii].x, vcell->convh.points.p[ii].y, vcell->convh.points.p[ii].z);
+    }
+    printf("\n");
+}
+
+
+void print_vdiagram(const s_vdiagram *vdiagram)
+{
+    puts("------- VORONOI DIAGRAM ------");
+    for (int ii=0; ii<vdiagram->seeds.N; ii++) {
+        print_vcell(&vdiagram->vcells[ii]);
+    }
+    puts("------------------------------");
+}
+
+
+static s_convhull convhull_from_marked_ncells(const s_scplx *setup, const s_bpoly *bp)
+{
+    s_vbuff vbuff = init_vbuff();
+
+    s_ncell *current = setup->head;
+    while (current) {
+        if (current->mark == 1) add_vvertex_from_ncell(setup, current, &vbuff);
+        current = current->next;
+    }
+
+    // Snap into bp if cell spikes outward, KNOWN PROBLEM FIXME TODO
+    for (int ii=0; ii<vbuff.N; ii++) {
+        if (is_inside_convhull(&bp->convh, vbuff.v[ii]) == 0) {
+            s_point tmp;
+            double distance = find_closest_point_on_bp(bp, vbuff.v[ii], &tmp);
+            if (distance > 1e-12) vbuff.v[ii] = tmp;
+        }
+    }
+
+    s_convhull out = convhull_from_vbuff(&vbuff);
+
+    free_vbuff(&vbuff);
+    return out;
+}
+
+
+static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly *bp)
 {
     // Find an ncell with this vertex
     s_ncell *ncell = setup->head;
@@ -252,71 +229,53 @@ s_vcell *extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly
     // Mark incident ncells to this point
     initialize_ncells_mark(setup);
     mark_ncells_incident_face(setup, ncell, v_localid_COMP, 0);
-    // printf("DEBUG: N=%d\n", count_marked(setup));
 
 
-    s_vcell *vcell = malloc_vcell(vertex_id);
-    int out = bounded_extraction(setup, vcell);
-    if (out == 0) {
-        puts("extract_voronoi_cell: ERROR extracting convhull of cell!");
-        // print_vcell(vcell);
-        free_vcell(vcell);
-        return NULL;
-    }
-    
-    // Snap into bp if cell spikes outward, KNOWN PROBLEM FIXME TODO
-    for (int ii=0; ii<vcell->Nv; ii++) {
-        if (!is_inside_convhull(vcell->vertices[ii], bp->points, bp->faces, bp->Nf)) {  
-            // (If -1 (on face) dont do anything)
-            vcell->vertices[ii] = find_closest_point_on_bp(bp, vcell->vertices[ii]);
-            // if (!is_inside_convhull(new, bp->points, bp->faces, bp->fnormals, bp->Nf)) {
-            //     puts("WARNING! SNAP IS STILL OUTSIDE?");
-            // }
-        }
+    s_vcell out;
+    out.seed_id = vertex_id;
+    out.convh = convhull_from_marked_ncells(setup, bp);
+    if (out.convh.Nf == 0) {
+        fprintf(stderr, "extract_voronoi_cell: Error extracting convhull of cell\n");
+        memset(&out, 0, sizeof(s_vcell));
+        return out;
     }
 
-    // Compute volume
-    compute_vcell_volume(vcell);
-    // printf("VOL: %f\n", vcell->volume);
-    return vcell;
+    out.volume = volume_convhull(&out.convh);
+    return out;
 }
 
 
 
-s_vdiagram *voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal)
-{
+s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal)
+{   // copy of bpoly
     initialize_ncells_counter(setup);
     
-    s_vdiagram *vdiagram = malloc_vdiagram(setup, Nreal);
-    vdiagram->bpoly = bpoly;
+    s_vdiagram out = malloc_vdiagram(setup, Nreal);
+    out.bpoly = bpoly_copy(bpoly);
     
     for (int ii=0; ii<Nreal; ii++) {
-        // print_vdiagram(vdiagram);
         for (int tries = 0; tries < 2; tries ++) { 
-            vdiagram->vcells[ii] = extract_voronoi_cell(setup, ii, bpoly);
-            if (vdiagram->vcells[ii] == NULL) continue;
+            out.vcells[ii] = extract_voronoi_cell(setup, ii, bpoly);
+            if (out.vcells[ii].convh.Nf == 0) continue;
             else break;
         }
-        if (vdiagram->vcells[ii] == NULL || vdiagram->vcells[ii]->volume <= 0) {
+        if (out.vcells[ii].convh.Nf == 0 || out.vcells[ii].volume <= 0) {
             // printf("%p, %f\n", (void*)vdiagram->vcells[ii], vdiagram->vcells[ii]->volume);
             // print_vcell(vdiagram->vcells[ii]);
             puts("ERROR: Could not construct vdiagram. Exiting voronoi_from_delaunay_3d");
-            free_vdiagram(vdiagram);
-            return NULL;
+            free_vdiagram(&out);
+            return out;
         }
     }
 
-    return vdiagram;
+    return out;
 }
 
 
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x)
 {
-    for (int ii=0; ii<vd->N; ii++) {
-        if (is_inside_convhull(x, vd->vcells[ii]->vertices, 
-                               vd->vcells[ii]->faces, vd->vcells[ii]->Nf)) {
-            return ii;
-        }
+    for (int ii=0; ii<vd->seeds.N; ii++) {
+        if (is_inside_convhull(&vd->vcells[ii].convh, x)) return ii;
     }
     return -1;
 }
@@ -326,7 +285,7 @@ int find_inside_which_vcell(const s_vdiagram *vd, s_point x)
 // --------------------------------------- PLOTS ------------------------------------------------
 // ----------------------------------------------------------------------------------------------
 
-void randomize_colors(int N, char **colors) 
+static void randomize_colors(int N, char **colors) 
 {
     for (int i = N - 1; i > 0; i--) {
         int j = rand() % (i + 1);
@@ -337,22 +296,23 @@ void randomize_colors(int N, char **colors)
 }
 
 
-void plot_add_vcell(s_gnuplot *interface, const s_vcell *vcell, char *config)
+static void plot_add_vcell(s_gnuplot *interface, const s_vcell *vcell, char *config)
 {
-    for (int ii=0; ii<vcell->Nf; ii++) {
-        draw_solid_triangle_3d(interface, vcell->vertices[vcell->faces[ii*3]].coords, 
-                vcell->vertices[vcell->faces[ii*3+1]].coords, 
-                vcell->vertices[vcell->faces[ii*3+2]].coords, config);
+    for (int ii=0; ii<vcell->convh.Nf; ii++) {
+        s_point face[3];
+        convh_get_face(&vcell->convh, ii, face);
+        draw_solid_triangle_3d(interface, face[0].coords, face[1].coords, face[2].coords, config);
+
         }
 }
 
 
-void plot_add_bpoly(s_gnuplot *interface, const s_bpoly *bpoly, char *config)
+static void plot_add_bpoly(s_gnuplot *interface, const s_bpoly *bpoly, char *config)
 {
-    for (int ii=0; ii<bpoly->Nf; ii++) {
-        draw_solid_triangle_3d(interface, bpoly->points[bpoly->faces[ii*3]].coords, 
-                bpoly->points[bpoly->faces[ii*3+1]].coords, 
-                bpoly->points[bpoly->faces[ii*3+2]].coords, config);
+    for (int ii=0; ii<bpoly->convh.Nf; ii++) {
+        s_point face[3];
+        convh_get_face(&bpoly->convh, ii, face);
+        draw_solid_triangle_3d(interface, face[0].coords, face[1].coords, face[2].coords, config);
     }
 }
 
@@ -373,7 +333,7 @@ void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, con
     }
 
     plot_add_vcell(interface, vcell, "fs transparent solid 0.6");
-    plot_add_bpoly(interface, vdiag->bpoly, "fs transparent solid 0.1");
+    plot_add_bpoly(interface, &vdiag->bpoly, "fs transparent solid 0.1");
     gnuplot_end(interface);
 }
 
@@ -401,10 +361,9 @@ void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ran
     }
 
 
-    for (int ii=0; ii<vdiagram->N; ii++) {
-        s_vcell *vcell = vdiagram->vcells[ii];
+    for (int ii=0; ii<vdiagram->seeds.N; ii++) {
         snprintf(buff, 1024, "fs transparent solid 0.2 fc rgb '%s'", colors[ii%8]);
-        plot_add_vcell(interface, vcell, buff);  
+        plot_add_vcell(interface, &vdiagram->vcells[ii], buff);  
     }
     gnuplot_end(interface);
 }
@@ -440,11 +399,11 @@ void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id)
     FILE *f = fopen(fname, "a");
     assert(f && "Could not open file to write volumes to");
 
-    for (int ii=0; ii<vdiagram->N; ii++) {
-        fprintf(f, "%d, %f, %f, %f, %f\n", id, vdiagram->seeds[vdiagram->vcells[ii]->seed_id].x,
-                                               vdiagram->seeds[vdiagram->vcells[ii]->seed_id].y, 
-                                               vdiagram->seeds[vdiagram->vcells[ii]->seed_id].z, 
-                                               vdiagram->vcells[ii]->volume);   
+    for (int ii=0; ii<vdiagram->seeds.N; ii++) {
+        fprintf(f, "%d, %f, %f, %f, %f\n", id, vdiagram->seeds.p[vdiagram->vcells[ii].seed_id].x,
+                                               vdiagram->seeds.p[vdiagram->vcells[ii].seed_id].y, 
+                                               vdiagram->seeds.p[vdiagram->vcells[ii].seed_id].z, 
+                                               vdiagram->vcells[ii].volume);   
     }
     fclose(f);
 }

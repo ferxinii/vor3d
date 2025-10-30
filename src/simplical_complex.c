@@ -2,11 +2,12 @@
 #include "simplical_complex.h"
 #include "geometry.h"
 #include "algebra.h"
-#include "convh.h"
 #include "gnuplotc.h"
+#include "convh.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 
 
 s_ncell *malloc_ncell(const s_scplx *setup)
@@ -27,6 +28,21 @@ void free_ncell(s_ncell *ncell)
     free(ncell->vertex_id);
     free(ncell->opposite);
     free(ncell);
+}
+
+
+void free_complex(s_scplx *setup)
+{
+    free_points(&setup->points);
+
+    s_ncell *current = setup->head;
+    while (current) {
+        s_ncell *next = current->next;
+        free_ncell(current);
+        current = next;
+    }
+
+    memset(setup, 0, sizeof(s_scplx));
 }
 
 
@@ -64,45 +80,45 @@ void print_ncells(const s_scplx *setup)
 
 void write_ncell3d_file(s_scplx *setup, s_ncell *ncell, FILE *file)
 {
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[0]].x,
-                                setup->points[ncell->vertex_id[0]].y,
-                                setup->points[ncell->vertex_id[0]].z);
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[1]].x,
-                                setup->points[ncell->vertex_id[1]].y,
-                                setup->points[ncell->vertex_id[1]].z);
-    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[2]].x,
-                                  setup->points[ncell->vertex_id[2]].y,
-                                  setup->points[ncell->vertex_id[2]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
+                                setup->points.p[ncell->vertex_id[0]].y,
+                                setup->points.p[ncell->vertex_id[0]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
+                                setup->points.p[ncell->vertex_id[1]].y,
+                                setup->points.p[ncell->vertex_id[1]].z);
+    fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[2]].x,
+                                  setup->points.p[ncell->vertex_id[2]].y,
+                                  setup->points.p[ncell->vertex_id[2]].z);
 
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[0]].x,
-                                setup->points[ncell->vertex_id[0]].y,
-                                setup->points[ncell->vertex_id[0]].z);
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[1]].x,
-                                setup->points[ncell->vertex_id[1]].y,
-                                setup->points[ncell->vertex_id[1]].z);
-    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[3]].x,
-                                  setup->points[ncell->vertex_id[3]].y,
-                                  setup->points[ncell->vertex_id[3]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
+                                setup->points.p[ncell->vertex_id[0]].y,
+                                setup->points.p[ncell->vertex_id[0]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
+                                setup->points.p[ncell->vertex_id[1]].y,
+                                setup->points.p[ncell->vertex_id[1]].z);
+    fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[3]].x,
+                                  setup->points.p[ncell->vertex_id[3]].y,
+                                  setup->points.p[ncell->vertex_id[3]].z);
 
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[3]].x,
-                                setup->points[ncell->vertex_id[3]].y,
-                                setup->points[ncell->vertex_id[3]].z);
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[1]].x,
-                                setup->points[ncell->vertex_id[1]].y,
-                                setup->points[ncell->vertex_id[1]].z);
-    fprintf(file, "%f %f %f\n\n", setup->points[ncell->vertex_id[2]].x,
-                                  setup->points[ncell->vertex_id[2]].y,
-                                  setup->points[ncell->vertex_id[2]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[3]].x,
+                                setup->points.p[ncell->vertex_id[3]].y,
+                                setup->points.p[ncell->vertex_id[3]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
+                                setup->points.p[ncell->vertex_id[1]].y,
+                                setup->points.p[ncell->vertex_id[1]].z);
+    fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[2]].x,
+                                  setup->points.p[ncell->vertex_id[2]].y,
+                                  setup->points.p[ncell->vertex_id[2]].z);
 
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[0]].x,
-                                setup->points[ncell->vertex_id[0]].y,
-                                setup->points[ncell->vertex_id[0]].z);
-    fprintf(file, "%f %f %f\n", setup->points[ncell->vertex_id[3]].x,
-                                setup->points[ncell->vertex_id[3]].y,
-                                setup->points[ncell->vertex_id[3]].z);
-    fprintf(file, "%f %f %f\n\n\n", setup->points[ncell->vertex_id[2]].x,
-                                    setup->points[ncell->vertex_id[2]].y,
-                                    setup->points[ncell->vertex_id[2]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
+                                setup->points.p[ncell->vertex_id[0]].y,
+                                setup->points.p[ncell->vertex_id[0]].z);
+    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[3]].x,
+                                setup->points.p[ncell->vertex_id[3]].y,
+                                setup->points.p[ncell->vertex_id[3]].z);
+    fprintf(file, "%f %f %f\n\n\n", setup->points.p[ncell->vertex_id[2]].x,
+                                    setup->points.p[ncell->vertex_id[2]].y,
+                                    setup->points.p[ncell->vertex_id[2]].z);
 }
 
 
@@ -169,7 +185,7 @@ int count_marked(const s_scplx *setup)
 void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point *out)
 {
     for (int ii=0; ii<setup->dim+1; ii++) {
-        out[ii] = setup->points[ncell->vertex_id[ii]];
+        out[ii] = setup->points.p[ncell->vertex_id[ii]];
     }
 }
 
@@ -191,7 +207,7 @@ void extract_vertices_face(const s_scplx *setup, const s_ncell *ncell, const int
     int face_vertex_id[dim_face+1];
     extract_ids_face(setup, ncell, v_localid, dim_face, face_vertex_id);
     for (int ii=0; ii<dim_face+1; ii++) {
-        out[ii] = setup->points[face_vertex_id[ii]];
+        out[ii] = setup->points.p[face_vertex_id[ii]];
     }
 }
 
@@ -200,7 +216,7 @@ void extract_face_center_and_normal(const s_scplx *setup, const s_ncell *ncell, 
 {
     assert(setup->dim == 3 && "Currently only supports 3D");
     s_point face_v[3];
-    s_point ncell_v[3];
+    s_point ncell_v[4];
 
     extract_vertices_face(setup, ncell, &face_localid, 2, face_v);
     extract_vertices_ncell(setup, ncell, ncell_v);
@@ -209,8 +225,12 @@ void extract_face_center_and_normal(const s_scplx *setup, const s_ncell *ncell, 
     s_point d2 = subtract_points(face_v[2], face_v[0]);
     *n = cross_prod(d1, d2);
 
-    *fc = find_center_mass(face_v, 3);
-    s_point cc = find_center_mass(ncell_v, 4);
+    s_points p_face_v = {3, face_v};
+    *fc = point_average(&p_face_v);
+
+    s_points p_ncell_v = {4, ncell_v};
+    s_point cc = point_average(&p_ncell_v);
+
     s_point v = subtract_points(*fc, cc);
 
     double dir_aux = dot_prod(v, *n);
@@ -329,7 +349,7 @@ int are_locally_delaunay_strict(const s_scplx *setup, const s_ncell *ncell, int 
     face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
-    int in1 = in_sphere(coords1, setup->points[opp_face_vertex_id]);
+    int in1 = in_sphere(coords1, setup->points.p[opp_face_vertex_id]);
     if (in1 == -1) return 1;
     else return 0;
 }
@@ -354,7 +374,7 @@ int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, i
     face_localid_of_adjacent_ncell(setup, ncell, &id_opposite, setup->dim-1, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
-    int in1 = in_sphere(coords1, setup->points[opp_face_vertex_id]);
+    int in1 = in_sphere(coords1, setup->points.p[opp_face_vertex_id]);
     if (in1 != 1) return 1;
     else return 0;
 }
@@ -388,10 +408,10 @@ int point_in_face(s_point vertices_face[3], s_point p)
 int point_in_tetra(const s_scplx *setup, s_point x, const s_ncell *nc)
 {   // TODO Assumes consisten ordering of vertices?
     assert(setup->dim == 3 && "Only supports 3D");
-    s_point v0 = setup->points[nc->vertex_id[0]];
-    s_point v1 = setup->points[nc->vertex_id[1]];
-    s_point v2 = setup->points[nc->vertex_id[2]];
-    s_point v3 = setup->points[nc->vertex_id[3]];
+    s_point v0 = setup->points.p[nc->vertex_id[0]];
+    s_point v1 = setup->points.p[nc->vertex_id[1]];
+    s_point v2 = setup->points.p[nc->vertex_id[2]];
+    s_point v3 = setup->points.p[nc->vertex_id[3]];
 
     // compute signed volumes (orientation)
     s_point facet_vertices[3];
@@ -455,7 +475,7 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
     s_ncell *prev = current;
     STEP:
     for (int ii=0; ii<setup->dim+1; ii++) {
-        s_point opposite_vertex = setup->points[current->vertex_id[ii]];
+        s_point opposite_vertex = setup->points.p[current->vertex_id[ii]];
 
         s_ncell *next = current->opposite[ii];
         if (next) {
@@ -512,16 +532,16 @@ int is_delaunay_3d(const s_scplx *setup)
 void add_ncell_volume_3d(const s_scplx *setup, s_ncell *ncell)
 {   // THIS IS JUST FOR DEBUGGING!!
     ncell->volume = volume_tetrahedron_approx(
-                    setup->points[ncell->vertex_id[0]], 
-                    setup->points[ncell->vertex_id[1]],
-                    setup->points[ncell->vertex_id[2]],
-                    setup->points[ncell->vertex_id[3]]);
+                    setup->points.p[ncell->vertex_id[0]], 
+                    setup->points.p[ncell->vertex_id[1]],
+                    setup->points.p[ncell->vertex_id[2]],
+                    setup->points.p[ncell->vertex_id[3]]);
 }
 
 
 double compute_volume_complex(s_scplx *setup)
 {
-    return compute_volume_convhull_from_points(setup->points, setup->N_points);
+    return volume_convhull_from_points(&setup->points);
 }
 
 

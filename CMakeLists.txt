@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(vor3d LANGUAGES C)
 
-if (NOT TARGET convhull_3d)
-    add_subdirectory(external/convhull_3d)
-endif()
-
 if (NOT TARGET geometry)
     add_subdirectory(external/geometry)
 endif()
@@ -20,7 +16,6 @@ add_library(vor3d STATIC
     src/delaunay.c
     src/simplical_complex.c
     src/vdiagram.c
-    src/convh.c
 )
 
 target_include_directories(vor3d
@@ -30,7 +25,6 @@ target_include_directories(vor3d
 
 target_link_libraries(vor3d 
     PRIVATE
-        convhull_3d
         gnuplotC
     PUBLIC
         geometry  # Users need to know about s_point

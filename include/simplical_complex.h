@@ -5,26 +5,25 @@
 #include "geometry.h"
 
 typedef struct simplical_complex {
-    int dim;
-    int N_points;
-    s_point *points;  // (n_points + dim + 1) x dim
-                      // The first? (dim+1) points correspond to the big n_cell
+    s_points points;  // N = (4 + n_points) 
+                      // The first 4 points correspond to the big n_cell
     int N_ncells;
     struct ncell *head;  // Linked list of ncells
 } s_scplx;
 
 
 typedef struct ncell {
-    int *vertex_id;
-    struct ncell **opposite;
+    int vertex_id[4];
+    struct ncell *opposite[4];
     struct ncell *next;  // Linked list of cells
     struct ncell *prev;
     int mark;  // Used to mark particular ncells
-    int count;  // ID
+    int id;   // ID
     double volume;  // DEBUGGING
 } s_ncell;
 
 
+// ncells are dynamically allocated, complex is static
 s_ncell *malloc_ncell(const s_scplx *setup);
 void free_ncell(s_ncell *ncell);
 void free_complex(s_scplx *setup);
@@ -43,7 +42,7 @@ void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, const int *
 void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point *out);
 void extract_ids_face(const s_scplx *setup, const s_ncell *ncell, const int *v_localid, int dim_face, int *out);
 void extract_vertices_face(const s_scplx *setup, const s_ncell *ncell, const int *v_localid, int dim_face, s_point *out);
-void extract_ace_center_and_normal(const s_scplx *setup, const s_ncell *ncell, int face_localid, s_point *fc, s_point *n);
+void extract_face_center_and_normal(const s_scplx *setup, const s_ncell *ncell, int face_localid, s_point *fc, s_point *n);
 void face_localid_of_adjacent_ncell(const s_scplx *setup, const s_ncell *ncell, const int *v_localid,
                                     int dim_face, int id_adjacent, int *out_v_localid);
 s_ncell *next_ncell_ridge_cycle(const s_scplx *setup, const s_ncell *ncell, int v_localid_main, int v_localid_2, 

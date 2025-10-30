@@ -2,7 +2,7 @@
 #define VOR3D_BPOLY_H
 
 #include "geometry.h"  
-// typedef struct point s_point;
+#include "convh.h"
 
 // Used for Poisson disc sampling inside bpoly:
 #define MAX_TRIAL_POINTS 10000
@@ -10,11 +10,7 @@
 
 
 typedef struct bounding_polyhedron {
-    int Np;
-    s_point *points;
-    int Nf;
-    int *faces;  // Its flat! Nf x 3
-    s_point *fnormals;
+    s_convhull convh;
     double dmax;  // Max distance between two pairs of points
     s_point CM;
     s_point min;
@@ -23,16 +19,16 @@ typedef struct bounding_polyhedron {
 } s_bpoly;
 
 
-s_bpoly *new_bpoly_from_points(const s_point *points, double Np);  // (Different copy of array *points inside)
-s_bpoly *new_bpoly_from_txt(const char *fname);
-s_bpoly *new_bpoly_copy(s_bpoly *in);
-s_bpoly *copy_bpoly_scaled(const s_bpoly *bp, double factor);
-s_bpoly *copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume);
+s_bpoly bpoly_from_points(const s_points *points);  // (Different copy of points inside)
+s_bpoly bpoly_from_csv(const char *fname);
+s_bpoly bpoly_copy(const s_bpoly *in);
+s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor);
+s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume);
 void free_bpoly(s_bpoly *bpoly);
 
-s_point *generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *), int *Np_generated);
-int extend_sites_mirroring(const s_bpoly *bp, s_point **s, int Ns);
-s_point find_closest_point_on_bp(const s_bpoly *bp, s_point p);
+s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *));
+void extend_sites_mirroring(const s_bpoly *bp, s_points *seeds_inout);
+double find_closest_point_on_bp(const s_bpoly *bp, s_point p, s_point *out);
 
 void generate_file_cube_bp(const char *filename, double length);
 void generate_file_tetrahedron_bp(const char *filename, double length);
