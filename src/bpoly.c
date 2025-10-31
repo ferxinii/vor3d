@@ -400,16 +400,16 @@ void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], 
 {   
     char real_name[256];
     snprintf(real_name, 256, "%s_v1.png", f_name);
-    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 60, 1.5");
+    plot_bpoly(bpoly, real_name, ranges, color, "set view 100, 60, 1.5");
 
     snprintf(real_name, 256, "%s_v2.png", f_name);
-    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 90, 1.5");
+    plot_bpoly(bpoly, real_name, ranges, color, "set view 100, 90, 1.5");
 
     snprintf(real_name, 256, "%s_v3.png", f_name);
-    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 180, 1.5");
+    plot_bpoly(bpoly, real_name, ranges, color, "set view 100, 180, 1.5");
 
     snprintf(real_name, 256, "%s_v4.png", f_name);
-    plot_bpoly(bpoly, f_name, ranges, color, "set view 100, 270, 1.5");
+    plot_bpoly(bpoly, real_name, ranges, color, "set view 100, 270, 1.5");
 }
 
 

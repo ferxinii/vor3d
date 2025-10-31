@@ -1,2 +1,4 @@
-[ ] Update walk algorithm with improved "in_ncell" test
+[ ] vor3d breaks for low point count? Check / improve this?
+[ ] Check memory usage: Is everything being fred?
+[ ] Error managing
 
