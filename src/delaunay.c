@@ -1,7 +1,7 @@
 
 #include "delaunay.h"
 #include "scplx.h"
-#include "algebra.h"
+#include "array.h"
 #include "geometry.h"
 #include <assert.h>
 #include <stdlib.h>

@@ -1,7 +1,7 @@
 
 #include "scplx.h"
 #include "geometry.h"
-#include "algebra.h"
+#include "array.h"
 #include "gnuplotc.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -382,21 +382,23 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
 
             int o1 = orientation(facet_vertices, opposite_vertex);
             int o2 = orientation(facet_vertices, p);
-
-            if (o1 == 0 && next != prev) {
+            
+            // Tetrahedron is degenerate
+            if (o1 == 0 && next != prev) { 
+                // We come from a different adjacent one, so walk towards
                 prev = current;
                 current = next;
                 goto STEP;
             } else if (o1 == 0) continue;
 
-            if (o2 == 0) {
-                if (in_ncell(setup, current, p)) { return current; }
+            if (o2 == 0) {  // Query is coplanar with face
+                if (in_triangle_3d(facet_vertices, p) != 0) { return current; }
                 else if (next != prev) {
                     prev = current;
                     current = next;
                     goto STEP;
                 } else continue;
-            } else if (o1 != o2) {
+            } else if (o1 != o2) {  // Regular step
                 prev = current;
                 current = next;
                 goto STEP;

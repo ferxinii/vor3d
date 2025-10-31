@@ -3,7 +3,7 @@
 #include "convh.h"
 #include "scplx.h"
 #include "bpoly.h"
-#include "algebra.h"
+#include "array.h"
 #include "geometry.h"
 #include "vdiagram.h"
 #include "convh.h"

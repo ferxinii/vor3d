@@ -1,3 +1,2 @@
 [ ] Update walk algorithm with improved "in_ncell" test
-[ ] Remove all malloc_matrix?
 
