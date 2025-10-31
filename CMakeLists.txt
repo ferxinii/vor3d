@@ -10,7 +10,7 @@ if (NOT TARGET gnuplotC)
 endif()
 
 add_library(vor3d STATIC
-    src/algebra.c
+    src/array.c
     src/vor3d.c
     src/bpoly.c
     src/delaunay.c
