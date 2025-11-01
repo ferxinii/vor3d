@@ -32,5 +32,5 @@ target_link_libraries(vor3d
 
 target_compile_options(vor3d
     PRIVATE
-        -Wall -Werror -Wextra -O3
+        -Wall -Werror -Wextra
 )
