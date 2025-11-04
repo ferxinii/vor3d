@@ -260,8 +260,8 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, 
             else break;
         }
         if (out.vcells[ii].convh.Nf == 0 || out.vcells[ii].volume <= 0) {
-            // printf("%p, %f\n", (void*)vdiagram->vcells[ii], vdiagram->vcells[ii]->volume);
-            // print_vcell(vdiagram->vcells[ii]);
+            printf("%p, %f\n", (void*)&out.vcells[ii], out.vcells[ii].volume);
+            print_vcell(&out.vcells[ii]);
             puts("ERROR: Could not construct vdiagram. Exiting voronoi_from_delaunay_3d");
             free_vdiagram(&out);
             return out;
