@@ -1,10 +1,9 @@
 
 #include "bpoly.h"
-#include "geometry.h"
+#include "points.h"
 #include "convh.h"
-#include "float.h"
-#include "math.h"
 #include "gnuplotc.h"
+#include <math.h>
 #include <assert.h>
 #include <string.h>
 #include <time.h>
@@ -29,11 +28,9 @@ static void extract_dmax_bp(s_bpoly *bpoly)
 
 static void extract_min_max_coord(s_bpoly *bpoly)
 {
-    s_point min, max;
-    min.x = DBL_MAX;   min.y = DBL_MAX;   min.z = DBL_MAX;
-    max.x = -DBL_MAX;  max.y = -DBL_MAX;  max.z = -DBL_MAX;
+    s_point min = bpoly->convh.points.p[0], max = bpoly->convh.points.p[0];
 
-    for (int ii=0; ii<bpoly->convh.points.N; ii++) {
+    for (int ii=1; ii<bpoly->convh.points.N; ii++) {
         if (bpoly->convh.points.p[ii].x < min.x) 
             min.x = bpoly->convh.points.p[ii].x;
         if (bpoly->convh.points.p[ii].y < min.y) 
@@ -54,11 +51,10 @@ static void extract_min_max_coord(s_bpoly *bpoly)
 }
 
 
-s_bpoly bpoly_from_points(const s_points *points)
+s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double TOL)
 {   // New copy of points inside!
     s_bpoly bpoly;
-    bpoly.convh = convhull_from_points(points);
-    if (bpoly.convh.Nf == 0) goto error;
+    if (convhull_from_points(points, EPS_degenerate, TOL, &bpoly.convh) != 1) goto error;
     extract_dmax_bp(&bpoly);
     bpoly.CM = point_average(&bpoly.convh.points);
     extract_min_max_coord(&bpoly);
@@ -75,7 +71,7 @@ s_bpoly bpoly_from_points(const s_points *points)
 }
 
 
-s_bpoly bpoly_from_csv(const char *fname)
+s_bpoly bpoly_from_csv(const char *fname, double EPS_degenerate, double TOL)
 {
     FILE *f = fopen(fname, "r");
     if (!f) {
@@ -84,8 +80,7 @@ s_bpoly bpoly_from_csv(const char *fname)
     }
     
     s_points points = read_points_from_csv(fname);
-    printf("TESTING: points.N = %d\n", points.N);
-    s_bpoly bpoly = bpoly_from_points(&points);
+    s_bpoly bpoly = bpoly_from_points(&points, EPS_degenerate, TOL);
 
     free_points(&points);
     return bpoly;
@@ -124,31 +119,31 @@ static void scale_points(s_points *points, double s)
 }
 
 
-s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor)
+s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, double EPS_degenerate, double TOL)
 {
     s_points new_p = copy_points(&bp->convh.points);
     scale_points(&new_p, factor);
-    s_bpoly out = bpoly_from_points(&new_p);
+    s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
     free_points(&new_p);
     return out;
 }
 
 
-s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume)
+s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume, double EPS_degenerate, double TOL)
 {
-    assert(fabs(bp->volume) > 1e-8);
     double F = objective_volume / (bp)->volume;
     double s = cbrt(F);
-    return copy_bpoly_scaled(bp, s);
+    return copy_bpoly_scaled(bp, s, EPS_degenerate, TOL);
 }
 
 
-static int should_mirror(s_point normal, double d_plane, s_point face[3], const s_points *all_seeds, int seed_id)
+static int should_mirror(s_point normal, double d_plane, s_point face[3], const s_points *all_seeds, int seed_id, double EPS_degenerate)
 {
     s_point s = all_seeds->p[seed_id];
     double dist = d_plane - dot_prod(normal, s);
     s_point proj_fplane = {{{s.x + dist*normal.x, s.y + dist*normal.y, s.z + dist*normal.z}}};
-    s_point c = closest_point_on_triangle(face, proj_fplane);
+    s_point c = closest_point_on_triangle(face, EPS_degenerate, proj_fplane);
+    if (!point_is_valid(c)) return 0;
     
     // Check nearest‐neighbor at c
     double d_s = distance_squared(c, s);
@@ -160,17 +155,18 @@ static int should_mirror(s_point normal, double d_plane, s_point face[3], const 
 }
 
 
-static int sites_mirroring_CORE(const s_bpoly *bp, const s_points *sites, s_points *out)
+static int sites_mirroring_CORE(const s_bpoly *bp, const s_points *sites, double EPS_degenerate, s_points *out)
 {
     // out should be malloced beforehand with space for Ns+N_mirror. Two-passes!
     int N_mirror = 0;
     for (int ff=0; ff<bp->convh.Nf; ff++) {
         s_point face[3];
         convh_get_face(&bp->convh, ff, face);
-        s_point normal = normalize_3d(bp->convh.fnormals[ff]);
+        s_point normal = normalize_vec(bp->convh.fnormals[ff], EPS_degenerate);
+        if (!point_is_valid(normal)) continue;
         double plane_d = dot_prod(normal, face[0]);
         for (int jj=0; jj<sites->N; jj++) {
-            if (!should_mirror(normal, plane_d, face, sites, jj)) continue;
+            if (!should_mirror(normal, plane_d, face, sites, jj, EPS_degenerate)) continue;
 
             if (out) {
                 s_point sj = sites->p[jj];
@@ -187,11 +183,11 @@ static int sites_mirroring_CORE(const s_bpoly *bp, const s_points *sites, s_poin
 }
 
 
-void extend_sites_mirroring(const s_bpoly *bp, s_points *inout)
+void extend_sites_mirroring(const s_bpoly *bp, double EPS_degenerate, s_points *inout)
 {
-    int N_mirror = sites_mirroring_CORE(bp, inout, NULL);
+    int N_mirror = sites_mirroring_CORE(bp, inout, EPS_degenerate, NULL);
     inout->p = realloc(inout->p, sizeof(s_point) * (inout->N + N_mirror));
-    sites_mirroring_CORE(bp, inout, inout);
+    sites_mirroring_CORE(bp, inout, EPS_degenerate, inout);
     inout->N += N_mirror;  // Need to update AFTER second pass!
     // printf("DEBUG: Reflected %d sites, total sites now: %d\n", N_mirror, Ns+N_mirror);
 }
@@ -221,10 +217,9 @@ static s_point random_point_around(s_point x, double r)
 }
 
 
-static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points *samples, double (*rmax)(double *))
+static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points *samples, double (*rmax)(double *), double EPS_degenerate)
 {
-    if (is_inside_convhull(&bpoly->convh, query) != 1) 
-        return 0;
+    if (test_point_in_convhull(&bpoly->convh, query, EPS_degenerate, 0) != TEST_IN) return 0;
 
     double rq = rmax(query.coords);
     for (int ii = 0; ii<samples->N; ii++) {
@@ -237,13 +232,13 @@ static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points 
 }
 
 
-s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *))
+s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *), double EPS_degenerate)
 {
     s_point _samples[MAX_TRIAL_POINTS], _active[MAX_TRIAL_POINTS];
     s_points samples = {.N = 0, .p = _samples};
     s_points active= {.N = 0, .p = _active};
 
-    s_point x = random_point_inside_convhull(&bpoly->convh, bpoly->min, bpoly->max); 
+    s_point x = random_point_inside_convhull(&bpoly->convh, EPS_degenerate, bpoly->min, bpoly->max); 
     samples.p[samples.N++] = x;
     active.p[active.N++] = x;
 
@@ -255,7 +250,7 @@ s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
         double rp = rmax(p.coords);
         for (int ii=0; ii<MAX_TRIAL_TESTS; ii++) {
             s_point q = random_point_around(p, rp);
-            if (poisson_is_valid(bpoly, q, &samples, rmax)) {
+            if (poisson_is_valid(bpoly, q, &samples, rmax, EPS_degenerate)) {
                 samples.p[samples.N++] = q;
                 active.p[active.N++] = q;
                 found = 1;
@@ -275,7 +270,7 @@ s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
     }
 
     while (samples.N < 4) {
-        x = random_point_inside_convhull(&bpoly->convh, bpoly->min, bpoly->max);
+        x = random_point_inside_convhull(&bpoly->convh, EPS_degenerate, bpoly->min, bpoly->max);
         samples.p[samples.N++] = x;
     }
 
@@ -284,25 +279,10 @@ s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
 }
 
 
-double find_closest_point_on_bp(const s_bpoly *bp, s_point p, s_point *out)
+double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_degenerate, s_point *out)
 {
-    assert(bp->convh.Nf != 0 && bp->convh.points.N != 0);
-    s_point out_point = {{{0, 0, 0}}};
-    double best_d2 = DBL_MAX;
-
-    for (int f=0; f<bp->convh.Nf; f++) {
-        s_point triangle[3];
-        convh_get_face(&bp->convh, f, triangle);
-        s_point tmp = closest_point_on_triangle(triangle, p);
-        double d2 = distance_squared(p, tmp);
-        if ( d2 < best_d2) {
-            out_point = tmp;
-            best_d2 = d2; 
-        }
-    }
-
-    *out = out_point;
-    return sqrt(best_d2);
+    *out = closest_point_on_convhull_boundary(&bp->convh, p, EPS_degenerate);
+    return distance(p, *out);
 }
 
 

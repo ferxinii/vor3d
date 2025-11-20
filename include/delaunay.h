@@ -3,6 +3,6 @@
 
 #include "scplx.h"
 
-s_scplx construct_dt_3d(const s_points *points);  // Copy of points inside s_scplx
+s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates);  // Copy of points inside s_scplx
 
 #endif

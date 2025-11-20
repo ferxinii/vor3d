@@ -1,6 +1,7 @@
 
 #include "scplx.h"
-#include "geometry.h"
+#include "points.h"
+#include "gtests.h"
 #include "array.h"
 #include "gnuplotc.h"
 #include <stdlib.h>
@@ -71,59 +72,57 @@ void print_scomplex(const s_scplx *setup)
 }
 
 
-void write_ncell3d_file(const s_scplx *setup, const s_ncell *ncell, FILE *file)
-{
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
-                                setup->points.p[ncell->vertex_id[0]].y,
-                                setup->points.p[ncell->vertex_id[0]].z);
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
-                                setup->points.p[ncell->vertex_id[1]].y,
-                                setup->points.p[ncell->vertex_id[1]].z);
-    fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[2]].x,
-                                  setup->points.p[ncell->vertex_id[2]].y,
-                                  setup->points.p[ncell->vertex_id[2]].z);
-
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
-                                setup->points.p[ncell->vertex_id[0]].y,
-                                setup->points.p[ncell->vertex_id[0]].z);
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
-                                setup->points.p[ncell->vertex_id[1]].y,
-                                setup->points.p[ncell->vertex_id[1]].z);
-    fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[3]].x,
-                                  setup->points.p[ncell->vertex_id[3]].y,
-                                  setup->points.p[ncell->vertex_id[3]].z);
-
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[3]].x,
-                                setup->points.p[ncell->vertex_id[3]].y,
-                                setup->points.p[ncell->vertex_id[3]].z);
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
-                                setup->points.p[ncell->vertex_id[1]].y,
-                                setup->points.p[ncell->vertex_id[1]].z);
-    fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[2]].x,
-                                  setup->points.p[ncell->vertex_id[2]].y,
-                                  setup->points.p[ncell->vertex_id[2]].z);
-
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
-                                setup->points.p[ncell->vertex_id[0]].y,
-                                setup->points.p[ncell->vertex_id[0]].z);
-    fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[3]].x,
-                                setup->points.p[ncell->vertex_id[3]].y,
-                                setup->points.p[ncell->vertex_id[3]].z);
-    fprintf(file, "%f %f %f\n\n\n", setup->points.p[ncell->vertex_id[2]].x,
-                                    setup->points.p[ncell->vertex_id[2]].y,
-                                    setup->points.p[ncell->vertex_id[2]].z);
-}
-
-
-void write_scomplex_file(const s_scplx *setup, FILE *file)
-{
-    s_ncell *current = setup->head;
-    while (current) {
-        write_ncell3d_file(setup, current, file);
-        fprintf(file, "\n\n");
-        current = current->next;
-    }
-}
+// void write_ncell3d_file(const s_scplx *setup, const s_ncell *ncell, FILE *file)
+// {
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
+//                                 setup->points.p[ncell->vertex_id[0]].y,
+//                                 setup->points.p[ncell->vertex_id[0]].z);
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
+//                                 setup->points.p[ncell->vertex_id[1]].y,
+//                                 setup->points.p[ncell->vertex_id[1]].z);
+//     fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[2]].x,
+//                                   setup->points.p[ncell->vertex_id[2]].y,
+//                                   setup->points.p[ncell->vertex_id[2]].z);
+//
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
+//                                 setup->points.p[ncell->vertex_id[0]].y,
+//                                 setup->points.p[ncell->vertex_id[0]].z);
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
+//                                 setup->points.p[ncell->vertex_id[1]].y,
+//                                 setup->points.p[ncell->vertex_id[1]].z);
+//     fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[3]].x,
+//                                   setup->points.p[ncell->vertex_id[3]].y,
+//                                   setup->points.p[ncell->vertex_id[3]].z);
+//
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[3]].x,
+//                                 setup->points.p[ncell->vertex_id[3]].y,
+//                                 setup->points.p[ncell->vertex_id[3]].z);
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[1]].x,
+//                                 setup->points.p[ncell->vertex_id[1]].y,
+//                                 setup->points.p[ncell->vertex_id[1]].z);
+//     fprintf(file, "%f %f %f\n\n", setup->points.p[ncell->vertex_id[2]].x,
+//                                   setup->points.p[ncell->vertex_id[2]].y,
+//                                   setup->points.p[ncell->vertex_id[2]].z);
+//
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[0]].x,
+//                                 setup->points.p[ncell->vertex_id[0]].y,
+//                                 setup->points.p[ncell->vertex_id[0]].z);
+//     fprintf(file, "%f %f %f\n", setup->points.p[ncell->vertex_id[3]].x,
+//                                 setup->points.p[ncell->vertex_id[3]].y,
+//                                 setup->points.p[ncell->vertex_id[3]].z);
+//     fprintf(file, "%f %f %f\n\n\n", setup->points.p[ncell->vertex_id[2]].x,
+//                                     setup->points.p[ncell->vertex_id[2]].y,
+//                                     setup->points.p[ncell->vertex_id[2]].z);
+// }
+// void write_scomplex_file(const s_scplx *setup, FILE *file)
+// {
+//     s_ncell *current = setup->head;
+//     while (current) {
+//         write_ncell3d_file(setup, current, file);
+//         fprintf(file, "\n\n");
+//         current = current->next;
+//     }
+// }
 
 
 void initialize_ncells_counter(const s_scplx *setup)
@@ -294,19 +293,19 @@ int are_locally_delaunay_strict(const s_scplx *setup, const s_ncell *ncell, int 
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
 
-    assert(!( orientation(coords1, coords1[3]) == 0 && 
-              orientation(coords2, coords2[3]) == 0 ) && 
+    assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
+             orientation_robust(coords2, coords2[3]) == 0 ) && 
            "Cannot check delaunayness, both ncells are degenerate.");
 
-    if (orientation(coords1, coords1[3]) == 0 || 
-        orientation(coords2, coords2[3]) == 0) return 0;
+    if (orientation_robust(coords1, coords1[3]) == 0 || 
+        orientation_robust(coords2, coords2[3]) == 0) return 0;
 
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
     face_localid_of_adjacent_ncell(ncell, 2, &id_opposite, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
-    int in1 = in_sphere(coords1, setup->points.p[opp_face_vertex_id]);
+    int in1 = insphere_robust(coords1, setup->points.p[opp_face_vertex_id]);
     if (in1 == -1) return 1;
     else return 0;
 }
@@ -319,25 +318,25 @@ int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, i
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
 
-    assert(!(orientation(coords1, coords1[3]) == 0 && 
-             orientation(coords2, coords2[3]) == 0) &&
+    assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
+             orientation_robust(coords2, coords2[3]) == 0) &&
            "Cannot check delaunayness, both ncells are degenerate.");
 
-    if (orientation(coords1, coords1[3]) == 0 || 
-        orientation(coords2, coords2[3]) == 0) return 0;
+    if (orientation_robust(coords1, coords1[3]) == 0 || 
+        orientation_robust(coords2, coords2[3]) == 0) return 0;
 
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
     face_localid_of_adjacent_ncell(ncell, 2, &id_opposite, id_opposite, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
     
-    int in1 = in_sphere(coords1, setup->points.p[opp_face_vertex_id]);
+    int in1 = insphere_robust(coords1, setup->points.p[opp_face_vertex_id]);
     if (in1 != 1) return 1;
     else return 0;
 }
 
 
-int in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query)
+int test_point_in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query)
 {   // TODO Assumes consisten ordering of vertices?
     s_point v0 = setup->points.p[ncell->vertex_id[0]];
     s_point v1 = setup->points.p[ncell->vertex_id[1]];
@@ -345,7 +344,7 @@ int in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query)
     s_point v3 = setup->points.p[ncell->vertex_id[3]];
     
     s_point tetra[4] = {v0, v1, v2, v3};
-    return in_tetrahedron(tetra, query);
+    return test_point_in_tetrahedron(tetra, query, 0, 0);
  }
 
 
@@ -353,7 +352,8 @@ s_ncell *bruteforce_find_ncell_containing(const s_scplx *setup, s_point p)
 {
     s_ncell *current = setup->head;
     while (current) {
-        if (in_ncell(setup, current, p)) return current;
+        e_geom_test test = test_point_in_ncell(setup, current, p);
+        if (test == TEST_IN || test == TEST_BOUNDARY) return current;
         current = current->next;
     }
     fprintf(stderr, "did not find container ncell.\n");
@@ -380,8 +380,8 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
         if (next) {
             extract_vertices_face(setup, current, 2, &ii, facet_vertices);
 
-            int o1 = orientation(facet_vertices, opposite_vertex);
-            int o2 = orientation(facet_vertices, p);
+            int o1 = orientation_robust(facet_vertices, opposite_vertex);
+            int o2 = orientation_robust(facet_vertices, p);
             
             // Tetrahedron is degenerate
             if (o1 == 0 && next != prev) { 
@@ -392,7 +392,8 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
             } else if (o1 == 0) continue;
 
             if (o2 == 0) {  // Query is coplanar with face
-                if (in_triangle_3d(facet_vertices, p) != 0) { return current; }
+                e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
+                if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
                 else if (next != prev) {
                     prev = current;
                     current = next;
@@ -406,7 +407,7 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
         }
     }
     
-    return current;
+    return current; 
 }
 
 
@@ -416,7 +417,7 @@ int is_delaunay_3d(const s_scplx *setup)
     s_ncell *current = setup->head;
     while (current) {
         extract_vertices_ncell(setup, current, vertices_ncell);
-        if (orientation(vertices_ncell, vertices_ncell[3]) == 0) {
+        if (orientation_robust(vertices_ncell, vertices_ncell[3]) == 0) {
             puts("Flat tetra!!");
             return 0;
         }
@@ -513,4 +514,5 @@ void plot_dt_differentviews(s_scplx *setup, char *f_name, s_point ranges[2])
     plot_all_ncells_3d(setup, final_name, ranges, "set view 100, 270, 1.5");
 
 }
+
 

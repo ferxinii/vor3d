@@ -3,7 +3,7 @@
 #include "delaunay.h"
 #include "vdiagram.h"
 #include "bpoly.h"
-#include "geometry.h"
+#include "points.h"
 #include <stdlib.h>
 #include <assert.h>
 #include <math.h>
@@ -16,8 +16,8 @@ int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd)
     for (int ii=0; ii<vd->seeds.N; ii++) {
         if (vd->vcells[ii].volume <= 0) {
             printf("Volume is not positive? ii = %d, Vol = %.16f\n", ii, vd->vcells[ii].volume);
-            printf("orient(vertices): %d\n", orientation(&vd->vcells[ii].convh.points.p[0], 
-                                                         vd->vcells[ii].convh.points.p[3]));
+            printf("orient(vertices): %d\n", orientation_robust(&vd->vcells[ii].convh.points.p[0], 
+                                                                vd->vcells[ii].convh.points.p[3]));
             return 0;
         }
         sum_vol += vd->vcells[ii].volume;
@@ -35,18 +35,24 @@ int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd)
 typedef union {
     s_points seeds;
     double (*f_radius_poiss)(double *);
+} u_userdata;
+
+typedef struct {
+    u_userdata generator;
+    double EPS_degenerate;
+    double TOL;
 } seed_userdata;
 
 typedef s_points (*f_seed_generator)(const s_bpoly *bp, seed_userdata ud);
 
 static s_points fixed_generator(const s_bpoly *bp, seed_userdata ud) 
 {
-    s_point *seed_copy = malloc(ud.seeds.N * sizeof(s_point));
+    s_point *seed_copy = malloc(ud.generator.seeds.N * sizeof(s_point));
 
     int count = 0;
-    for (int ii = 0; ii < ud.seeds.N; ii++) {
-        if (is_inside_convhull(&bp->convh, ud.seeds.p[ii]) == 1) {
-            seed_copy[count++] = ud.seeds.p[ii];
+    for (int ii = 0; ii < ud.generator.seeds.N; ii++) {
+        if (test_point_in_convhull(&bp->convh, ud.generator.seeds.p[ii], ud.EPS_degenerate, ud.TOL) == TEST_IN) {
+            seed_copy[count++] = ud.generator.seeds.p[ii];
         } else {
             // printf("Point %d not strictly inside\n", ii);
         }
@@ -56,7 +62,7 @@ static s_points fixed_generator(const s_bpoly *bp, seed_userdata ud)
 }
 
 static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud) {
-    return generate_poisson_dist_inside(bp, ud.f_radius_poiss);
+    return generate_poisson_dist_inside(bp, ud.generator.f_radius_poiss, ud.EPS_degenerate);
 }
 
 static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator f_seeds, seed_userdata ud)
@@ -67,10 +73,10 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator 
         s_points seeds = f_seeds(bp, ud);
         int Nreal = seeds.N;
 
-        extend_sites_mirroring(bp, &seeds);
+        extend_sites_mirroring(bp, ud.EPS_degenerate, &seeds);
 
-        s_scplx dt = construct_dt_3d(&seeds);
-        vd = voronoi_from_delaunay_3d(&dt, bp, Nreal);
+        s_scplx dt = construct_dt_3d(&seeds, ud.TOL);
+        vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_degenerate, ud.TOL);
         free_complex(&dt);
 
         if (vd.seeds.N == 0) continue;  // Retry
@@ -84,38 +90,38 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator 
 
 
 
-s_vdiagram vor3d_from_bp(const s_points *seeds, const s_bpoly *bp, int max_tries)
+s_vdiagram vor3d_from_bp(const s_points *seeds, const s_bpoly *bp, int max_tries, double EPS_degenerate, double TOL)
 {
-    seed_userdata ud = {.seeds = copy_points(seeds)};
+    seed_userdata ud = {.generator.seeds = copy_points(seeds), .EPS_degenerate = EPS_degenerate, .TOL = TOL};
     return vor3d_core(bp, max_tries, &fixed_generator, ud);
 }
 
 
-s_vdiagram vor3d_from_bp_PDS(double (*f_radius_poiss)(double *), const s_bpoly *bp, int max_tries)
+s_vdiagram vor3d_from_bp_PDS(double (*f_radius_poiss)(double *), const s_bpoly *bp, int max_tries,  double EPS_degenerate, double TOL)
 {   
-    seed_userdata ud = {.f_radius_poiss = f_radius_poiss};
+    seed_userdata ud = {.generator.f_radius_poiss = f_radius_poiss, .EPS_degenerate = EPS_degenerate, .TOL = TOL};
     return vor3d_core(bp, max_tries, &PDS_generator, ud);
 }
 
 
-s_vdiagram vor3d_from_txt(const s_points *seeds, char *file_bounding_polyhedron, int max_tries)
+s_vdiagram vor3d_from_txt(const s_points *seeds, char *file_bounding_polyhedron, int max_tries, double EPS_degenerate, double TOL)
 {   
-    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron);
+    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_degenerate, TOL);
     if (bp.convh.Nf == 0) { puts("Error: bp->Nf == 0..."); exit(1); }
     
-    s_vdiagram out = vor3d_from_bp(seeds, &bp, max_tries);
+    s_vdiagram out = vor3d_from_bp(seeds, &bp, max_tries, EPS_degenerate, TOL);
 
     free_bpoly(&bp);
     return out;
 }
 
 
-s_vdiagram vor3d_from_txt_PDS(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries)
+s_vdiagram vor3d_from_txt_PDS(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries, double EPS_degenerate, double TOL)
 {   
-    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron);
+    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_degenerate, TOL);
     if (bp.convh.Nf == 0) { puts("Error: bp->Nf == 0..."); exit(1); }
     
-    s_vdiagram out = vor3d_from_bp_PDS(f_radius_poiss, &bp, max_tries);
+    s_vdiagram out = vor3d_from_bp_PDS(f_radius_poiss, &bp, max_tries, EPS_degenerate, TOL);
 
     free_bpoly(&bp);
 

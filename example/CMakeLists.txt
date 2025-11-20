@@ -8,7 +8,7 @@ add_executable(example example.c)
 
 target_link_libraries(example PUBLIC vor3d)
 
-target_compile_options(geometry
+target_compile_options(example
     PRIVATE
         -Wall -Werror -Wextra -O3
 )

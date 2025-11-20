@@ -2,7 +2,7 @@
 #define VOR3D_SIMPLICAL_COMPLEX_H
 
 #include <stdio.h>
-#include "geometry.h"
+#include "points.h"
 
 typedef struct simplical_complex {  // May live in stack
     s_points points;  // N = (4 + n_points) 
@@ -29,8 +29,6 @@ void free_complex(s_scplx *setup);
 
 void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *setup);
-void write_ncell3d_file(const s_scplx *setup, const s_ncell *ncell, FILE *file);
-void write_scomplex_file(const s_scplx *setup, FILE *file);
 
 void initialize_ncells_counter(const s_scplx *setup);
 void initialize_ncells_mark(const s_scplx *setup);
@@ -46,7 +44,7 @@ s_ncell *next_ncell_ridge_cycle(const s_ncell *ncell, int v_localid_main, int v_
 
 int are_locally_delaunay_strict(const s_scplx *setup, const s_ncell *ncell, int id_opposite);
 int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, int id_opposite);
-int point_in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query);
+int test_point_in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query);
 s_ncell *bruteforce_find_ncell_containing(const s_scplx *setup, s_point p);
 s_ncell *in_ncell_walk(const s_scplx *setup, s_point p);
 int is_delaunay_3d(const s_scplx *setup);

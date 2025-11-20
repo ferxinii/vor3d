@@ -2,7 +2,8 @@
 #include "delaunay.h"
 #include "scplx.h"
 #include "array.h"
-#include "geometry.h"
+#include "points.h"
+#include "gtests.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +27,6 @@ static void stack_push(s_dstack *stack, s_ncell *ncell);
 static s_ncell *stack_pop(s_dstack *stack);
 static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell);
 
-
 static s_dstack *stack_create(void)
 {
     s_dstack *stack = malloc(sizeof(s_dstack));
@@ -34,12 +34,10 @@ static s_dstack *stack_create(void)
     return stack;
 }
 
-
 static void stack_free(s_dstack *stack)
 {
     free(stack->entry);
 }
-
 
 static void stack_push(s_dstack *stack, s_ncell *ncell)
 {
@@ -51,7 +49,6 @@ static void stack_push(s_dstack *stack, s_ncell *ncell)
     stack->size++;
 }
 
-
 static s_ncell *stack_pop(s_dstack *stack)
 {   
     if (stack->size == 0) return NULL;
@@ -59,7 +56,6 @@ static s_ncell *stack_pop(s_dstack *stack)
     s_ncell *ncell = stack->entry[stack->size];
     return ncell;
 }
-
 
 static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
     int newSize = 0;
@@ -72,7 +68,6 @@ static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
     }
     stack->size = newSize;
 }
-
 
 
 // ---------------------------------------------------------------------------------------
@@ -424,17 +419,17 @@ static int can_perform_flip44(const s_scplx *setup, const s_ncell *ncell, s_poin
 
     aux[1] = vertices_face[0];
     aux[2] = vertices_face[1];
-    if (orientation(aux, setup->points.p[opp->vertex_id[opp_face_localid]]) == 0) {
+    if (orientation_robust(aux, setup->points.p[opp->vertex_id[opp_face_localid]]) == 0) {
         *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[2]);
     }
     aux[1] = vertices_face[1];
     aux[2] = vertices_face[2];
-    if (orientation(aux, setup->points.p[opp->vertex_id[opp_face_localid]]) == 0) {
+    if (orientation_robust(aux, setup->points.p[opp->vertex_id[opp_face_localid]]) == 0) {
         *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[0]);
     }
     aux[1] = vertices_face[0];
     aux[2] = vertices_face[2];
-    if (orientation(aux, setup->points.p[opp->vertex_id[opp_face_localid]]) == 0) {
+    if (orientation_robust(aux, setup->points.p[opp->vertex_id[opp_face_localid]]) == 0) {
         *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vertex_id[1]);
     }
     
@@ -455,7 +450,6 @@ static int can_perform_flip44(const s_scplx *setup, const s_ncell *ncell, s_poin
 
 static void flip44(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell **OUT_PTRS) 
 {
-
     // FIRST, A FLIP23
     int opp_face_localid;
     face_localid_of_adjacent_ncell(ncell, 2, &id_ridge_1, id_ridge_1, &opp_face_localid);
@@ -541,110 +535,16 @@ static void flip44(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_n
 // ----------------------------------- CASES ---------------------------------------------
 // ---------------------------------------------------------------------------------------
 
-static int pd_intersects_edge(s_point s1, s_point s2, s_point p, s_point d, int drop_coord);
-static int is_case_3(const s_point vertices_face[3], s_point p, s_point d);
-static int is_case_1(const s_point vertices_face[3], s_point p, s_point d);
-static int is_case_2(const s_point vertices_face[3], s_point p, s_point d);
-static int is_case_4(const s_point vertices_face[3], s_point p, s_point d);
-static int determine_case(const s_point vertices_face[3], s_point p, s_point d);
-
-
-static int pd_intersects_edge(s_point s1, s_point s2, s_point p, s_point d, int drop_coord)
-{
-    int i1, i2;
-    if (drop_coord == 0)      { i1 = 1; i2 = 2; } 
-    else if (drop_coord == 1) { i1 = 2; i2 = 0; } 
-    else                      { i1 = 0; i2 = 1; }
-
-    s_point A, B, paux, daux;
-    A.x = s1.coords[i1];    A.y = s1.coords[i2];
-    B.x = s2.coords[i1];    B.y = s2.coords[i2];
-    paux.x = p.coords[i1];  paux.x = p.coords[i2];
-    daux.y = d.coords[i1];  daux.y = d.coords[i2];
-    
-    s_point AB[2] = {A, B},     pd[2] = {paux, daux};
-    return segments_intersect_2d(AB, pd);
-}
-
-
-static int is_case_3(const s_point vertices_face[3], s_point p, s_point d)
-{
-    s_point d1 = subtract_points(vertices_face[1], vertices_face[0]);
-    s_point d2 = subtract_points(vertices_face[2], vertices_face[0]);
-    s_point n = cross_prod(d1, d2);
-    int drop_coord = coord_with_largest_component_3d(n);
-
-    s_point aux[3];
-    aux[0] = p; 
-
-    aux[1] = vertices_face[0];
-    aux[2] = vertices_face[1];
-    if (orientation(aux, d) == 0 &&
-        pd_intersects_edge(vertices_face[0], vertices_face[1], p, d, drop_coord)) return 1;
-
-    aux[1] = vertices_face[1];
-    aux[2] = vertices_face[2];
-    if (orientation(aux, d) == 0 &&
-        pd_intersects_edge(vertices_face[1], vertices_face[2], p, d, drop_coord)) return 1;
-
-    aux[1] = vertices_face[0];
-    aux[2] = vertices_face[2];
-    if (orientation(aux, d) == 0 &&
-        pd_intersects_edge(vertices_face[0], vertices_face[2], p, d, drop_coord)) return 1;
-    
-    return 0;
-}
-
-
-static int is_case_1(const s_point vertices_face[3], s_point p, s_point d) 
-{
-    if (segment_crosses_triangle_3d(vertices_face, p, d) == 1) return 1;
-    return 0;
-}
-
-
-static int is_case_2(const s_point vertices_face[3], s_point p, s_point d)
-{
-    if (segment_crosses_triangle_3d(vertices_face, p, d) == 0) return 1;
-    return 0;
-}
-
-
-static int is_case_4(const s_point vertices_face[3], s_point p, s_point d)
-{
-    if (orientation(vertices_face, p) == 0) {  // abcp live in the same plane
-        // puts("DEBUG ISCASE4: ABCP IN SAME PLANE!");
-        s_point aux[3];
-        aux[0] = p; 
-
-        aux[1] = vertices_face[0];
-        aux[2] = vertices_face[1];
-        if (orientation(aux, d) == 0) return 1;
-
-        aux[1] = vertices_face[1];
-        aux[2] = vertices_face[2];
-        if (orientation(aux, d) == 0) return 1;
-
-        aux[1] = vertices_face[0];
-        aux[2] = vertices_face[2];
-        if (orientation(aux, d) == 0) return 1;
-    }
-    // puts("DEBUG ISCASE4: BUT NOT IN FACE...");
-    return 0;
-}
-
-
 static int determine_case(const s_point vertices_face[3], s_point p, s_point d) 
 {
-    if (is_case_4(vertices_face, p, d)) return 4;
-    else if (is_case_3(vertices_face, p, d)) return 3;
-    else if (is_case_2(vertices_face, p, d)) return 2;
-    else if (is_case_1(vertices_face, p, d)) return 1;
-    puts("Should never reach this!");
+    if (test_point_in_triangle_3D(vertices_face, p, 0, 0) == TEST_BOUNDARY) return 4;
+    e_intersect_type type = test_segment_triangle_intersect_3D((s_point[2]){p, d}, vertices_face, 0, 0);
+    if (type == INTERSECT_DEGENERATE) return 3;
+    if (type == INTERSECT_EMPTY) return 2;
+    if (type == INTERSECT_NONDEGENERATE) return 1;
+    fprintf(stderr, "determine_case: Should never reach this!");
     exit(1);
 }
-
-
 
 // ---------------------------------------------------------------------------------------
 // --------------------------------- ALGORITHM -------------------------------------------
@@ -653,7 +553,7 @@ static int determine_case(const s_point vertices_face[3], s_point p, s_point d)
 static s_scplx initialize_setup(const s_points *points);
 static int flip_tetrahedra(s_scplx *setup, s_dstack *stack, s_dstack *stack_blocked, s_ncell *ncell, int opp_cell_id);
 static void remove_point_setup(s_scplx *setup, int point_id);
-static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, s_dstack *stack_blocked);
+static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, s_dstack *stack_blocked, double TOL_dup);
 static void remove_big_tetra(s_scplx *setup);
 
 
@@ -682,10 +582,9 @@ static s_scplx initialize_setup(const s_points *points)
         double v2 = ((ii == 2) ? 1.0 : 0.0) - shift;
         // note: v3 = ((ii==3)?1.0:0.0) - shift exists but we drop it
 
-        double jitter = 0.001 * s;
-        setup_points.p[ii].x = CM.x + v0 * s + jitter;
-        setup_points.p[ii].y = CM.y + v1 * s + jitter;
-        setup_points.p[ii].z = CM.z + v2 * s + jitter;
+        setup_points.p[ii].x = CM.x + v0*s;
+        setup_points.p[ii].y = CM.y + v1*s;
+        setup_points.p[ii].z = CM.z + v2*s;
     }
 
     
@@ -758,17 +657,24 @@ static void remove_point_setup(s_scplx *setup, int point_id)
 }
 
 
-static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, s_dstack *stack_blocked)
+static int point_close_to_ncell_vertex(s_scplx *setup, s_ncell *ncell, s_point point, double TOL)
+{
+    const double TOL2 = TOL*TOL;
+    if (distance_squared(setup->points.p[ncell->vertex_id[0]], point) <= TOL2 || 
+        distance_squared(setup->points.p[ncell->vertex_id[1]], point) <= TOL2 ||
+        distance_squared(setup->points.p[ncell->vertex_id[2]], point) <= TOL2 ||
+        distance_squared(setup->points.p[ncell->vertex_id[3]], point) <= TOL2)
+        return 1;
+    else return 0;
+}
+
+
+static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, s_dstack *stack_blocked, double TOL_dup)
 {
     s_point point = setup->points.p[point_id];
     s_ncell *container_ncell = in_ncell_walk(setup, point);
 
-    double EPS2 = 1e-12;
-    if (distance_squared(setup->points.p[container_ncell->vertex_id[0]], point) < EPS2 || 
-        distance_squared(setup->points.p[container_ncell->vertex_id[1]], point) < EPS2 ||
-        distance_squared(setup->points.p[container_ncell->vertex_id[2]], point) < EPS2 ||
-        distance_squared(setup->points.p[container_ncell->vertex_id[3]], point) < EPS2) {
-        // puts("insert_one_point: POINT EXISTS!");
+    if (point_close_to_ncell_vertex(setup, container_ncell, point, TOL_dup)) {
         remove_point_setup(setup, point_id);
         return 0;
     }
@@ -844,7 +750,7 @@ static void remove_big_tetra(s_scplx *setup)
 // -------------------------------------- MAIN -------------------------------------------
 // ---------------------------------------------------------------------------------------
 
-s_scplx construct_dt_3d(const s_points *points)
+s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
 {
     s_dstack *stack = stack_create();
     s_dstack *stack_blocked = stack_create();
@@ -852,16 +758,14 @@ s_scplx construct_dt_3d(const s_points *points)
     
     int ii = 4;  // First 4 are big tetra, which already is inserted!
     while (ii < setup.points.N) {
-        if (insert_one_point(&setup, ii, stack, stack_blocked)) {
+        if (insert_one_point(&setup, ii, stack, stack_blocked, TOL_duplicates)) {
             // SHOULD ALWAYS BE DELAUNAY! (only locally?)
             ii++;
-        } else continue; //printf("Not inserted! ii=%d\n", ii);
-        // if (!is_delaunay_3d(&setup)) printf("Not delaunay!! ii=%d\n", ii);
+        } else continue;
     }
     
     stack_free(stack);  
     remove_big_tetra(&setup);
-
     return setup;
 }
 
