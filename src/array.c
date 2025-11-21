@@ -11,6 +11,7 @@ int id_where_equal_int(const int *arr, int N, int entry)
         if (arr[ii] == entry) return ii;
     }
     fprintf(stderr, "id_where_equal_int: Could not find id.\n"); 
+    assert(1==0);
     exit(1);
 }
 

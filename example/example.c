@@ -77,15 +77,13 @@ int main(void)
 
     puts("\nTETRAHEDON:");
     generate_file_tetrahedron_bp(FILE_BP, 3);
-    // s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, FILE_BP, MAX_TRIES, EPS_degenerate, TOL);
-    // s_vdiagram *vd_tet = vor3d_from_txt(test_s, Ns, FILE_BP, MAX_TRIES);
-    s_points test_s = read_points_from_csv("../test_seeds.txt");
-    s_vdiagram vd_tet = vor3d_from_txt(&test_s, FILE_BP, MAX_TRIES, EPS_degenerate, TOL);
+    s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, FILE_BP, MAX_TRIES, EPS_degenerate, TOL);
+    // s_points test_s = read_points_from_csv("../test_seeds.txt");
+    // s_vdiagram vd_tet = vor3d_from_txt(&test_s, FILE_BP, MAX_TRIES, EPS_degenerate, TOL);
     if (vd_tet.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_tet);
     plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
     free_vdiagram(&vd_tet);
-    exit(1);
 
     puts("\nCUBE:");
     generate_file_cube_bp(FILE_BP, 2);

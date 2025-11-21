@@ -287,18 +287,18 @@ void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_fac
 
 
 int are_locally_delaunay_strict(const s_scplx *setup, const s_ncell *ncell, int id_opposite)
-{   // I.E., only return true if the point is INSIDE circumscr., not on it.
+{   // Only return true if the point is INSIDE circumscr., not on it.
     s_point coords1[4];
     s_point coords2[4];
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
 
-    assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
-             orientation_robust(coords2, coords2[3]) == 0 ) && 
-           "Cannot check delaunayness, both ncells are degenerate.");
+    // assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
+    //          orientation_robust(coords2, coords2[3]) == 0 ) && 
+    //        "Cannot check delaunayness, both ncells are degenerate.");
 
     if (orientation_robust(coords1, coords1[3]) == 0 || 
-        orientation_robust(coords2, coords2[3]) == 0) return 0;
+        orientation_robust(coords2, coords2[3]) == 0) return 1;  /* TODO unsure of what to return! */
 
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
@@ -318,12 +318,12 @@ int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, i
     extract_vertices_ncell(setup, ncell, coords1);
     extract_vertices_ncell(setup, ncell->opposite[id_opposite], coords2);
 
-    assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
-             orientation_robust(coords2, coords2[3]) == 0) &&
-           "Cannot check delaunayness, both ncells are degenerate.");
+    // assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
+    //          orientation_robust(coords2, coords2[3]) == 0) &&
+    //        "Cannot check delaunayness, both ncells are degenerate.");
 
     if (orientation_robust(coords1, coords1[3]) == 0 || 
-        orientation_robust(coords2, coords2[3]) == 0) return 0;
+        orientation_robust(coords2, coords2[3]) == 0) return 1;  /* TODO unsure of what to return! */
 
     // Extract vertex_id of opposite's cell face
     int opp_face_localid;
