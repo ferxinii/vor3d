@@ -36,7 +36,3 @@ The most high-level interface is in *voronoi.h*. One can pass either an array of
 
 ### References
 Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*
-
-Geometric predicates: [danshapero/predicates](https://github.com/danshapero/predicates).
-
-Convhull_3d: [leomccormack/convhull_3d](https://github.com/leomccormack/convhull_3d).
