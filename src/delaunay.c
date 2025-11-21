@@ -367,7 +367,6 @@ static void flip44(s_scplx *setup, s_dstack *stack, s_ncell *ncell, int id_ridge
             nc5 = FLIP23_PTRS[ii];
             if (stack) { stack_push(stack, FLIP23_PTRS[(ii+1)%3]); stack_push(stack, FLIP23_PTRS[(ii+2)%3]); }
             if (OUT_PTRS) { OUT_PTRS[0] = FLIP23_PTRS[(ii+1)%3]; OUT_PTRS[1] = FLIP23_PTRS[(ii+1)%3]; }
-            // printf("FLIP44: ii=%d\n", ii);
             debug_found = 1;
         }
     }
@@ -565,8 +564,6 @@ static void remove_big_tetra(s_scplx *setup)
 }
 
 
-// -------------------------------------- MAIN -------------------------------------------
-
 s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
 {
     s_dstack stack = stack_create();
@@ -581,5 +578,4 @@ s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
     remove_big_tetra(&setup);
     return setup;
 }
-
 
