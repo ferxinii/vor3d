@@ -22,6 +22,7 @@ typedef struct vcell {
 } s_vcell;
 
 
+int vdiagram_is_valid(const s_vdiagram *vd);
 void free_vdiagram(s_vdiagram *vdiagram);
 void print_vcell(const s_vcell *vcell);
 void print_vdiagram(const s_vdiagram *vdiagram);

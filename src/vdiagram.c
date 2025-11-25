@@ -16,6 +16,13 @@
 #include <math.h>
 
 
+int vdiagram_is_valid(const s_vdiagram *vd)
+{
+    if (vd->vcells == NULL) return 0;
+    else return 1;
+}
+
+
 /* Memory of vdiagram and printing. */
 static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
 {
