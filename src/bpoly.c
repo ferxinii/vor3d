@@ -87,6 +87,28 @@ s_bpoly bpoly_from_csv(const char *fname, double EPS_degenerate, double TOL)
 }
 
 
+s_bpoly bpoly_from_convh(const s_convh *convh)
+{
+    s_bpoly bpoly;
+    bpoly.convh = copy_convhull(convh);
+    if (!convhull_is_valid(&bpoly.convh)) goto error;
+    extract_dmax_bp(&bpoly);
+    bpoly.CM = point_average(&bpoly.convh.points);
+    extract_min_max_coord(&bpoly);
+    bpoly.volume = volume_convhull(&bpoly.convh);
+    return bpoly;
+
+    error:
+        bpoly.dmax = 0;
+        bpoly.CM = (s_point){0};
+        bpoly.min = (s_point){0};
+        bpoly.max = (s_point){0};
+        bpoly.volume = 0;
+        return bpoly;
+}
+
+
+
 s_bpoly bpoly_copy(const s_bpoly *in)
 {
     s_bpoly out;

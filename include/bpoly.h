@@ -21,6 +21,7 @@ typedef struct bounding_polyhedron {
 
 s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double TOL);  // (Different copy of points inside)
 s_bpoly bpoly_from_csv(const char *fname, double EPS_degenerate, double TOL);
+s_bpoly bpoly_from_convh(const s_convh *convh);
 s_bpoly bpoly_copy(const s_bpoly *in);
 s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, double EPS_degenerate, double TOL);
 s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume, double EPS_degenerate, double TOL);
