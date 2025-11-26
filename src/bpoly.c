@@ -239,13 +239,13 @@ static s_point random_point_around(s_point x, double r)
 }
 
 
-static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points *samples, double (*rmax)(double *), double EPS_degenerate)
+static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points *samples, double (*rmax)(double*, void*), void *rmax_params, double EPS_degenerate)
 {
     if (test_point_in_convhull(&bpoly->convh, query, EPS_degenerate, 0) != TEST_IN) return 0;
 
-    double rq = rmax(query.coords);
+    double rq = rmax(query.coords, rmax_params);
     for (int ii = 0; ii<samples->N; ii++) {
-        double rx = rmax(samples->p[ii].coords);
+        double rx = rmax(samples->p[ii].coords, rmax_params);
         double minDist = fmin(rq, rx);
         if (distance_squared(query, samples->p[ii]) < (minDist * minDist))
             return 0; // candidate too close to an existing sample
@@ -254,7 +254,7 @@ static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points 
 }
 
 
-s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double *), double EPS_degenerate)
+s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double*, void*), void *rmax_params, double EPS_degenerate)
 {
     s_point _samples[MAX_TRIAL_POINTS], _active[MAX_TRIAL_POINTS];
     s_points samples = {.N = 0, .p = _samples};
@@ -269,10 +269,10 @@ s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
         s_point p = active.p[random_id];
         int found = 0;
 
-        double rp = rmax(p.coords);
+        double rp = rmax(p.coords, rmax_params);
         for (int ii=0; ii<MAX_TRIAL_TESTS; ii++) {
             s_point q = random_point_around(p, rp);
-            if (poisson_is_valid(bpoly, q, &samples, rmax, EPS_degenerate)) {
+            if (poisson_is_valid(bpoly, q, &samples, rmax, rmax_params, EPS_degenerate)) {
                 samples.p[samples.N++] = q;
                 active.p[active.N++] = q;
                 found = 1;

@@ -32,9 +32,14 @@ int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd)
 
 
 // GENERALISED SEED HANDLING
+typedef struct {
+    double (*f_radius_poiss)(double*, void*);
+    void *f_params;
+}   PDS_userdata;
+
 typedef union {
     s_points seeds;
-    double (*f_radius_poiss)(double *);
+    PDS_userdata pds;
 } u_userdata;
 
 typedef struct {
@@ -62,7 +67,7 @@ static s_points fixed_generator(const s_bpoly *bp, seed_userdata ud)
 }
 
 static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud) {
-    return generate_poisson_dist_inside(bp, ud.generator.f_radius_poiss, ud.EPS_degenerate);
+    return generate_poisson_dist_inside(bp, ud.generator.pds.f_radius_poiss, ud.generator.pds.f_params, ud.EPS_degenerate);
 }
 
 static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator f_seeds, seed_userdata ud)
@@ -97,9 +102,10 @@ s_vdiagram vor3d_from_bp(const s_points *seeds, const s_bpoly *bp, int max_tries
 }
 
 
-s_vdiagram vor3d_from_bp_PDS(double (*f_radius_poiss)(double *), const s_bpoly *bp, int max_tries,  double EPS_degenerate, double TOL)
+s_vdiagram vor3d_from_bp_PDS(double (*f_radius_poiss)(double*, void*), void *f_params, const s_bpoly *bp, int max_tries,  double EPS_degenerate, double TOL)
 {   
-    seed_userdata ud = {.generator.f_radius_poiss = f_radius_poiss, .EPS_degenerate = EPS_degenerate, .TOL = TOL};
+    seed_userdata ud = {.generator.pds = { .f_radius_poiss = f_radius_poiss, .f_params = f_params },
+                        .EPS_degenerate = EPS_degenerate, .TOL = TOL};
     return vor3d_core(bp, max_tries, &PDS_generator, ud);
 }
 
@@ -116,12 +122,12 @@ s_vdiagram vor3d_from_txt(const s_points *seeds, char *file_bounding_polyhedron,
 }
 
 
-s_vdiagram vor3d_from_txt_PDS(double (*f_radius_poiss)(double *), char *file_bounding_polyhedron, int max_tries, double EPS_degenerate, double TOL)
+s_vdiagram vor3d_from_txt_PDS(double (*f_radius_poiss)(double*, void*), void *f_params, char *file_bounding_polyhedron, int max_tries, double EPS_degenerate, double TOL)
 {   
     s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_degenerate, TOL);
     if (bp.convh.Nf == 0) { puts("Error: bp->Nf == 0..."); exit(1); }
     
-    s_vdiagram out = vor3d_from_bp_PDS(f_radius_poiss, &bp, max_tries, EPS_degenerate, TOL);
+    s_vdiagram out = vor3d_from_bp_PDS(f_radius_poiss, f_params, &bp, max_tries, EPS_degenerate, TOL);
 
     free_bpoly(&bp);
 
