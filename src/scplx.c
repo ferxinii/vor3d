@@ -361,49 +361,68 @@ s_ncell *bruteforce_find_ncell_containing(const s_scplx *setup, s_point p)
 }
 
 
+static s_point ncell_centroid(const s_scplx *setup, const s_ncell *ncell) {
+    s_point vertices[4];
+    extract_vertices_ncell(setup, ncell, vertices);
+    s_point out = { .x = (vertices[0].x + vertices[1].x + vertices[2].x + vertices[3].x) / 4.0,
+                    .y = (vertices[0].y + vertices[1].y + vertices[2].y + vertices[3].y) / 4.0, 
+                    .z = (vertices[0].z + vertices[1].z + vertices[2].z + vertices[3].z) / 4.0 };
+    return out;
+}
+
+
 s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
 {
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
-    int randi = (rand() % setup->N_ncells);
-    for (int ii=0; ii<randi; ii++) {  // Select random ncell to start
-        current = current->next;
-    }
+    int randi = (rand() % setup->N_ncells);  /* Select random ncell to start */
+    for (int ii=0; ii<randi; ii++) 
+        current = current->next;   
 
     s_point facet_vertices[3];
     s_ncell *prev = current;
+
+    int steps = 0;
     STEP:
+    steps++;
+    assert(steps <= 3 * setup->N_ncells && "Reached step limit in ncell_walk.\n");
     for (int ii=0; ii<4; ii++) {
         s_point opposite_vertex = setup->points.p[current->vertex_id[ii]];
 
         s_ncell *next = current->opposite[ii];
-        if (next) {
-            extract_vertices_face(setup, current, 2, &ii, facet_vertices);
+        if (!next) continue;
 
-            int o1 = orientation_robust(facet_vertices, opposite_vertex);
-            int o2 = orientation_robust(facet_vertices, p);
-            
-            // Tetrahedron is degenerate
-            if (o1 == 0 && next != prev) { 
-                // We come from a different adjacent one, so walk towards
-                prev = current;
-                current = next;
-                goto STEP;
-            } else if (o1 == 0) continue;
+        extract_vertices_face(setup, current, 2, &ii, facet_vertices);
 
-            if (o2 == 0) {  // Query is coplanar with face
-                e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
-                if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
-                else if (next != prev) {
+        int o1 = orientation_robust(facet_vertices, opposite_vertex);
+        int o2 = orientation_robust(facet_vertices, p);
+        
+        // Tetrahedron is degenerate
+        if (o1 == 0 && next != prev) { 
+            // We come from a different adjacent one, so walk towards
+            prev = current;
+            current = next;
+            goto STEP;
+        } else if (o1 == 0) continue;
+
+        if (o2 == 0) {  // Query is coplanar with face
+            e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
+            if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
+            if (next != prev) {
+                // TIE-BREAKING: move to the neighbor whose centroid is closer to p.
+                double d_curr = distance_squared(ncell_centroid(setup, current), p);
+                double d_next = distance_squared(ncell_centroid(setup, next), p);
+                if (d_next < d_curr) {
                     prev = current;
                     current = next;
                     goto STEP;
-                } else continue;
-            } else if (o1 != o2) {  // Regular step
-                prev = current;
-                current = next;
-                goto STEP;
-            }
+                }
+            } 
+            continue;
+        } else if (o1 != o2) {  // Regular step
+            prev = current;
+            current = next;
+            goto STEP;
         }
     }
     

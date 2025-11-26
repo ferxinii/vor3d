@@ -67,6 +67,12 @@ static s_points fixed_generator(const s_bpoly *bp, seed_userdata ud)
 }
 
 static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud) {
+    double *bp_centroid = (double*)bp->CM.coords;
+    if (isnan(ud.generator.pds.f_radius_poiss(bp_centroid, ud.generator.pds.f_params))) {  /* Check if single cell */
+        s_point *p = malloc(sizeof(s_point)); 
+        (*p).x = bp_centroid[0]; (*p).y = bp_centroid[1]; (*p).z = bp_centroid[2];
+        return (s_points){ .N = 1, .p = p };
+    }
     return generate_poisson_dist_inside(bp, ud.generator.pds.f_radius_poiss, ud.generator.pds.f_params, ud.EPS_degenerate);
 }
 
@@ -77,8 +83,10 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator 
         if (ii > 0) puts("Retrying to build voronoi diagram.");
         s_points seeds = f_seeds(bp, ud);
         int Nreal = seeds.N;
+        printf("Nreal: %d\n", Nreal);
 
         extend_sites_mirroring(bp, ud.EPS_degenerate, &seeds);
+        printf("after mirroring: %d\n", seeds.N);
 
         s_scplx dt = construct_dt_3d(&seeds, ud.TOL);
         vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_degenerate, ud.TOL);

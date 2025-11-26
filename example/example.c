@@ -13,6 +13,7 @@ double r_const(double *x, void *params)
 {   
     (void)params;
     (void)x;
+    // return NAN;
     return 1;
 }
 

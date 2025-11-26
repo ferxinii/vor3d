@@ -4,6 +4,7 @@
 #include "vdiagram.h"
 #include "bpoly.h"
 
+/* If f_radius_poiss returns NAN, then a single seed (bp vertex centroid) is created, so the single resulting voronoi cell is the bp */
 
 // Copy of seeds inside s_vdiagram
 s_vdiagram vor3d_from_txt(const s_points *seeds, char *file_bounding_polyhedron, int max_tries, double EPS_degenerate, double TOL);
