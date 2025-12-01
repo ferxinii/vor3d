@@ -16,6 +16,144 @@
 #include <math.h>
 
 
+static size_t size_serialize_vdiagram(const s_vdiagram *vd)
+{
+    int N_seeds = vd->seeds.N;
+
+    size_t size = 0;
+    /* seeds */
+    size += sizeof(int);
+    size += sizeof(s_point) * N_seeds;
+
+    /* bpoly */
+    size_t size_ch = 0;
+    serialize_convhull(&vd->bpoly.convh, NULL, &size_ch, NULL);
+    size += size_ch;
+    size += sizeof(double);     /* dmax */
+    size += sizeof(s_point);    /* CM */
+    size += sizeof(s_point);    /* min */
+    size += sizeof(s_point);    /* max */
+    size += sizeof(double);     /* volume */
+
+    /* vcells */
+    size += sizeof(int) * N_seeds;      /* seed_id */
+    size += sizeof(double) * N_seeds;   /* volume */
+    for (int ii=0; ii<N_seeds; ii++) {
+        serialize_convhull(&vd->vcells[ii].convh, NULL, &size_ch, NULL);
+        size += size_ch;
+    }
+
+    return size;
+}
+
+
+int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, uint8_t **out)
+{
+    size_t s = size_serialize_vdiagram(vd);
+    if (size) *size = s;
+
+    if (!buff_write && !out) return 1;
+    if (buff_write && out) {
+        fprintf(stderr, "ERROR serialize_vdiagram: either provide buffer or let function malloc, but not both.\n");
+        return 0;
+    }
+    
+    uint8_t *destination = NULL;
+    if (buff_write) {
+        destination = buff_write;
+    } else {
+        destination = malloc(s);
+        if (!destination) return 0; 
+        *out = destination;
+    } 
+    
+    uint8_t *p = destination;
+    
+    /* seeds */
+    memcpy(p, &vd->seeds.N, sizeof(int));
+    p += sizeof(int);
+    memcpy(p, vd->seeds.p, sizeof(s_point) * vd->seeds.N);
+    p += sizeof(s_point) * vd->seeds.N;
+
+    /* bpoly */
+    size_t size_ch;
+    serialize_convhull(&vd->bpoly.convh, p, &size_ch, NULL);
+    p += size_ch;
+    memcpy(p, &vd->bpoly.dmax, sizeof(double));     p += sizeof(double);     
+    memcpy(p, &vd->bpoly.CM, sizeof(s_point));      p += sizeof(s_point);    
+    memcpy(p, &vd->bpoly.min, sizeof(s_point));     p += sizeof(s_point);    
+    memcpy(p, &vd->bpoly.max, sizeof(s_point));     p += sizeof(s_point);    
+    memcpy(p, &vd->bpoly.volume, sizeof(double));   p += sizeof(double);     
+    
+    /* vcells */
+    for (int ii=0; ii<vd->seeds.N; ii++) {
+        memcpy(p, &vd->vcells[ii].seed_id, sizeof(int));
+        p += sizeof(int);
+        memcpy(p, &vd->vcells[ii].volume, sizeof(double));
+        p += sizeof(double);
+
+        serialize_convhull(&vd->vcells[ii].convh, p, &size_ch, NULL);
+        p += size_ch;
+    }
+    
+    return 1;
+}
+
+int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_read)
+{
+    if (!out || !data) return 0;
+
+    s_vdiagram vd;
+    const uint8_t *p = data;
+
+    /* points */
+    memcpy(&vd.seeds.N, p, sizeof(int)); 
+    p += sizeof(int);
+    if (vd.seeds.N > 0) {
+        vd.seeds.p = malloc(sizeof(s_point) * vd.seeds.N);
+        if (!vd.seeds.p) return 0;
+        memcpy(vd.seeds.p, p, sizeof(s_point) * vd.seeds.N);
+        p += sizeof(s_point) * vd.seeds.N;
+    }
+    
+    /* bpoly */
+    size_t read;
+    if (!deserialize_convhull(p, &vd.bpoly.convh, &read)) 
+        { free(vd.seeds.p); return 0; };
+    p += read;
+    memcpy(&vd.bpoly.dmax, p, sizeof(double));     p += sizeof(double);     
+    memcpy(&vd.bpoly.CM, p, sizeof(s_point));      p += sizeof(s_point);    
+    memcpy(&vd.bpoly.min, p, sizeof(s_point));     p += sizeof(s_point);    
+    memcpy(&vd.bpoly.max, p, sizeof(s_point));     p += sizeof(s_point);    
+    memcpy(&vd.bpoly.volume, p, sizeof(double));   p += sizeof(double);     
+    
+    /* vcells */
+    vd.vcells = malloc(sizeof(s_vcell) * vd.seeds.N);
+    if (!vd.vcells) { free(vd.seeds.p); free_bpoly(&vd.bpoly); return 0; }
+    for (int ii=0; ii<vd.seeds.N; ii++) {
+        memcpy(&vd.vcells[ii].seed_id, p, sizeof(int));
+        p += sizeof(int);
+        memcpy(&vd.vcells[ii].volume, p, sizeof(double));
+        p += sizeof(double);
+
+        if (!deserialize_convhull(p, &vd.vcells[ii].convh, &read)) { 
+            for (int jj=0; jj<ii; jj++) free_convhull(&vd.vcells[jj].convh);
+            free(vd.vcells);
+            free(vd.seeds.p);
+            free_bpoly(&vd.bpoly);
+            return 0;
+        }
+        p += read;
+    }
+
+    *out = vd;
+    if (bytes_read) *bytes_read = (size_t)(p - data);
+    return 1;
+}
+
+
+
+
 int vdiagram_is_valid(const s_vdiagram *vd)
 {
     if (vd->vcells == NULL) return 0;
@@ -286,8 +424,7 @@ static void plot_add_vcell(s_gnuplot *interface, const s_vcell *vcell, char *con
         s_point face[3];
         convh_get_face(&vcell->convh, ii, face);
         draw_solid_triangle_3d(interface, face[0].coords, face[1].coords, face[2].coords, config);
-
-        }
+    }
 }
 
 static void plot_add_bpoly(s_gnuplot *interface, const s_bpoly *bpoly, char *config)

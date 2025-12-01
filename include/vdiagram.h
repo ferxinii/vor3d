@@ -10,8 +10,8 @@
 
 typedef struct vdiagram {
     s_points seeds;  
-    struct vcell *vcells;  // Array of vcells (size: seeds.N)
     s_bpoly bpoly;
+    struct vcell *vcells;  // Array of vcells (size: seeds.N)
 } s_vdiagram;
 
 
@@ -26,6 +26,9 @@ int vdiagram_is_valid(const s_vdiagram *vd);
 void free_vdiagram(s_vdiagram *vdiagram);
 void print_vcell(const s_vcell *vcell);
 void print_vdiagram(const s_vdiagram *vdiagram);
+
+int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, uint8_t **out);
+int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_read);
 
 s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL);  // copy of bpoly inside
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL);
