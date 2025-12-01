@@ -83,10 +83,8 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, int max_tries, f_seed_generator 
         if (ii > 0) puts("Retrying to build voronoi diagram.");
         s_points seeds = f_seeds(bp, ud);
         int Nreal = seeds.N;
-        printf("Nreal: %d\n", Nreal);
 
         extend_sites_mirroring(bp, ud.EPS_degenerate, &seeds);
-        printf("after mirroring: %d\n", seeds.N);
 
         s_scplx dt = construct_dt_3d(&seeds, ud.TOL);
         vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_degenerate, ud.TOL);

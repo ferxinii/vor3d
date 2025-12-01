@@ -151,6 +151,47 @@ int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_rea
     return 1;
 }
 
+int write_serialized_vdiagram(const char *file, const uint8_t *data, size_t size)
+{
+	FILE *f = fopen(file, "wb");
+	if (!f) return 0;
+
+	/* write 8-byte length (little-endian) so the reader knows the size */
+	uint64_t sz = (uint64_t)size;
+	uint8_t header[8];
+	for (int i = 0; i < 8; ++i) header[i] = (uint8_t)((sz >> (i * 8)) & 0xFF);
+
+	if (fwrite(header, 1, 8, f) != 8) { fclose(f); return 0; }
+	if (fwrite(data, 1, size, f) != size) { fclose(f); return 0; }
+	fclose(f);
+	return 1;
+}
+
+int read_serialized_vdiagram(const char *file, uint8_t **outbuf, size_t *outsize)
+{
+	FILE *f = fopen(file, "rb");
+	if (!f) return 0;
+
+	uint8_t header[8];
+	if (fread(header, 1, 8, f) != 8) { fclose(f); return 0; }
+
+	uint64_t sz = 0;
+	for (int i = 0; i < 8; ++i) sz |= ((uint64_t)header[i]) << (i * 8);
+
+	uint8_t *buf = NULL;
+	if (sz > 0) {
+		buf = (uint8_t*)malloc((size_t)sz);
+		if (!buf) { fclose(f); return 0; }
+
+		if (fread(buf, 1, (size_t)sz, f) != (size_t)sz)
+            { free(buf); fclose(f); return 0; }
+	}
+
+	fclose(f);
+	*outbuf = buf;
+	*outsize = (size_t)sz;
+	return 0;
+}
 
 
 

@@ -29,6 +29,9 @@ void print_vdiagram(const s_vdiagram *vdiagram);
 
 int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, uint8_t **out);
 int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_read);
+int write_serialized_vdiagram(const char *file, const uint8_t *data, size_t size);
+int read_serialized_vdiagram(const char *file, uint8_t **outbuf, size_t *outsize);
+
 
 s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL);  // copy of bpoly inside
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL);

@@ -90,6 +90,20 @@ int main(void)
     if (vd_tet.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_tet);
     plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
+
+    // /* Testing serialization */
+    // size_t size;
+    // uint8_t *serialized;
+    // serialize_vdiagram(&vd_tet, NULL, &size, &serialized);
+    // write_serialized_vdiagram("tet_serialized.bin", serialized, size);
+    //
+    // size_t new_size;
+    // uint8_t *new_serialized;
+    // read_serialized_vdiagram("tet_serialized.bin", &new_serialized, &new_size);
+    // s_vdiagram new_vd_tet;
+    // deserialize_vdiagram(new_serialized, &new_vd_tet, NULL);
+    // plot_vdiagram_differentviews(&vd_tet, "plots/new_tet", NULL);
+    // printf("%d\n%d\n", (int)size, (int)new_size);
     free_vdiagram(&vd_tet);
 
     puts("\nCUBE:");
