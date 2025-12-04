@@ -109,12 +109,11 @@ int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_rea
     /* points */
     memcpy(&vd.seeds.N, p, sizeof(int)); 
     p += sizeof(int);
-    if (vd.seeds.N > 0) {
-        vd.seeds.p = malloc(sizeof(s_point) * vd.seeds.N);
-        if (!vd.seeds.p) return 0;
-        memcpy(vd.seeds.p, p, sizeof(s_point) * vd.seeds.N);
-        p += sizeof(s_point) * vd.seeds.N;
-    }
+    assert(vd.seeds.N != 0);
+    vd.seeds.p = malloc(sizeof(s_point) * vd.seeds.N);
+    if (!vd.seeds.p) return 0;
+    memcpy(vd.seeds.p, p, sizeof(s_point) * vd.seeds.N);
+    p += sizeof(s_point) * vd.seeds.N;
     
     /* bpoly */
     size_t read;
@@ -227,9 +226,8 @@ static void free_vcell(s_vcell *vcell)
 
 void free_vdiagram(s_vdiagram *vdiagram)
 {
-    for (int ii=0; ii<vdiagram->seeds.N; ii++) {
-        if (vdiagram->vcells[ii].seed_id != 0) free_vcell(&vdiagram->vcells[ii]);
-    }
+    for (int ii=0; ii<vdiagram->seeds.N; ii++)
+        if (vdiagram->vcells[ii].convh.Nf != 0) free_vcell(&vdiagram->vcells[ii]);
     free(vdiagram->vcells);
     free_points(&vdiagram->seeds);
     free_bpoly(&vdiagram->bpoly);
