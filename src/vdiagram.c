@@ -254,25 +254,6 @@ void print_vdiagram(const s_vdiagram *vdiagram)
     puts("------------------------------");
 }
 
-// void write_vcell_file(const s_vcell *vcell, FILE *file)
-// {
-//     for (int ii=0; ii<vcell->convh.Nf; ii++) {
-//         s_point face[3];
-//         convh_get_face(&vcell->convh, ii, face);
-//         fprintf(file, "%f %f %f\n", face[0].x, face[0].y, face[0].z);
-//         fprintf(file, "%f %f %f\n", face[1].x, face[1].y, face[1].z);
-//         fprintf(file, "%f %f %f\n\n", face[2].x, face[2].y, face[2].z);
-//     }
-// }
-//
-// void write_vd_file(const s_vdiagram *vd, FILE *file)
-// {
-//     for (int ii=0; ii<vd->seeds.N; ii++) {
-//         write_vcell_file(&vd->vcells[ii], file);
-//         fprintf(file, "\n\n");
-//     }
-// }
-
 
 /* Vertex buffer. Stores the vertices of a Voronoi cell, constructed fron delaunay triangulation. */
 typedef struct vertex_buff {
