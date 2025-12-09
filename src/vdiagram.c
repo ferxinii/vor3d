@@ -218,16 +218,11 @@ static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
     return out;
 }
 
-static void free_vcell(s_vcell *vcell)
-{
-    free_convhull(&vcell->convh);
-    memset(vcell, 0, sizeof(s_vcell));
-}
 
 void free_vdiagram(s_vdiagram *vdiagram)
 {
     for (int ii=0; ii<vdiagram->seeds.N; ii++)
-        if (vdiagram->vcells[ii].convh.Nf != 0) free_vcell(&vdiagram->vcells[ii]);
+        if (vdiagram->vcells[ii].convh.Nf != 0) free_convhull(&vdiagram->vcells[ii].convh);
     free(vdiagram->vcells);
     free_points(&vdiagram->seeds);
     free_bpoly(&vdiagram->bpoly);
