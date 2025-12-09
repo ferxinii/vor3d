@@ -22,7 +22,7 @@ static int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd, double max_rel
     if (fabs(relative_diff) < max_rel_diff) return 1;
     else {
         fprintf(stderr, "vor3d: vdiagram invalid volume (max_rel_diff = %g):\n", max_rel_diff);
-        fprintf(stderr, "        bp->volume = %g, sum_vol = %g, rel_diff = %g\n", bp->volume, sum_vol, relative_diff);
+        fprintf(stderr, "       bp->volume = %g, sum_vol = %g, rel_diff = %g\n", bp->volume, sum_vol, relative_diff);
         return 0;
     }
 }
