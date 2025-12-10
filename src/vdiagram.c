@@ -415,6 +415,7 @@ int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenera
 {
     for (int ii=0; ii<vd->seeds.N; ii++) {
         e_geom_test test = test_point_in_convhull(&vd->vcells[ii].convh, x, EPS_degenerate, TOL);
+        if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
         if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
     }
     return -1;
