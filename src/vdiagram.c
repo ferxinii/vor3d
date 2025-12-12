@@ -336,13 +336,14 @@ static s_convh convhull_from_marked_ncells(const s_scplx *setup, const s_bpoly *
 
     /* Snap point back into bounding polyhedron if outside. 
      * This is a limitation of the simple mirroring approach used to bound vdiagram. */
-    for (int ii=0; ii<vbuff->N; ii++) {
-        if (test_point_in_convhull(&bp->convh, vbuff->v[ii], EPS_degenerate, TOL) == TEST_OUT) {
-            s_point tmp;
-            double distance = find_closest_point_on_bp(bp, vbuff->v[ii], EPS_degenerate, &tmp);
-            if (distance > TOL) vbuff->v[ii] = tmp;
-        }
-    }
+    (void)bp;
+    // for (int ii=0; ii<vbuff->N; ii++) {
+    //     if (test_point_in_convhull(&bp->convh, vbuff->v[ii], EPS_degenerate, TOL) == TEST_OUT) {
+    //         s_point tmp;
+    //         double distance = find_closest_point_on_bp(bp, vbuff->v[ii], EPS_degenerate, &tmp);
+    //         if (distance > TOL) vbuff->v[ii] = tmp;
+    //     }
+    // }
 
     s_convh out = convhull_from_vbuff(vbuff, EPS_degenerate, TOL);
     return out;

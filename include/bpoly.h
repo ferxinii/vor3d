@@ -28,7 +28,7 @@ s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume, dou
 void free_bpoly(s_bpoly *bpoly);
 
 s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double*, void*), void *rmax_params, double EPS_degenerate);
-void extend_sites_mirroring(const s_bpoly *bp, double EPS_degenerate, s_points *seeds_inout);
+int extend_sites_mirroring(const s_bpoly *bp, double EPS_degenerate, s_points *seeds_inout);
 double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_degenerate, s_point *out);
 
 void generate_file_cube_bp(const char *filename, double length);

@@ -92,7 +92,7 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
             fprintf(stderr, "vor3d: vdiagram is invalid.");
             continue;  
         }
-
+        // return vd;
         if (valid_volumes(bp, &vd, vol_max_rel_diff)) return vd;
         else free_vdiagram(&vd);
     }
