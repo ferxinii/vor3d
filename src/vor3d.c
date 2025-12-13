@@ -82,7 +82,7 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
         s_points seeds = f_seeds(bp, ud);
         int Nreal = seeds.N;
 
-        extend_sites_mirroring(bp, ud.EPS_degenerate, &seeds);
+        extend_sites_mirroring(bp, ud.EPS_degenerate, ud.TOL, &seeds);
 
         s_scplx dt = construct_dt_3d(&seeds, ud.TOL);
         vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_degenerate, ud.TOL);
