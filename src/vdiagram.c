@@ -7,6 +7,7 @@
 #include "vdiagram.h"
 #include "convh.h"
 #include "bpoly.h"
+#include "mirroring.h"
 #include "gnuplotc.h"
 #include <float.h>
 #include <stdlib.h>
@@ -14,8 +15,10 @@
 #include <assert.h>
 #include <string.h>
 #include <math.h>
+#include <stdbool.h>
 
 
+/* Serialize / deserialize */
 static size_t size_serialize_vdiagram(const s_vdiagram *vd)
 {
     int N_seeds = vd->seeds.N;
@@ -181,7 +184,6 @@ int read_serialized_vdiagram(const char *file, uint8_t **outbuf, size_t *outsize
 	if (sz > 0) {
 		buf = (uint8_t*)malloc((size_t)sz);
 		if (!buf) { fclose(f); return 0; }
-
 		if (fread(buf, 1, (size_t)sz, f) != (size_t)sz)
             { free(buf); fclose(f); return 0; }
 	}
@@ -194,14 +196,13 @@ int read_serialized_vdiagram(const char *file, uint8_t **outbuf, size_t *outsize
 
 
 
+/* Memory of vdiagram, printing, and other utilities. */
 int vdiagram_is_valid(const s_vdiagram *vd)
 {
     if (vd->vcells == NULL) return 0;
     else return 1;
 }
 
-
-/* Memory of vdiagram and printing. */
 static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
 {
     assert(Nreal <= setup->points.N && "Nreal needs to be <= than setup->N"); 
@@ -217,7 +218,6 @@ static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
     memset(out.vcells, 0, sizeof(s_vcell) * Nreal);
     return out;
 }
-
 
 void free_vdiagram(s_vdiagram *vdiagram)
 {
@@ -249,6 +249,16 @@ void print_vdiagram(const s_vdiagram *vdiagram)
     puts("------------------------------");
 }
 
+int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL)
+{
+    for (int ii=0; ii<vd->seeds.N; ii++) {
+        e_geom_test test = test_point_in_convhull(&vd->vcells[ii].convh, x, EPS_degenerate, TOL);
+        if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
+        if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
+    }
+    return -1;
+}
+
 
 /* Vertex buffer. Stores the vertices of a Voronoi cell, constructed fron delaunay triangulation. */
 typedef struct vertex_buff {
@@ -277,7 +287,7 @@ static void increase_vbuff_if_needed(s_vbuff *vbuff)
     if (vbuff->N + 1 >= vbuff->max) {
         vbuff->max *= 2;
         vbuff->v = realloc(vbuff->v, sizeof(s_point) * vbuff->max);
-}
+    }
 }
 
 static void add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, double EPS_degenerate, double TOL,  s_vbuff *vbuff)
@@ -324,8 +334,9 @@ static s_convh convhull_from_vbuff(s_vbuff *vbuff, double EPS_degenerate, double
 }
 
 
-/* Main functions */
-static s_convh convhull_from_marked_ncells(const s_scplx *setup, const s_bpoly *bp, double EPS_degenerate, double TOL, s_vbuff *vbuff)
+
+/* Main functions to construct vdiagram */
+static s_convh convhull_from_marked_ncells(const s_scplx *setup, double EPS_degenerate, double TOL, s_vbuff *vbuff)
 {
     vbuff->N = 0;
     s_ncell *current = setup->head;
@@ -334,23 +345,11 @@ static s_convh convhull_from_marked_ncells(const s_scplx *setup, const s_bpoly *
         current = current->next;
     }
 
-    /* Snap point back into bounding polyhedron if outside. 
-     * This is a limitation of the simple mirroring approach used to bound vdiagram. */
-    (void)bp;
-    // for (int ii=0; ii<vbuff->N; ii++) {
-    //     if (test_point_in_convhull(&bp->convh, vbuff->v[ii], EPS_degenerate, TOL) == TEST_OUT) {
-    //         s_point tmp;
-    //         double distance = find_closest_point_on_bp(bp, vbuff->v[ii], EPS_degenerate, &tmp);
-    //         if (distance > TOL) vbuff->v[ii] = tmp;
-    //     }
-    // }
-
     s_convh out = convhull_from_vbuff(vbuff, EPS_degenerate, TOL);
     return out;
 }
 
-
-static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s_bpoly *bp, double EPS_degenerate, double TOL, s_vbuff *vbuff)
+static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, double EPS_degenerate, double TOL, s_vbuff *vbuff)
 {
     /* Find an ncell with this vertex */
     s_ncell *ncell = setup->head;
@@ -374,7 +373,7 @@ static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s
 
     s_vcell out;
     out.seed_id = vertex_id;
-    out.convh = convhull_from_marked_ncells(setup, bp, EPS_degenerate, TOL, vbuff);
+    out.convh = convhull_from_marked_ncells(setup, EPS_degenerate, TOL, vbuff);
     if (!convhull_is_valid(&out.convh)) {
         fprintf(stderr, "extract_voronoi_cell: Error extracting convhull of cell.\n");
         return out;
@@ -383,28 +382,54 @@ static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, const s
     return out;
 }
 
+static int vcell_check_extruding_vertices(const s_bpoly *bp, const s_vcell *vcell, double EPS_degenerate, double TOL, s_vertex_list *extruding)
+{   /* 0 ERROR, 1 OK */
+    for (int ii=0; ii<vcell->convh.points.N; ii++) {
+        if (test_point_in_convhull(&bp->convh, vcell->convh.points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
+            if (!increase_memory_vertex_list_if_needed(extruding, extruding->N+1)) return 0;
+            extruding->list[extruding->N++] = (s_extruding_vertex){ .vertex = vcell->convh.points.p[ii], 
+                                                                    .vcell = vcell->seed_id };
+        }
+    }
+    return 1;
+}
 
-s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
-{   /* copy of bpoly */
+static int vcell_check_extruding_vertices_DEBUG(const s_bpoly *bp, const s_vcell *vcell, double EPS_degenerate, double TOL)
+{   /* 0 ERROR, 1 OK */
+    for (int ii=0; ii<vcell->convh.points.N; ii++) {
+        if (test_point_in_convhull(&bp->convh, vcell->convh.points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
+            printf("DEBUG: EXTRUDING EVEN NOW!\n");
+        }
+    }
+    return 1;
+}
+
+
+s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL, s_vertex_list *extruding)
+{   /* copy of bpoly inside */
     initialize_ncells_counter(setup);
-    
+    if (extruding) extruding->N = 0;
+
     s_vdiagram out = malloc_vdiagram(setup, Nreal);
     out.bpoly = bpoly_copy(bpoly);
     
     s_vbuff vbuff = init_vbuff();  /* Memory to store vertices of each cell before constructing their hull */
     for (int ii=0; ii<Nreal; ii++) {
-        for (int tries = 0; tries < 2; tries ++) { 
-            out.vcells[ii] = extract_voronoi_cell(setup, ii, bpoly, EPS_degenerate, TOL, &vbuff);
-            if (!convhull_is_valid(&out.vcells[ii].convh)) continue;
-            else break;
-        }
-        if (!convhull_is_valid(&out.vcells[ii].convh) || out.vcells[ii].volume <= 0) {
-            // print_vcell(&out.vcells[ii]);
+        out.vcells[ii] = extract_voronoi_cell(setup, ii, EPS_degenerate, TOL, &vbuff);
+        assert(out.vcells[ii].volume > 0);
+        if (!convhull_is_valid(&out.vcells[ii].convh)) {
             fprintf(stderr, "voronoi_from_delaunay_3d: Could not construct vdiagram.\n");
             free_vdiagram(&out);
             free_vbuff(&vbuff);
             return out;
         }
+        if (extruding) {
+            if (!vcell_check_extruding_vertices(bpoly, &out.vcells[ii], EPS_degenerate, TOL, extruding)) {
+                /* error todo */
+                puts("TODO extruding vertices error!!");
+                exit(1);
+            } 
+        } else (vcell_check_extruding_vertices_DEBUG(bpoly, &out.vcells[ii], EPS_degenerate, TOL));
     }
 
     free_vbuff(&vbuff);
@@ -412,15 +437,6 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, 
 }
 
 
-int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL)
-{
-    for (int ii=0; ii<vd->seeds.N; ii++) {
-        e_geom_test test = test_point_in_convhull(&vd->vcells[ii].convh, x, EPS_degenerate, TOL);
-        if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
-        if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
-    }
-    return -1;
-}
 
 
 
