@@ -83,14 +83,14 @@ int main(void)
     
     int MAX_TRIES = 5;
 
-    puts("\nTETRAHEDON:");
-    generate_file_tetrahedron_bp(FILE_BP, 3);
-    s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
-    // s_points test_s = read_points_from_csv("../test_seeds.txt");
-    // s_vdiagram vd_tet = vor3d_from_txt(&test_s, FILE_BP, MAX_TRIES, EPS_degenerate, TOL);
-    if (vd_tet.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
-    check_volume(&vd_tet);
-    plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
+    // puts("\nTETRAHEDON:");
+    // generate_file_tetrahedron_bp(FILE_BP, 3);
+    // s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
+    // // s_points test_s = read_points_from_csv("../test_seeds.txt");
+    // // s_vdiagram vd_tet = vor3d_from_txt(&test_s, FILE_BP, MAX_TRIES, EPS_degenerate, TOL);
+    // if (vd_tet.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
+    // check_volume(&vd_tet);
+    // plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
 
     // /* Testing serialization */
     // size_t size;
@@ -105,19 +105,19 @@ int main(void)
     // deserialize_vdiagram(new_serialized, &new_vd_tet, NULL);
     // plot_vdiagram_differentviews(&vd_tet, "plots/new_tet", NULL);
     // printf("%d\n%d\n", (int)size, (int)new_size);
-    free_vdiagram(&vd_tet);
+    // free_vdiagram(&vd_tet);
 
-    puts("\nCUBE:");
-    generate_file_cube_bp(FILE_BP, 2);
-    s_vdiagram vd_cube = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, 5, EPS_degenerate, TOL);
-    if (vd_cube.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
-    check_volume(&vd_cube);
-    plot_vdiagram_differentviews(&vd_cube, "plots/cube", NULL);
-    free_vdiagram(&vd_cube);
+    // puts("\nCUBE:");
+    // generate_file_cube_bp(FILE_BP, 2);
+    // s_vdiagram vd_cube = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, 5, EPS_degenerate, TOL);
+    // if (vd_cube.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
+    // check_volume(&vd_cube);
+    // plot_vdiagram_differentviews(&vd_cube, "plots/cube", NULL);
+    // free_vdiagram(&vd_cube);
 
     puts("\nSPHERE:");
     generate_file_sphere_bp(FILE_BP, 1.5, 15, 20);
-    s_vdiagram vd_sph = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, 5, EPS_degenerate, TOL);
+    s_vdiagram vd_sph = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
     if (vd_sph.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_sph);
     plot_vdiagram_differentviews(&vd_sph, "plots/sph", NULL);

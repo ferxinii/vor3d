@@ -568,7 +568,7 @@ s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
 {
     s_dstack stack = stack_create();
     s_scplx setup = initialize_setup(points);
-    
+
     int ii = 4;  /* First 4 are big tetra, which already is inserted */
     while (ii < setup.points.N) {
         if (insert_one_point(&setup, ii, &stack, TOL_duplicates)) ii++;

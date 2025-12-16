@@ -337,7 +337,7 @@ int are_locally_delaunay_nonstrict(const s_scplx *setup, const s_ncell *ncell, i
 
 
 int test_point_in_ncell(const s_scplx *setup, const s_ncell *ncell, s_point query)
-{   // TODO Assumes consisten ordering of vertices?
+{   // TODO Assumes consistent ordering of vertices?
     s_point v0 = setup->points.p[ncell->vertex_id[0]];
     s_point v1 = setup->points.p[ncell->vertex_id[1]];
     s_point v2 = setup->points.p[ncell->vertex_id[2]];
@@ -354,9 +354,19 @@ s_ncell *bruteforce_find_ncell_containing(const s_scplx *setup, s_point p)
     while (current) {
         e_geom_test test = test_point_in_ncell(setup, current, p);
         if (test == TEST_IN || test == TEST_BOUNDARY) return current;
+        if (test == TEST_ERROR) fprintf(stderr, "Warning: test error\n");
+        if (test == TEST_DEGENERATE) {
+            fprintf(stderr, "Warning: test degenerate\n");
+            // print_ncell(current);
+            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[0]].x, setup->points.p[current->vertex_id[0]].y, setup->points.p[current->vertex_id[0]].z);
+            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[1]].x, setup->points.p[current->vertex_id[1]].y, setup->points.p[current->vertex_id[1]].z);
+            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[2]].x, setup->points.p[current->vertex_id[2]].y, setup->points.p[current->vertex_id[2]].z);
+            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[3]].x, setup->points.p[current->vertex_id[3]].y, setup->points.p[current->vertex_id[3]].z);
+        }
         current = current->next;
     }
-    fprintf(stderr, "did not find container ncell.\n");
+    fprintf(stderr, "Warning: Did not find container ncell.\n");
+    fprintf(stderr, "p: %g, %g, %g\n", p.x, p.y, p.z);
     exit(1);
 }
 
@@ -370,6 +380,18 @@ static s_point ncell_centroid(const s_scplx *setup, const s_ncell *ncell) {
     return out;
 }
 
+
+static void random_order_04(int out[4])
+{
+    for (int ii=0; ii<4; ii++) out[ii] = ii;
+
+    for (int ii=3; ii>0; ii--) {
+        int jj = rand() % (ii + 1);
+        int tmp = out[ii];
+        out[ii] = out[jj];
+        out[jj] = tmp;
+    }
+}
 
 s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
 {
@@ -385,8 +407,13 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
     int steps = 0;
     STEP:
     steps++;
-    assert(steps <= 3 * setup->N_ncells && "Reached step limit in ncell_walk.\n");
-    for (int ii=0; ii<4; ii++) {
+    if (steps > 3 * setup->N_ncells) {
+        fprintf(stderr, "Warning: in_ncell_walk seems to be in a loop. Now bruteforcing to find inside which ncell.\n");
+        return bruteforce_find_ncell_containing(setup, p);
+    }
+    int order[4]; random_order_04(order);
+    for (int kk=0; kk<4; kk++) {  /* Visit faces in random order to prevent loops ? */
+        int ii = order[kk];
         s_point opposite_vertex = setup->points.p[current->vertex_id[ii]];
 
         s_ncell *next = current->opposite[ii];
@@ -397,15 +424,16 @@ s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
         int o1 = orientation_robust(facet_vertices, opposite_vertex);
         int o2 = orientation_robust(facet_vertices, p);
         
-        // Tetrahedron is degenerate
-        if (o1 == 0 && next != prev) { 
-            // We come from a different adjacent one, so walk towards
-            prev = current;
-            current = next;
-            goto STEP;
-        } else if (o1 == 0) continue;
+        if (o1 == 0) {  /* Tetrahedron is degenerate */
+            if (next != prev) {  /* We come from a different adjacent one, so walk towards */
+                prev = current;
+                current = next;
+                goto STEP;
+            } 
+            else continue; 
+        }
 
-        if (o2 == 0) {  // Query is coplanar with face
+        if (o2 == 0) {  /* Query is coplanar with face */
             e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
             if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
             if (next != prev) {

@@ -382,33 +382,33 @@ static s_vcell extract_voronoi_cell(const s_scplx *setup, int vertex_id, double 
     return out;
 }
 
-static int vcell_check_extruding_vertices(const s_bpoly *bp, const s_vcell *vcell, double EPS_degenerate, double TOL, s_vertex_list *extruding)
-{   /* 0 ERROR, 1 OK */
-    for (int ii=0; ii<vcell->convh.points.N; ii++) {
-        if (test_point_in_convhull(&bp->convh, vcell->convh.points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
-            if (!increase_memory_vertex_list_if_needed(extruding, extruding->N+1)) return 0;
-            extruding->list[extruding->N++] = (s_extruding_vertex){ .vertex = vcell->convh.points.p[ii], 
-                                                                    .vcell = vcell->seed_id };
-        }
-    }
-    return 1;
-}
+// static int vcell_check_extruding_vertices(const s_bpoly *bp, const s_vcell *vcell, double EPS_degenerate, double TOL, s_vertex_list *extruding)
+// {   /* 0 ERROR, 1 OK */
+//     for (int ii=0; ii<vcell->convh.points.N; ii++) {
+//         if (test_point_in_convhull(&bp->convh, vcell->convh.points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
+//             if (!increase_memory_vertex_list_if_needed(extruding, extruding->N+1)) return 0;
+//             extruding->list[extruding->N++] = (s_extruding_vertex){ .vertex = vcell->convh.points.p[ii], 
+//                                                                     .vcell = vcell->seed_id };
+//         }
+//     }
+//     return 1;
+// }
 
-static int vcell_check_extruding_vertices_DEBUG(const s_bpoly *bp, const s_vcell *vcell, double EPS_degenerate, double TOL)
-{   /* 0 ERROR, 1 OK */
-    for (int ii=0; ii<vcell->convh.points.N; ii++) {
-        if (test_point_in_convhull(&bp->convh, vcell->convh.points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
-            printf("DEBUG: EXTRUDING EVEN NOW!\n");
-        }
-    }
-    return 1;
-}
+// static int vcell_check_extruding_vertices_DEBUG(const s_bpoly *bp, const s_vcell *vcell, double EPS_degenerate, double TOL)
+// {   /* 0 ERROR, 1 OK */
+//     for (int ii=0; ii<vcell->convh.points.N; ii++) {
+//         if (test_point_in_convhull(&bp->convh, vcell->convh.points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
+//             printf("DEBUG: EXTRUDING EVEN NOW!\n");
+//         }
+//     }
+//     return 1;
+// }
 
 
-s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL, s_vertex_list *extruding)
+s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
 {   /* copy of bpoly inside */
     initialize_ncells_counter(setup);
-    if (extruding) extruding->N = 0;
+    // if (extruding) extruding->N = 0;
 
     s_vdiagram out = malloc_vdiagram(setup, Nreal);
     out.bpoly = bpoly_copy(bpoly);
@@ -423,13 +423,14 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, 
             free_vbuff(&vbuff);
             return out;
         }
-        if (extruding) {
-            if (!vcell_check_extruding_vertices(bpoly, &out.vcells[ii], EPS_degenerate, TOL, extruding)) {
-                /* error todo */
-                puts("TODO extruding vertices error!!");
-                exit(1);
-            } 
-        } else (vcell_check_extruding_vertices_DEBUG(bpoly, &out.vcells[ii], EPS_degenerate, TOL));
+        // if (extruding) {
+        //     if (!vcell_check_extruding_vertices(bpoly, &out.vcells[ii], EPS_degenerate, TOL, extruding)) {
+        //         /* error todo */
+        //         puts("TODO extruding vertices error!!");
+        //         exit(1);
+        //     } 
+        // } else (
+        // vcell_check_extruding_vertices_DEBUG(bpoly, &out.vcells[ii], EPS_degenerate, TOL);
     }
 
     free_vbuff(&vbuff);
