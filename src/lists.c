@@ -43,17 +43,35 @@ int list_push(s_list *list, const void *elem)
 	return 1;
 }
 
-void *list_get_ptr(s_list *list, size_t idx)
+int list_change_entry(s_list *list, unsigned id, const void *elem)
 {
-	if (!list || idx >= list->N) return NULL;
-	return (char *)list->items + idx * list->elem_size;
+    if (!list || id >= list->N) return 0;
+
+    void *dst = (uint8_t*)list->items + id * list->elem_size;
+    memmove(dst, elem, list->elem_size);
+    return 1;
+}
+
+void *list_get_ptr(s_list *list, size_t id)
+{
+	if (!list || id >= list->N) return NULL;
+	return (uint8_t*)list->items + id * list->elem_size;
+}
+
+int list_get_value(const s_list *list, size_t id, void *out)
+{
+	if (!list || !out || id >= list->N) return 0;
+
+	const void *src = (uint8_t*)list->items + id * list->elem_size;
+	memmove(out, src, list->elem_size);
+	return 1;
 }
 
 int list_pop(s_list *list, void *out_elem)
 {
 	if (!list || list->N == 0) return 0;
 	list->N -= 1;
-	void *src = (char *)list->items + list->N * list->elem_size;
+	void *src = (uint8_t*)list->items + list->N * list->elem_size;
 	if (out_elem) memcpy(out_elem, src, list->elem_size);
 	return 1;
 }

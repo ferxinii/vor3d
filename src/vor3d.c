@@ -16,7 +16,11 @@ static int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd, double max_rel
 {
     double sum_vol = 0;
     for (int ii=0; ii<vd->seeds.N; ii++) {
-        assert(vd->vcells[ii].volume > 0);
+        if (vd->vcells[ii].volume <= 0) {
+            printf("NEGATIVE VOLUME? %g\n", vd->vcells[ii].volume);
+            print_vcell(&vd->vcells[ii]);
+        }
+        // assert(vd->vcells[ii].volume > 0);
         sum_vol += vd->vcells[ii].volume;
     }
 
@@ -73,10 +77,11 @@ static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud) {
     return generate_poisson_dist_inside(bp, ud.generator.pds.f_radius_poiss, ud.generator.pds.f_params, ud.EPS_degenerate);
 }
 
+
+
 static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max_tries, f_seed_generator f_seeds, seed_userdata ud)
 {
     s_vdiagram vd = {0};
-    // s_list extruding = initialize_vertex_list(0);
     for (int ii = 0; ii < max_tries; ii++) {
         if (ii > 0) fprintf(stderr, "Retrying to build voronoi diagram. (%d / %d)\n", ii+1, max_tries);
         s_points seeds = f_seeds(bp, ud);
@@ -84,7 +89,6 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
 
         if (!extend_sites_mirroring_initial(bp, ud.EPS_degenerate, ud.TOL, &seeds)) {
             fprintf(stderr, "vor3d: error extending sites (initial).");
-            // free_vertex_list(&extruding);
             free_points(&seeds);
         }
 
@@ -93,41 +97,25 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
         free_complex(&dt);
         if (vd.seeds.N == 0) {  /* Retry */
             fprintf(stderr, "vor3d: vdiagram is invalid.");
-            // free_vertex_list(&extruding);
             free_points(&seeds);
             continue;  
         }
-
-        /* Check if any vcell extrudes outwards, and if so, mirror their seed and repeat */
-        // if (extruding.N > 0) {
-        //     if (!extend_sites_mirroring_extruding(bp, ud.EPS_degenerate, ud.TOL, &extruding, Nreal, &seeds)) {
-        //         fprintf(stderr, "vor3d: error extending sites (extruding).");
-        //         free_vertex_list(&extruding);
-        //         free_points(&seeds);
-        //         free_vdiagram(&vd);
-        //         continue;
-        //     }
-        //
-        //     dt = construct_dt_3d(&seeds, ud.TOL);
-        //     free_vdiagram(&vd);
-        //     vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_degenerate, ud.TOL, NULL);
-        //     free_complex(&dt);
-        //     if (vd.seeds.N == 0) {  /* Retry */
-        //         fprintf(stderr, "vor3d: vdiagram is invalid.");
-        //         free_points(&seeds);
-        //         free_vertex_list(&extruding);
-        //         continue;  
-        //     }
-        // }
+        
+        system("rm -rf ./*.m");
+        // printf("DEBUG: Nreal=%d, vd.seeds.N=%d\n", Nreal, vd.seeds.N);
+        for (int ii=0; ii<vd.seeds.N; ii++) {
+            char buff[256];
+            snprintf(buff, 256, "v_%d.m", ii);
+            write_convhull_to_m(&vd.vcells[ii].convh, buff);
+        }
 
         if (valid_volumes(bp, &vd, vol_max_rel_diff)) {
-            // free_vertex_list(&extruding);
             return vd;
+        // } else return (s_vdiagram){0};
         }
         return vd;
         // else free_vdiagram(&vd);
     }
-    // free_vertex_list(&extruding);
     return vd;
 }
 

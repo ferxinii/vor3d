@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include "points.h"
+#include "lists.h"
 
 typedef struct simplical_complex {  // May live in stack
     s_points points;  // N = (4 + n_points) 
@@ -34,7 +35,7 @@ void initialize_ncells_counter(const s_scplx *setup);
 void initialize_ncells_mark(const s_scplx *setup);
 void print_marked(const s_scplx *setup);
 int count_marked(const s_scplx *setup);
-void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int *v_localid);
+void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int *v_localid, s_list *out);
 
 void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point out[4]);
 void extract_ids_face(const s_ncell *ncell, int dim_face, const int *v_localid, int *out);

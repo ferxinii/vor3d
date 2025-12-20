@@ -2,7 +2,6 @@
  * Hugo Ledoux. Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. */
 #include "delaunay.h"
 #include "scplx.h"
-#include "array.h"
 #include "points.h"
 #include "gtests.h"
 #include <assert.h>
@@ -10,6 +9,21 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+
+
+static int id_where_equal_int(const int *arr, int N, int entry) 
+{
+    for (int ii=0; ii<N; ii++) if (arr[ii] == entry) return ii;
+    fprintf(stderr, "id_where_equal_int: Could not find id.\n"); 
+    assert(1==0);
+}
+
+static int inarray(const int *arr1, int N, int a)
+{
+    for (int ii=0; ii<N; ii++) if (arr1[ii] == a) return 1;
+    return 0;
+}
+
 
 // ----------------------------------- STACK ---------------------------------------------
 
@@ -42,8 +56,9 @@ static void stack_push(s_dstack *stack, s_ncell *ncell)
 
     if (stack->size == stack->capacity) { /* Expand if needed */
         stack->capacity *= 2;
-        stack->entry = realloc(stack->entry, stack->capacity * sizeof(s_ncell *));
-        assert(stack->entry && "realloc failed when increasing stack memory");
+        s_ncell **tmp = realloc(stack->entry, stack->capacity * sizeof(s_ncell *));
+        assert(tmp && "realloc failed when increasing stack memory");
+        stack->entry = tmp;
     }
 
     stack->entry[stack->size++] = ncell;
@@ -393,11 +408,11 @@ static void regular_simplex(double inradius, s_point center, s_point out[4])
 {
     double shift = 1.0 / 4.0;
     for (int ii=0; ii<4; ii++) {
-        // compute only the first 3 coordinates (we drop the last one)
-        double v0 = ((ii == 0) ? 1.0 : 0.0) - shift;
-        double v1 = ((ii == 1) ? 1.0 : 0.0) - shift;
-        double v2 = ((ii == 2) ? 1.0 : 0.0) - shift;
-        // note: v3 = ((ii==3)?1.0:0.0) - shift exists but we drop it
+        /* compute only the first 3 coordinates (4D) */
+        double v0 = ((ii==0) ? 1.0 : 0.0) - shift;
+        double v1 = ((ii==1) ? 1.0 : 0.0) - shift;
+        double v2 = ((ii==2) ? 1.0 : 0.0) - shift;
+        // note: v3 = ((ii==3)?1.0:0.0) 
 
         out[ii].x = center.x + v0*inradius;
         out[ii].y = center.y + v1*inradius;
@@ -514,11 +529,9 @@ static int insert_one_point(s_scplx *setup, int point_id, s_dstack *stack, doubl
 
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
-        // if (current) {  /* Unsure if this is necessary */
         int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
         if (current->opposite[opp_cell_id] && !are_locally_delaunay_strict(setup, current, opp_cell_id))
             flip_tetrahedra(setup, stack, current, opp_cell_id);
-        // }
     }
     return 1;
 }
@@ -576,6 +589,9 @@ s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
     
     stack_free(&stack);  
     remove_big_tetra(&setup);
+
+    // printf("DEBUG: is_delaunay = %d\n", is_delaunay_3d(&setup));
+    // plot_dt_3d_differentviews(&setup, "dt.png", NULL);
     return setup;
 }
 

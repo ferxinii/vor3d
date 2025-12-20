@@ -2,12 +2,25 @@
 #include "scplx.h"
 #include "points.h"
 #include "gtests.h"
-#include "array.h"
 #include "gnuplotc.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+
+static int id_where_equal_int(const int *arr, int N, int entry) 
+{
+    for (int ii=0; ii<N; ii++) if (arr[ii] == entry) return ii;
+    fprintf(stderr, "id_where_equal_int: Could not find id.\n"); 
+    assert(1==0);
+}
+
+static int inarray(const int *arr1, int N, int a)
+{
+    for (int ii=0; ii<N; ii++) if (arr1[ii] == a) return 1;
+    return 0;
+}
+
 
 
 s_ncell *malloc_ncell(void)
@@ -271,15 +284,17 @@ void mark_ncells_incident_face_STEP(const s_ncell *ncell, int dim_face, const in
 }
 
 
-void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face])
+void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_list *out)
 {
     if (dim_face < 0 || dim_face >= 3) {
         fprintf(stderr, "dim_face must be >= 0 && < 3\n");
         exit(1);
     }
 
-    initialize_ncells_mark(setup);
-    ncell->mark = 1;
+    out->N = 0;
+    list_push(out, ncell);
+    // initialize_ncells_mark(setup);
+    // ncell->mark = 1;
     
     // Recursion:
     mark_ncells_incident_face_STEP(ncell, dim_face, v_localid);
@@ -355,14 +370,7 @@ s_ncell *bruteforce_find_ncell_containing(const s_scplx *setup, s_point p)
         e_geom_test test = test_point_in_ncell(setup, current, p);
         if (test == TEST_IN || test == TEST_BOUNDARY) return current;
         if (test == TEST_ERROR) fprintf(stderr, "Warning: test error\n");
-        if (test == TEST_DEGENERATE) {
-            fprintf(stderr, "Warning: test degenerate\n");
-            // print_ncell(current);
-            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[0]].x, setup->points.p[current->vertex_id[0]].y, setup->points.p[current->vertex_id[0]].z);
-            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[1]].x, setup->points.p[current->vertex_id[1]].y, setup->points.p[current->vertex_id[1]].z);
-            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[2]].x, setup->points.p[current->vertex_id[2]].y, setup->points.p[current->vertex_id[2]].z);
-            // fprintf(stderr, "p: %g, %g, %g\n", setup->points.p[current->vertex_id[3]].x, setup->points.p[current->vertex_id[3]].y, setup->points.p[current->vertex_id[3]].z);
-        }
+        // if (test == TEST_DEGENERATE);  /* These are expected! Just skip them */
         current = current->next;
     }
     fprintf(stderr, "Warning: Did not find container ncell.\n");
@@ -395,6 +403,8 @@ static void random_order_04(int out[4])
 
 s_ncell *in_ncell_walk(const s_scplx *setup, s_point p)
 {
+    // return bruteforce_find_ncell_containing(setup, p);
+
     s_ncell *current = setup->head;
     assert(setup->N_ncells >= 1 && "N_ncells < 1");
     int randi = (rand() % setup->N_ncells);  /* Select random ncell to start */
@@ -516,7 +526,7 @@ void plot_ncell_3d(const s_scplx *setup, const s_ncell *ncell, char *f_name, s_p
 }
 
 
-void plot_all_ncells_3d(s_scplx *setup, char *f_name, s_point ranges[2], char *view_command)
+void plot_all_ncells_3d(const s_scplx *setup, char *f_name, s_point ranges[2], char *view_command)
 {
      char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
         "#90ff70", "#ffee00", "#ff7000", "#ee0000", "#7f0000" };
@@ -545,7 +555,7 @@ void plot_all_ncells_3d(s_scplx *setup, char *f_name, s_point ranges[2], char *v
 }
 
 
-void plot_dt_differentviews(s_scplx *setup, char *f_name, s_point ranges[2])
+void plot_dt_3d_differentviews(const s_scplx *setup, char *f_name, s_point ranges[2])
 {
     char final_name[512];
     snprintf(final_name, 512, "%s_v1.png", f_name);

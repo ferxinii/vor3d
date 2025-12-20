@@ -1,3 +1,5 @@
+#ifndef VOR3D_LISTS_H
+#define VOR3D_LISTS_H
 
 #include <string.h>
 
@@ -14,8 +16,10 @@ typedef struct list {
 s_list list_initialize(size_t elem_size, size_t Nmax);
 int list_ensure_capacity(s_list *list, size_t need);
 int list_push(s_list *list, const void *elem);
+int list_change_entry(s_list *list, unsigned id, const void *elem);
 void *list_get_ptr(s_list *list, size_t idx);
+int list_get_value(const s_list *list, size_t id, void *out);
 int list_pop(s_list *list, void *out_elem);
 void free_list(s_list *list);
 
-
+#endif
