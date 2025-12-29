@@ -101,20 +101,17 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
             continue;  
         }
         
-        system("rm -rf ./*.m");
-        // printf("DEBUG: Nreal=%d, vd.seeds.N=%d\n", Nreal, vd.seeds.N);
-        for (int ii=0; ii<vd.seeds.N; ii++) {
-            char buff[256];
-            snprintf(buff, 256, "v_%d.m", ii);
-            write_convhull_to_m(&vd.vcells[ii].convh, buff);
-        }
+        // system("rm -rf ./*.m");
+        // // printf("DEBUG: Nreal=%d, vd.seeds.N=%d\n", Nreal, vd.seeds.N);
+        // for (int ii=0; ii<vd.seeds.N; ii++) {
+        //     char buff[256];
+        //     snprintf(buff, 256, "v_%d.m", ii);
+        //     write_convhull_to_m(&vd.vcells[ii].convh, buff);
+        // }
 
         if (valid_volumes(bp, &vd, vol_max_rel_diff)) {
             return vd;
-        // } else return (s_vdiagram){0};
-        }
-        return vd;
-        // else free_vdiagram(&vd);
+        } else return (s_vdiagram){0};
     }
     return vd;
 }

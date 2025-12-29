@@ -70,12 +70,6 @@ s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double 
 
 s_bpoly bpoly_from_csv(const char *fname, double EPS_degenerate, double TOL)
 {
-    FILE *f = fopen(fname, "r");
-    if (!f) {
-        puts("new_bpoly_from_txt: Could not open file");
-        exit(1);
-    }
-    
     s_points points = read_points_from_csv(fname);
     s_bpoly bpoly = bpoly_from_points(&points, EPS_degenerate, TOL);
 

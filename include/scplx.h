@@ -10,6 +10,7 @@ typedef struct simplical_complex {  // May live in stack
                       // The first 4 points correspond to the big n_cell
     int N_ncells;
     struct ncell *head;  // Linked list of ncells
+    int mark_stamp;
 } s_scplx;
 
 
@@ -18,8 +19,8 @@ typedef struct ncell {  // Must live in heap
     struct ncell *opposite[4];
     struct ncell *next;  // Linked list of cells
     struct ncell *prev;
-    int mark;  // Used to mark particular ncells
-    int count;   // ID
+    int mark_token;  // Used to mark particular ncells: mark_token == mark_stamp
+    // int count;   // ID
 } s_ncell;
 
 
@@ -31,11 +32,7 @@ void free_complex(s_scplx *setup);
 void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *setup);
 
-void initialize_ncells_counter(const s_scplx *setup);
-void initialize_ncells_mark(const s_scplx *setup);
-void print_marked(const s_scplx *setup);
-int count_marked(const s_scplx *setup);
-void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int *v_localid, s_list *out);
+int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int *v_localid, s_list *out);
 
 void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point out[4]);
 void extract_ids_face(const s_ncell *ncell, int dim_face, const int *v_localid, int *out);

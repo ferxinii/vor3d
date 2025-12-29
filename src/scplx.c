@@ -69,7 +69,7 @@ void print_scomplex(const s_scplx *setup)
     s_ncell *current = setup->head;
     int ii = 0;
     while (current) {
-        printf("%d  |  p : %p  |  prev : %p  |  marked : %d  |  vertex_ids :", ii, (void*)current, (void*)current->prev, current->mark);
+        printf("%d  |  p : %p  |  prev : %p  |  marked : %d  |  vertex_ids :", ii, (void*)current, (void*)current->prev, current->mark_token);
         for (int jj=0; jj<4; jj++) {
             printf(" %d", current->vertex_id[jj]);
         }
@@ -138,60 +138,11 @@ void print_scomplex(const s_scplx *setup)
 // }
 
 
-void initialize_ncells_counter(const s_scplx *setup)
-{
-    s_ncell *current = setup->head;
-    int ii = 0;
-    while (current) {
-        current->count = ii;
-        current = current->next;
-        ii++;
-    }
-}
-
-
-void initialize_ncells_mark(const s_scplx *setup)
-{  
-    s_ncell *current = setup->head;
-    for (int ii=0; ii<setup->N_ncells; ii++) {
-        current->mark = 0;
-        current = current->next;
-    }
-}
-
-
-void print_marked(const s_scplx *setup)
-{
-    puts("Marked node ids:");
-    s_ncell *current = setup->head;
-    for (int ii=0; ii<setup->N_ncells; ii++) {
-        if (current->mark == 1) {
-            printf("    %d\n", ii);
-        }
-        current = current->next;
-    }
-}
-
-
-int count_marked(const s_scplx *setup) 
-{   
-    int count = 0;
-    s_ncell *current = setup->head;
-    for (int ii=0; ii<setup->N_ncells; ii++) {
-        if (current->mark == 1) {
-            count++;
-        }
-        current = current->next;
-    }
-    return count;
-}
-
 
 void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point out[4])
 {
-    for (int ii=0; ii<4; ii++) {
+    for (int ii=0; ii<4; ii++)
         out[ii] = setup->points.p[ncell->vertex_id[ii]];
-    }
 }
 
 
@@ -265,39 +216,46 @@ s_ncell *next_ncell_ridge_cycle(const s_ncell *ncell, int v_localid_main, int v_
 }
 
 
-void mark_ncells_incident_face_STEP(const s_ncell *ncell, int dim_face, const int v_localid[3-dim_face])
+static int new_mark_stamp(s_scplx *setup)
 {
-    for (int ii=0; ii<4; ii++) {
-        if (inarray(v_localid, 3-dim_face, ii)) {
-            s_ncell *adjacent_ncell = ncell->opposite[ii];  // This ncell should already share the face!
-            if (adjacent_ncell && adjacent_ncell->mark == 0) {
-                adjacent_ncell->mark = 1;
-                
-                int new_v_localid[3-dim_face];
-                face_localid_of_adjacent_ncell(ncell, dim_face, v_localid, ii, new_v_localid);
-
-                // Recursion
-                mark_ncells_incident_face_STEP(adjacent_ncell, dim_face, new_v_localid);
-            }
-        }
-    }
+    setup->mark_stamp++;
+    return setup->mark_stamp;
 }
 
-
-void mark_ncells_incident_face(const s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_list *out)
+static int mark_ncells_incident_face_STEP(int mark_stamp, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_list *out_ncell_ptrs)
 {
+    for (int ii=0; ii<4; ii++) if (inarray(v_localid, 3-dim_face, ii)) {
+        s_ncell *adjacent_ncell = ncell->opposite[ii];  
+        if (adjacent_ncell && adjacent_ncell->mark_token != mark_stamp) {
+            adjacent_ncell->mark_token = mark_stamp;
+            if (!list_push(out_ncell_ptrs, &adjacent_ncell)) return 0;
+            
+            int new_v_localid[3-dim_face];
+            face_localid_of_adjacent_ncell(ncell, dim_face, v_localid, ii, new_v_localid);
+
+            /* Recursion: */
+            if (!mark_ncells_incident_face_STEP(mark_stamp, adjacent_ncell, dim_face, new_v_localid, out_ncell_ptrs)) return 0;
+        }
+    }
+    return 1;
+}
+
+int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_list *out_ncell_ptrs)
+{   /* 0 ERROR, 1 OK */
     if (dim_face < 0 || dim_face >= 3) {
         fprintf(stderr, "dim_face must be >= 0 && < 3\n");
         exit(1);
     }
 
-    out->N = 0;
-    list_push(out, ncell);
-    // initialize_ncells_mark(setup);
-    // ncell->mark = 1;
+    int mark_stamp = new_mark_stamp(setup);
+    ncell->mark_token = mark_stamp;
+
+    out_ncell_ptrs->N = 0;
+    if (!list_push(out_ncell_ptrs, &ncell)) return 0;
     
-    // Recursion:
-    mark_ncells_incident_face_STEP(ncell, dim_face, v_localid);
+    /* Recursion: */
+    if (!mark_ncells_incident_face_STEP(mark_stamp, ncell, dim_face, v_localid, out_ncell_ptrs)) return 0;
+    return 1;
 }
 
 

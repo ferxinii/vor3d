@@ -249,9 +249,8 @@ void print_vcell(const s_vcell *vcell)
 void print_vdiagram(const s_vdiagram *vdiagram)
 {
     puts("------- VORONOI DIAGRAM ------");
-    for (int ii=0; ii<vdiagram->seeds.N; ii++) {
+    for (int ii=0; ii<vdiagram->seeds.N; ii++)
         print_vcell(&vdiagram->vcells[ii]);
-    }
     puts("------------------------------");
 }
 
@@ -266,39 +265,17 @@ int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenera
 }
 
 
-
 /* Main functions to construct vdiagram */
-static int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, double EPS_degenerate, double TOL,  s_list *vertices)
+static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, double EPS_degenerate, double TOL,  s_list *vertices)
 {   /* 1: added, 0: not added, -1: error */
     s_point v[4];
-    extract_vertices_ncell(setup, ncell, v);
-    assert(orientation_robust(v, v[3]) != 0);
-
-    // s_point a = subtract_points(v[1], v[0]);
-    // s_point b = subtract_points(v[2], v[0]);
-    // s_point c = subtract_points(v[3], v[0]);
-    //
-    // double a2 = norm_squared(a);
-    // double b2 = norm_squared(b);
-    // double c2 = norm_squared(c);
-    // 
-    // s_point bc = cross_prod(b, c);
-    // s_point ca = cross_prod(c, a);
-    // s_point ab = cross_prod(a, b);
-    //
-    // double f = 2 * dot_prod(ab, c);
-    // if (fabs(f) < EPS_degenerate) goto error_circumsphere;
-    // f = 1.0 / f;
-    //
-    // s_point circumsphere = {{{
-    //     f * ( a2 * bc.x + b2 * ca.x + c2 * ab.x) + v[0].x,
-    //     f * ( a2 * bc.y + b2 * ca.y + c2 * ab.y) + v[0].y,
-    //     f * ( a2 * bc.z + b2 * ca.z + c2 * ab.z) + v[0].z,
-    // }}};
-    //
+    extract_vertices_ncell(dt, ncell, v);
 
     s_point circumcentre;
-    if (!circumcentre_from_points(v, EPS_degenerate, &circumcentre)) goto error_circumsphere;
+    if (!circumcentre_tetrahedron(v, EPS_degenerate, &circumcentre)) return 0;
+    /* From what I have found, it is unavoidable to have near-degenerate ncells (or completely degenerate).
+     * Trying to fit a plane and then find the circumcentre in the projected plane 
+     * gives me strangle results... I find that skipping those ncells works best */
 
     /* Check if vertex already exists */
     const double TOL2 = TOL*TOL;
@@ -311,61 +288,37 @@ static int add_vvertex_from_ncell(const s_scplx *setup, const s_ncell *ncell, do
     if (!list_push(vertices, &circumcentre)) goto error_list;
     return 1;
 
-    error_circumsphere:
-        fprintf(stderr, "Error in add_vvertex_from_ncell: Could not compute circumsphere.\n");
-        /* printf("DEBUG: EPS = %g, f = %f\n", EPS_degenerate, f); */
-        // printf("%d: %g, %g, %g\n", ncell->vertex_id[0], v[0].x, v[0].y, v[0].z);
-        // printf("%d: %g, %g, %g\n", ncell->vertex_id[1], v[1].x, v[1].y, v[1].z);
-        // printf("%d: %g, %g, %g\n", ncell->vertex_id[2], v[2].x, v[2].y, v[2].z);
-        // printf("%d: %g, %g, %g\n", ncell->vertex_id[3], v[3].x, v[3].y, v[3].z);
-        // printf("vol: %g\n", signed_volume_tetra(v));
-        // printf("orient3d: %d\n", orientation_robust(v, v[3]));
-        return 0;
     error_list:
         fprintf(stderr, "Error in add_vvertex_from_ncell. List problem.\n");
         return -1;
 }
 
-static s_convh convhull_from_marked_ncells(const s_scplx *setup, const s_bpoly *bp, double EPS_degenerate, double TOL, s_list *buff_v)
+static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_list *incident, double EPS_degenerate, double TOL, s_list *buff_v)
 {
     s_list *vertices = buff_v;
-
     vertices->N = 0;
-    s_ncell *current = setup->head;
-    for (int ii=0; ii<setup->N_ncells; ii++, current = current->next) {
-        if (current->mark) 
-            if (add_vvertex_from_ncell(setup, current, EPS_degenerate, TOL, vertices) == -1) goto error;
-    }
 
-    /* Snap point back into bounding polyhedron if outside. 
-     * This is a limitation of mirroring approach used to bound vdiagram? Or something deeper? */
-    for (unsigned ii=0; ii<vertices->N; ii++) {
-        s_point p;
-        if (!list_get_value(vertices, ii, &p)) goto error;
-        if (test_point_in_convhull(&bp->convh, p, EPS_degenerate, TOL) == TEST_OUT) {
-            s_point tmp;
-            double distance = find_closest_point_on_bp(bp, p, EPS_degenerate, &tmp);
-            if (distance > TOL) {
-                // printf("DEBUG: Snap! %g\n", distance);
-                if (!list_change_entry(vertices, ii, &tmp)) goto error;
-            }
-        }
+    for (unsigned ii=0; ii<incident->N; ii++) {
+        s_ncell *ncell;
+        list_get_value(incident, ii, &ncell);
+        if (add_vvertex_from_ncell(dt, ncell, EPS_degenerate, TOL, vertices) == -1) goto error;
     }
 
     s_points points = {.N = vertices->N, .p = vertices->items};  /* No need to free, external buffer */
     s_convh ch;
     if (convhull_from_points(&points, EPS_degenerate, TOL, &ch) != 1) goto error;
-    else return ch;
+    return ch;
 
     error:
         fprintf(stderr, "Error in convhull_from_marked_ncells.\n");
         return convhull_NAN;
 }
 
-static s_vcell extract_voronoi_cell(const s_scplx *setup, const s_bpoly *bp, int seed_id, double EPS_degenerate, double TOL, s_list *buff_v)
+
+static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_list *out)
 {
     /* Find an ncell with this vertex */
-    s_ncell *ncell = setup->head;
+    s_ncell *ncell = dt->head;
     int v_localid = id_where_equal(ncell->vertex_id, 4, seed_id);
     while (v_localid == -1) { 
         ncell = ncell->next;
@@ -378,12 +331,20 @@ static s_vcell extract_voronoi_cell(const s_scplx *setup, const s_bpoly *bp, int
     for (int ii=0, kk=0; ii<4; ii++) 
         if (ii != v_localid) v_localid_COMP[kk++] = ii;
 
-    /* Mark incident ncells to this point */
-    mark_ncells_incident_face(setup, ncell, 0, v_localid_COMP);
+    /* Find incident ncells to this point */
+    if (!ncells_incident_face((s_scplx*)dt, ncell, 0, v_localid_COMP, out)) return 0;
+    return 1;
+}
+
+
+static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_degenerate, double TOL, s_list *buff_incident, s_list *buff_v)
+{
+    s_list *incident = buff_incident;
+    if (!incident_ncells_to_vertex(dt, seed_id, incident)) return (s_vcell){0};
 
     s_vcell out = {0};
     out.seed_id = seed_id;
-    out.convh = convhull_from_marked_ncells(setup, bp, EPS_degenerate, TOL, buff_v);
+    out.convh = convhull_from_incident_ncells(dt, incident, EPS_degenerate, TOL, buff_v);
     if (!convhull_is_valid(&out.convh)) {
         fprintf(stderr, "extract_voronoi_cell: Error extracting convhull of cell.\n");
         return (s_vcell){0};
@@ -393,29 +354,105 @@ static s_vcell extract_voronoi_cell(const s_scplx *setup, const s_bpoly *bp, int
 }
 
 
-s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
-{   /* copy of bpoly inside */
-    initialize_ncells_counter(setup);
+static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double EPS_degenerate, double TOL) 
+{   /* Vertex may be outside of bp... Limitation of mirroring approach used to bound vdiagram? */
+    for (int ii=0; ii<ch->points.N; ii++) {
+        if (test_point_in_convhull(&bp->convh, ch->points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
+            s_point tmp;
+            double distance = find_closest_point_on_bp(bp, ch->points.p[ii], EPS_degenerate, &tmp);
+            if (distance > 10*TOL) return true;
+        }
+    }
+    return false;
+}
 
-    s_vdiagram out = malloc_vdiagram(setup, Nreal);
+
+static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_list *buff_incident)
+{
+    s_convh I;
+    int i = intersection_convhulls(&vd->vcells[vid].convh, &bp->convh, EPS_degenerate, TOL, &I);
+    if (i == 1) {
+        free_convhull(&vd->vcells[vid].convh);
+        vd->vcells[vid].convh = I;
+    }
+
+    /* Clip with neighboring vcells ! */
+    bool *mask = calloc(Nreal, sizeof(bool));
+    if (!mask) goto error;
+    mask[vid] = true;
+    s_list *incident_ncells = buff_incident;
+    if (!incident_ncells_to_vertex(dt, vid, incident_ncells)) goto error;
+
+    for (unsigned ii=0; ii<incident_ncells->N; ii++) {
+        s_ncell *ncell; list_get_value(incident_ncells, ii, &ncell);
+        for (int jj=0; jj<3; jj++) 
+        if (ncell->vertex_id[jj] < Nreal && !mask[ncell->vertex_id[jj]]) {
+            mask[ncell->vertex_id[jj]] = true;
+            s_point plane_n = subtract_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]);
+            s_point plane_p = scale_point(sum_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]), 0.5);
+            s_point plane[3]; if (!plane_from_point_normal(plane_p, plane_n, EPS_degenerate, plane)) goto error;
+
+            s_convh clipped;
+            if (clip_convhull_halfspace(&vd->vcells[vid].convh, plane, EPS_degenerate, TOL, &clipped) == 1) {
+                free_convhull(&vd->vcells[vid].convh);
+                vd->vcells[vid].convh = clipped;
+            }
+        }
+    }
+    
+    free(mask);
+
+    vd->vcells[vid].volume = volume_convhull(&vd->vcells[vid].convh);
+    return 1;
+
+    error:
+        free(mask);
+        return 0;
+}
+
+
+
+
+s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
+{   /* copy of bpoly inside */
+    s_list spiking_ids = list_initialize(sizeof(int), 10);      /* Id of spiking cells */
+    s_list buff_v = list_initialize(sizeof(s_point), 10);       /* Place to store vertices of each cell before convhull */
+    s_list buff_adjacent = list_initialize(sizeof(s_ncell*), 10);  
+    if (!spiking_ids.items || !buff_v.items || !buff_adjacent.items) goto error;
+
+    s_vdiagram out = malloc_vdiagram(dt, Nreal);
     out.bpoly = bpoly_copy(bpoly);
     
-    s_list buff_v = list_initialize(sizeof(s_point), 10);  /* Place to store vertices of each cell before convhull */
+    /* Construct vcells */
     for (int ii=0; ii<Nreal; ii++) {
-        out.vcells[ii] = extract_voronoi_cell(setup, bpoly, ii, EPS_degenerate, TOL, &buff_v);
+        out.vcells[ii] = extract_voronoi_cell(dt, ii, EPS_degenerate, TOL, &buff_adjacent, &buff_v);
         if (!convhull_is_valid(&out.vcells[ii].convh)) {
             fprintf(stderr, "voronoi_from_delaunay_3d: Could not construct vdiagram.\n");
             goto error;
         }
+        if (vcell_spikes_outside_bp(bpoly, &out.vcells[ii].convh, EPS_degenerate, TOL)) {
+            if (!list_push(&spiking_ids, &ii)) goto error;
+        }
     }
 
+    /* Clip spiking cells */
+    for (unsigned ii=0; ii<spiking_ids.N; ii++) {
+        int vid; list_get_value(&spiking_ids, ii, &vid);
+        clip_vcell(dt, bpoly, &out, vid, Nreal, EPS_degenerate, TOL, &buff_adjacent);
+    }
+
+
+    free_list(&spiking_ids);
     free_list(&buff_v);
+    free_list(&buff_adjacent);
     return out;
 
     error:
-        free_vdiagram(&out);
+        free_list(&spiking_ids);
         free_list(&buff_v);
-        return out;
+        free_list(&buff_adjacent);
+        free_vdiagram(&out);
+        return (s_vdiagram){0};
 }
 
 

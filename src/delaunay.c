@@ -590,6 +590,15 @@ s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
     stack_free(&stack);  
     remove_big_tetra(&setup);
 
+    // s_ncell *current = setup.head;
+    // for (int ii=0; ii<setup.N_ncells; ii++) {
+    //     s_point v[4];
+    //     extract_vertices_ncell(&setup, current, v);
+    //     double vol = fabs(signed_volume_tetra(v));
+    //     if (vol<1e-10) 
+    //         printf("%d: vol = %g\n", ii, vol);
+    //     current = current->next;
+    // }
     // printf("DEBUG: is_delaunay = %d\n", is_delaunay_3d(&setup));
     // plot_dt_3d_differentviews(&setup, "dt.png", NULL);
     return setup;
