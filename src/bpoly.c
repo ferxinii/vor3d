@@ -112,7 +112,7 @@ s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot)
     homotethy_points(&bpoly.convh.points, s, pivot);
     const double s2 = s * s;  /* s^2, since normal comes from cross-product of triangle sides */
     for (int ii=0; ii<convh->Nf; ii++)
-        convh->fnormals[ii] = scale_point(convh->fnormals[ii], s2);
+        bpoly.convh.fnormals[ii] = scale_point(bpoly.convh.fnormals[ii], s2);
 
 
     extract_dmax_bp(&bpoly);
