@@ -150,7 +150,7 @@ s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, double EPS_degenerat
 {
     s_points new_p = copy_points(&bp->convh.points);
     s_point new_p_average = point_average(&new_p);
-    scale_points(&new_p, factor, new_p_average);
+    homotethy_points(&new_p, factor, new_p_average);
     s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
     free_points(&new_p);
     return out;
