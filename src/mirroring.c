@@ -204,7 +204,7 @@ int extend_sites_mirroring_initial(const s_bpoly *bp, double EPS_degenerate, dou
         s_point face[3]; 
         convh_get_face(&bp->convh, ff, face);
         s_point normal = normalize_vec(bp->convh.fnormals[ff], EPS_degenerate);
-        if (!point_is_valid(normal)) goto error;
+        if (!point_is_valid(normal)) continue;
         double d_plane =  dot_prod(normal, face[0]);
 
         for (int jj=0; jj<inout_seeds->N; jj++) {
