@@ -12,6 +12,13 @@
 #include <stdbool.h>
 
 
+void free_bpoly(s_bpoly *bpoly)
+{
+    free_convhull(&bpoly->convh);
+    memset(bpoly, 0, sizeof(s_bpoly));
+}
+
+
 static void extract_dmax_bp(s_bpoly *bpoly)
 {
     double dmax = 0; 
@@ -95,6 +102,28 @@ s_bpoly bpoly_from_convh(const s_convh *convh)
 }
 
 
+s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot)
+{
+    s_bpoly bpoly;
+    bpoly.convh = copy_convhull(convh);
+    if (!convhull_is_valid(&bpoly.convh)) goto error;
+    
+    /* Scale points in-place */
+    scale_points(&bpoly.convh.points, s, pivot);
+
+    extract_dmax_bp(&bpoly);
+    bpoly.CM = point_average(&bpoly.convh.points);
+
+    extract_min_max_coord(&bpoly);
+    bpoly.volume = volume_convhull(&bpoly.convh);
+    return bpoly;
+
+    error:
+        memset(&bpoly, 0, sizeof(s_bpoly));
+        return bpoly;
+}
+
+
 
 s_bpoly bpoly_copy(const s_bpoly *in)
 {
@@ -109,29 +138,15 @@ s_bpoly bpoly_copy(const s_bpoly *in)
 }
 
 
-void free_bpoly(s_bpoly *bpoly)
-{
-    free_convhull(&bpoly->convh);
-    memset(bpoly, 0, sizeof(s_bpoly));
-}
 
 
-static void scale_points(s_points *points, double s)
-{
-    s_point CM = point_average(points);
-    s_point b = {{{(1-s)*CM.x, (1-s)*CM.y, (1-s)*CM.z}}};
-    for (int ii=0; ii<points->N; ii++) {
-        points->p[ii].x = s*points->p[ii].x + b.x;
-        points->p[ii].y = s*points->p[ii].y + b.y;
-        points->p[ii].z = s*points->p[ii].z + b.z;
-    }
-}
 
 
 s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, double EPS_degenerate, double TOL)
 {
     s_points new_p = copy_points(&bp->convh.points);
-    scale_points(&new_p, factor);
+    s_point new_p_average = point_average(&new_p);
+    scale_points(&new_p, factor, new_p_average);
     s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
     free_points(&new_p);
     return out;
