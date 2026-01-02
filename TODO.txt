@@ -1,4 +1,5 @@
-[ ] vor3d breaks for low point count? Check / improve this?
+[ ] are seeds being fred in vor3d.c?
+
 [ ] Check memory usage: Is everything being fred?
 [ ] Error managing
 [ ] Mark ncells: Implement a more efficient approach. (visit_id? so no need to reset to 0s), also return a list of ncells so I dont have to run over all ncells each time?

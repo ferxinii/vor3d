@@ -60,7 +60,7 @@ static void extract_min_max_coord(s_bpoly *bpoly)
 
 
 s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double TOL)
-{   // New copy of points inside!
+{   /* New copy of points inside! */
     s_bpoly bpoly;
     if (convhull_from_points(points, EPS_degenerate, TOL, &bpoly.convh) != 1) goto error;
     extract_dmax_bp(&bpoly);
@@ -97,34 +97,20 @@ s_bpoly bpoly_from_convh(const s_convh *convh)
     return bpoly;
 
     error:
+        fprintf(stderr, "Error bpoly_from_convh\n");
         memset(&bpoly, 0, sizeof(s_bpoly));
         return bpoly;
 }
 
 
-s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot)
+s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot, double EPS_degenerate, double TOL)
 {
-    s_bpoly bpoly;
-    bpoly.convh = copy_convhull(convh);
-    if (!convhull_is_valid(&bpoly.convh)) goto error;
-    
-    /* Scale points in-place */
-    homotethy_points(&bpoly.convh.points, s, pivot);
-    const double s2 = s * s;  /* s^2, since normal comes from cross-product of triangle sides */
-    for (int ii=0; ii<convh->Nf; ii++)
-        bpoly.convh.fnormals[ii] = scale_point(bpoly.convh.fnormals[ii], s2);
+    s_points new_p = copy_points(&convh->points);
+    homotethy_points(&new_p, s, pivot);
 
-
-    extract_dmax_bp(&bpoly);
-    bpoly.CM = point_average(&bpoly.convh.points);
-
-    extract_min_max_coord(&bpoly);
-    bpoly.volume = volume_convhull(&bpoly.convh);
-    return bpoly;
-
-    error:
-        memset(&bpoly, 0, sizeof(s_bpoly));
-        return bpoly;
+    s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
+    free_points(&new_p);
+    return out;
 }
 
 
@@ -146,11 +132,11 @@ s_bpoly bpoly_copy(const s_bpoly *in)
 
 
 
-s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, double EPS_degenerate, double TOL)
+s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, s_point pivot, double EPS_degenerate, double TOL)
 {
     s_points new_p = copy_points(&bp->convh.points);
-    s_point new_p_average = point_average(&new_p);
-    homotethy_points(&new_p, factor, new_p_average);
+    // s_point new_p_average = point_average(&new_p);
+    homotethy_points(&new_p, factor, pivot);
     s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
     free_points(&new_p);
     return out;
@@ -161,7 +147,7 @@ s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume, dou
 {
     double F = objective_volume / (bp)->volume;
     double s = cbrt(F);
-    return copy_bpoly_scaled(bp, s, EPS_degenerate, TOL);
+    return copy_bpoly_scaled(bp, s, point_average(&bp->convh.points), EPS_degenerate, TOL);
 }
 
 
