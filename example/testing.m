@@ -2,34 +2,48 @@ clear all
 
 
 %%
-[v, f] = loadHull("build/hole.m");
-
-trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'Cyan', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
-hold on;
-
-P = readmatrix("build/hole.txt");
+P = readmatrix("problematic_sphere.csv");
 
 scatter3(P(:,1), P(:,2), P(:,3), "green"); hold on;
 P(:,4) = P(:,4)+1;
 
 %%
+[v, f] = loadHull("build/hole.m");
+trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'Cyan', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
+hold on;
+
+
+P = readmatrix("build/nonmani.txt");
+scatter3(v(P+1,1), v(P+1,2), v(P+1,3), "green"); hold on;
+
+
+
+%%
 
 [v, f] = loadHull("build/prev.m");
-
 trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'red', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
 hold on;
-P = readmatrix("build/hole.txt");
 
-scatter3(P(:,1), P(:,2), P(:,3), "green"); hold on;
-P(:,4) = P(:,4)+1;
- 
+P = readmatrix("build/nonmani.txt");
+scatter3(v(P+1,1), v(P+1,2), v(P+1,3), "green"); hold on;
+
+%%
+[v, f] = loadHull("build/deleted.m");
+trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'red', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
+hold on;
+
+%%
+
 k = readmatrix("build/visible.txt");
 scatter3(v(k(:)+1,1), v(k(:)+1,2), v(k(:)+1,3), 'blue'); hold on;
+
+%%
 
 h = readmatrix("build/horizon.txt");
 scatter3(v(h(:)+1,1), v(h(:)+1,2), v(h(:)+1,3), 'yellow'); hold on;
 
-a = 102;
+%%
+a = 197;
 scatter3(v(a,1), v(a,2), v(a,3), 'red'); 
 
 %%

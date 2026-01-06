@@ -356,11 +356,12 @@ static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_d
 
 static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double EPS_degenerate, double TOL) 
 {   /* Vertex may be outside of bp... Limitation of mirroring approach used to bound vdiagram? */
+    double TOL_SPIKE = TOL * 10;
     for (int ii=0; ii<ch->points.N; ii++) {
         if (test_point_in_convhull(&bp->convh, ch->points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
             s_point tmp;
             double distance = find_closest_point_on_bp(bp, ch->points.p[ii], EPS_degenerate, &tmp);
-            if (distance > 10*TOL) return true;
+            if (distance > TOL_SPIKE) return true;
         }
     }
     return false;
