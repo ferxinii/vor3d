@@ -1,4 +1,6 @@
 [ ] are seeds being fred in vor3d.c?
+[ ] bpoly poisson disc sampling why force N > 4?
+[ ] example is getting stuck when generating lung statistics in should_mirror
 
 [ ] Check memory usage: Is everything being fred?
 [ ] Error managing
