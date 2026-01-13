@@ -228,10 +228,12 @@ s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
         }
     }
 
-    while (samples.N < 4) {
-        x = random_point_inside_convhull(&bpoly->convh, EPS_degenerate, bpoly->min, bpoly->max);
-        samples.p[samples.N++] = x;
-    }
+    // while (samples.N < 4) {
+    //     x = random_point_inside_convhull(&bpoly->convh, EPS_degenerate, bpoly->min, bpoly->max);
+    //     samples.p[samples.N++] = x;
+    // }
+    // /* Ensure at least there is one point */
+    // if(samples.N == 0) samples.p[samples.N++] = bpoly->CM;
 
     s_points out = copy_points(&samples);
     return out;

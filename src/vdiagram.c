@@ -227,9 +227,10 @@ static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
 
 void free_vdiagram(s_vdiagram *vdiagram)
 {
-    for (int ii=0; ii<vdiagram->seeds.N; ii++)
-        if (vdiagram->vcells[ii].convh.Nf != 0) free_convhull(&vdiagram->vcells[ii].convh);
-    free(vdiagram->vcells);
+    if (vdiagram->vcells)
+        for (int ii=0; ii<vdiagram->seeds.N; ii++)
+            if (convhull_is_valid(&vdiagram->vcells[ii].convh)) free_convhull(&vdiagram->vcells[ii].convh);
+    if (vdiagram->vcells) free(vdiagram->vcells);
     free_points(&vdiagram->seeds);
     free_bpoly(&vdiagram->bpoly);
     memset(vdiagram, 0, sizeof(s_vdiagram));
@@ -277,13 +278,14 @@ static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, doubl
      * Trying to fit a plane and then find the circumcentre in the projected plane 
      * gives me strangle results... I find that skipping those ncells works best */
 
-    /* Check if vertex already exists */
-    const double TOL2 = TOL*TOL;
-    for (unsigned ii=0; ii<vertices->N; ii++) {  
-        s_point p; 
-        if (!list_get_value(vertices, ii, &p)) goto error_list;
-        if (distance_squared(circumcentre, p) < TOL2) return 0;
-    }
+    /* Check if vertex already exists */  /* I DONT THINK I NEED THIS! */
+    (void)TOL; 
+    // const double TOL2 = TOL*TOL;
+    // for (unsigned ii=0; ii<vertices->N; ii++) {  
+    //     s_point p; 
+    //     if (!list_get_value(vertices, ii, &p)) goto error_list;
+    //     if (distance_squared(circumcentre, p) < TOL2) return 0;
+    // }
 
     if (!list_push(vertices, &circumcentre)) goto error_list;
     return 1;
@@ -350,13 +352,14 @@ static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_d
         return (s_vcell){0};
     }
     out.volume = volume_convhull(&out.convh);
+
     return out;
 }
 
 
 static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double EPS_degenerate, double TOL) 
 {   /* Vertex may be outside of bp... Limitation of mirroring approach used to bound vdiagram? */
-    double TOL_SPIKE = TOL * 10;
+    double TOL_SPIKE = TOL * 1;
     for (int ii=0; ii<ch->points.N; ii++) {
         if (test_point_in_convhull(&bp->convh, ch->points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
             s_point tmp;
@@ -370,6 +373,7 @@ static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double
 
 static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_list *buff_incident)
 {
+    /* Clip with bounding polyhedron */
     s_convh I;
     int i = intersection_convhulls(&vd->vcells[vid].convh, &bp->convh, EPS_degenerate, TOL, &I);
     if (i == 1) {
@@ -386,7 +390,7 @@ static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int 
 
     for (unsigned ii=0; ii<incident_ncells->N; ii++) {
         s_ncell *ncell; list_get_value(incident_ncells, ii, &ncell);
-        for (int jj=0; jj<3; jj++) 
+        for (int jj=0; jj<4; jj++) 
         if (ncell->vertex_id[jj] < Nreal && !mask[ncell->vertex_id[jj]]) {
             mask[ncell->vertex_id[jj]] = true;
             s_point plane_n = subtract_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]);
@@ -400,9 +404,8 @@ static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int 
             }
         }
     }
-    
-    free(mask);
 
+    free(mask);
     vd->vcells[vid].volume = volume_convhull(&vd->vcells[vid].convh);
     return 1;
 
@@ -442,7 +445,7 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int
         clip_vcell(dt, bpoly, &out, vid, Nreal, EPS_degenerate, TOL, &buff_adjacent);
     }
 
-
+    
     free_list(&spiking_ids);
     free_list(&buff_v);
     free_list(&buff_adjacent);

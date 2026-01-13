@@ -381,8 +381,9 @@ static void flip44(s_scplx *setup, s_dstack *stack, s_ncell *ncell, int id_ridge
             inarray(FLIP23_PTRS[ii]->vertex_id, 4, d) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, p)) {
             nc5 = FLIP23_PTRS[ii];
             if (stack) { stack_push(stack, FLIP23_PTRS[(ii+1)%3]); stack_push(stack, FLIP23_PTRS[(ii+2)%3]); }
-            if (OUT_PTRS) { OUT_PTRS[0] = FLIP23_PTRS[(ii+1)%3]; OUT_PTRS[1] = FLIP23_PTRS[(ii+1)%3]; }
+            if (OUT_PTRS) { OUT_PTRS[0] = FLIP23_PTRS[(ii+1)%3]; OUT_PTRS[1] = FLIP23_PTRS[(ii+2)%3]; }
             debug_found = 1;
+            break;
         }
     }
     assert(debug_found == 1 && "Could not perform flip44...");
@@ -450,7 +451,7 @@ static s_scplx initialize_setup(const s_points *points)
 static int determine_case(const s_point vertices_face[3], s_point p, s_point d) 
 {
     if (test_point_in_triangle_3D(vertices_face, p, 0, 0) == TEST_BOUNDARY) return 4;
-    e_intersect_type type = test_segment_triangle_intersect_3D((s_point[2]){p, d}, vertices_face, 0, 0);
+    e_intersect_type type = test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0, 0);
     if (type == INTERSECT_DEGENERATE) return 3;
     if (type == INTERSECT_EMPTY) return 2;
     if (type == INTERSECT_NONDEGENERATE) return 1;
@@ -487,7 +488,7 @@ static int flip_tetrahedra(s_scplx *setup, s_dstack *stack, s_ncell *ncell, int 
                 return 1;
             } else return 0;
         case 4:
-            fprintf(stderr, "delaunay.c: flip_tetrahedra: CASE 4... UNSURE, UNTESTED");
+            fprintf(stderr, "DEBUG delaunay.c: flip_tetrahedra: CASE 4... UNSURE, UNTESTED\n");
             flip23(setup, stack, ncell, opp_cell_id, opp_face_localid, NULL);
             return 1;
     }
@@ -584,12 +585,14 @@ s_scplx construct_dt_3d(const s_points *points, double TOL_duplicates)
 
     int ii = 4;  /* First 4 are big tetra, which already is inserted */
     while (ii < setup.points.N) {
+        /* If insert_one_point fails, it means that point ii is not added, so no need to increment ii */
         if (insert_one_point(&setup, ii, &stack, TOL_duplicates)) ii++;
     }
     
     stack_free(&stack);  
     remove_big_tetra(&setup);
 
+    // /* Debugging */
     // s_ncell *current = setup.head;
     // for (int ii=0; ii<setup.N_ncells; ii++) {
     //     s_point v[4];

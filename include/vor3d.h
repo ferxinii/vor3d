@@ -21,9 +21,7 @@ extern void generate_file_tetrahedron_bp(const char *filename, double length);
 extern void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi);
 
 
-// VD_3D.C
-extern void clear_volumes_file(char *fname);  // Used for testing output volumes
-extern void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id);
-extern void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
+// VDIAGRAM.C
+// extern void plot_vdiagram_auto(s_vdiagram *vdiagram, char *f_name, int max_files);
 
 #endif

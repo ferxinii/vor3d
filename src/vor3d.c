@@ -17,10 +17,9 @@ static int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd, double max_rel
     double sum_vol = 0;
     for (int ii=0; ii<vd->seeds.N; ii++) {
         if (vd->vcells[ii].volume <= 0) {
-            printf("NEGATIVE VOLUME? %g\n", vd->vcells[ii].volume);
-            print_vcell(&vd->vcells[ii]);
+            fprintf(stderr, "vcell %d has zero or negative volume: %g\n", ii, vd->vcells[ii].volume);
+            return 0;
         }
-        // assert(vd->vcells[ii].volume > 0);
         sum_vol += vd->vcells[ii].volume;
     }
 
@@ -69,7 +68,8 @@ static s_points fixed_generator(const s_bpoly *bp, seed_userdata ud)
 
 static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud) {
     double *bp_centroid = (double*)bp->CM.coords;
-    if (isnan(ud.generator.pds.f_radius_poiss(bp_centroid, ud.generator.pds.f_params))) {  /* Check if single cell */
+    /* Check if function returns NAN. If so, generate a single seed / cell */
+    if (isnan(ud.generator.pds.f_radius_poiss(bp_centroid, ud.generator.pds.f_params))) {  
         s_point *p = malloc(sizeof(s_point)); 
         (*p).x = bp_centroid[0]; (*p).y = bp_centroid[1]; (*p).z = bp_centroid[2];
         return (s_points){ .N = 1, .p = p };
@@ -83,7 +83,11 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
 {
     s_vdiagram vd = {0};
     for (int ii = 0; ii < max_tries; ii++) {
-        if (ii > 0) fprintf(stderr, "Retrying to build voronoi diagram. (%d / %d)\n", ii+1, max_tries);
+        if (ii > 0) { 
+            fprintf(stderr, "Retrying to build voronoi diagram. (%d / %d).\n", ii+1, max_tries);
+            fprintf(stderr, "Incrementing TOL and EPS by a factor of 10.\n");
+            ud.TOL *= 10;  ud.EPS_degenerate *= 10; 
+        }
         s_points seeds = f_seeds(bp, ud);
         int Nreal = seeds.N;
 
@@ -102,11 +106,25 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
         }
         
         if (valid_volumes(bp, &vd, vol_max_rel_diff)) {
-            return vd;
-        } // else return (s_vdiagram){0};
+            free_points(&seeds);
+            return vd;;
+        }
+        // else {
+        //     write_points_to_csv("seeds.csv", "w", &seeds);
+        //     for (int ii=0; ii<vd.seeds.N; ii++) {
+        //         char buff[256];
+        //         snprintf(buff, 256, "v%d.m", ii);
+        //         write_convhull_to_m(&vd.vcells[ii].convh, buff);
+        //     }
+        //     write_convhull_to_m(&vd.bpoly.convh, "bp.m");
+        //     // return (s_vdiagram){0};
+        //     exit(1);
+        // }
+        free_points(&seeds);
         free_vdiagram(&vd);
     }
-    return vd;
+
+    return (s_vdiagram){0};
 }
 
 

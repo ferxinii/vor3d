@@ -22,30 +22,38 @@ find_package(OpenMP REQUIRED)
 # Add the main library (vor3d) as a subdirectory
 add_subdirectory(../ vor3d_build)
 
-add_executable(example example.c)
+add_executable(example_basic example_basic.c)
+add_executable(example_lungs example_lungs.c)
 
-target_link_libraries(example PUBLIC vor3d
-        OpenMP::OpenMP_C
+target_link_libraries(example_basic 
+        PUBLIC vor3d OpenMP::OpenMP_C
+)
+target_link_libraries(example_lungs 
+        PUBLIC vor3d OpenMP::OpenMP_C
 )
 
-target_compile_options(example
+target_compile_options(example_basic 
+    PRIVATE
+        -Wall -Werror -Wextra -O3
+)
+target_compile_options(example_lungs
     PRIVATE
         -Wall -Werror -Wextra -O3
 )
 
 # ------ SETUP INPUT / OUTPUT -------
 # Create symlink for the lobes directory
-add_custom_command(TARGET example POST_BUILD
+add_custom_command(TARGET example_lungs POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E create_symlink
         ${CMAKE_CURRENT_SOURCE_DIR}/lobes
-        $<TARGET_FILE_DIR:example>/lobes
+        $<TARGET_FILE_DIR:example_lungs>/lobes
     COMMENT "Linking lobes directory into build"
 )
 # Create empty output directories
 foreach(dir plots virtual_population)
-    add_custom_command(TARGET example POST_BUILD
+    add_custom_command(TARGET example_lungs POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            $<TARGET_FILE_DIR:example>/${dir}
+            $<TARGET_FILE_DIR:example_lungs>/${dir}
         COMMENT "Creating empty directory: ${dir}"
     )
 endforeach()

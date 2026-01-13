@@ -113,9 +113,8 @@ hold on;
 trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'red', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
 hold on;
 
-%%
 [v, f] = loadHull("build/v2.m");
-trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'cyan', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
+trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'red', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
 
 
 
