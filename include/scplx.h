@@ -3,7 +3,6 @@
 
 #include <stdio.h>
 #include "points.h"
-#include "lists.h"
 
 typedef struct simplical_complex {  // May live in stack
     s_points points;  // N = (4 + n_points) 
@@ -32,7 +31,8 @@ void free_complex(s_scplx *setup);
 void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *setup);
 
-int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int *v_localid, s_list *out);
+typedef struct dynarray s_dynarray;
+int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int *v_localid, s_dynarray *out);
 
 void extract_vertices_ncell(const s_scplx *setup, const s_ncell *ncell, s_point out[4]);
 void extract_ids_face(const s_ncell *ncell, int dim_face, const int *v_localid, int *out);

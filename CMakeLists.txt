@@ -16,7 +16,6 @@ add_library(vor3d STATIC
     src/scplx.c
     src/vdiagram.c
     src/mirroring.c
-    src/lists.c
 )
 
 target_include_directories(vor3d

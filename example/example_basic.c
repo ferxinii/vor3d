@@ -81,6 +81,7 @@ int main(void)
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
     check_volume(&vd_tet);
+    free_vdiagram(&vd_tet);
     iterate(10000, MAX_TRIES, false);
     if (PLOT) plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
     // exit(1);

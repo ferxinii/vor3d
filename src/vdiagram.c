@@ -6,9 +6,8 @@
 #include "vdiagram.h"
 #include "convh.h"
 #include "bpoly.h"
-#include "lists.h"
+#include "dynarray.h"
 #include "gnuplotc.h"
-#include <math.h>
 #include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -267,7 +266,7 @@ int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenera
 
 
 /* Main functions to construct vdiagram */
-static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, double EPS_degenerate, double TOL,  s_list *vertices)
+static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, double EPS_degenerate, double TOL,  s_dynarray *vertices)
 {   /* 1: added, 0: not added, -1: error */
     s_point v[4];
     extract_vertices_ncell(dt, ncell, v);
@@ -287,22 +286,22 @@ static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, doubl
     //     if (distance_squared(circumcentre, p) < TOL2) return 0;
     // }
 
-    if (!list_push(vertices, &circumcentre)) goto error_list;
+    if (!dynarray_push(vertices, &circumcentre)) goto error_dynarray;
     return 1;
 
-    error_list:
-        fprintf(stderr, "Error in add_vvertex_from_ncell. List problem.\n");
+    error_dynarray:
+        fprintf(stderr, "Error in add_vvertex_from_ncell. dynarray problem.\n");
         return -1;
 }
 
-static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_list *incident, double EPS_degenerate, double TOL, s_list *buff_v)
+static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_dynarray *incident, double EPS_degenerate, double TOL, s_dynarray *buff_v)
 {
-    s_list *vertices = buff_v;
+    s_dynarray *vertices = buff_v;
     vertices->N = 0;
 
     for (unsigned ii=0; ii<incident->N; ii++) {
         s_ncell *ncell;
-        list_get_value(incident, ii, &ncell);
+        dynarray_get_value(incident, ii, &ncell);
         if (add_vvertex_from_ncell(dt, ncell, EPS_degenerate, TOL, vertices) == -1) goto error;
     }
 
@@ -317,7 +316,7 @@ static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_list *incident
 }
 
 
-static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_list *out)
+static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_dynarray *out)
 {
     /* Find an ncell with this vertex */
     s_ncell *ncell = dt->head;
@@ -339,9 +338,9 @@ static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_list *out
 }
 
 
-static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_degenerate, double TOL, s_list *buff_incident, s_list *buff_v)
+static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_degenerate, double TOL, s_dynarray *buff_incident, s_dynarray *buff_v)
 {
-    s_list *incident = buff_incident;
+    s_dynarray *incident = buff_incident;
     if (!incident_ncells_to_vertex(dt, seed_id, incident)) return (s_vcell){0};
 
     s_vcell out = {0};
@@ -371,7 +370,7 @@ static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double
 }
 
 
-static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_list *buff_incident)
+static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_dynarray *buff_incident)
 {
     /* Clip with bounding polyhedron */
     s_convh I;
@@ -385,11 +384,11 @@ static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int 
     bool *mask = calloc(Nreal, sizeof(bool));
     if (!mask) goto error;
     mask[vid] = true;
-    s_list *incident_ncells = buff_incident;
+    s_dynarray *incident_ncells = buff_incident;
     if (!incident_ncells_to_vertex(dt, vid, incident_ncells)) goto error;
 
     for (unsigned ii=0; ii<incident_ncells->N; ii++) {
-        s_ncell *ncell; list_get_value(incident_ncells, ii, &ncell);
+        s_ncell *ncell; dynarray_get_value(incident_ncells, ii, &ncell);
         for (int jj=0; jj<4; jj++) 
         if (ncell->vertex_id[jj] < Nreal && !mask[ncell->vertex_id[jj]]) {
             mask[ncell->vertex_id[jj]] = true;
@@ -419,9 +418,9 @@ static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int 
 
 s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
 {   /* copy of bpoly inside */
-    s_list spiking_ids = list_initialize(sizeof(int), 10);      /* Id of spiking cells */
-    s_list buff_v = list_initialize(sizeof(s_point), 10);       /* Place to store vertices of each cell before convhull */
-    s_list buff_adjacent = list_initialize(sizeof(s_ncell*), 10);  
+    s_dynarray spiking_ids = dynarray_initialize(sizeof(int), 10);      /* Id of spiking cells */
+    s_dynarray buff_v = dynarray_initialize(sizeof(s_point), 10);       /* Place to store vertices of each cell before convhull */
+    s_dynarray buff_adjacent = dynarray_initialize(sizeof(s_ncell*), 10);  
     if (!spiking_ids.items || !buff_v.items || !buff_adjacent.items) goto error;
 
     s_vdiagram out = malloc_vdiagram(dt, Nreal);
@@ -435,26 +434,26 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int
             goto error;
         }
         if (vcell_spikes_outside_bp(bpoly, &out.vcells[ii].convh, EPS_degenerate, TOL)) {
-            if (!list_push(&spiking_ids, &ii)) goto error;
+            if (!dynarray_push(&spiking_ids, &ii)) goto error;
         }
     }
 
     /* Clip spiking cells */
     for (unsigned ii=0; ii<spiking_ids.N; ii++) {
-        int vid; list_get_value(&spiking_ids, ii, &vid);
+        int vid; dynarray_get_value(&spiking_ids, ii, &vid);
         clip_vcell(dt, bpoly, &out, vid, Nreal, EPS_degenerate, TOL, &buff_adjacent);
     }
 
     
-    free_list(&spiking_ids);
-    free_list(&buff_v);
-    free_list(&buff_adjacent);
+    dynarray_free(&spiking_ids);
+    dynarray_free(&buff_v);
+    dynarray_free(&buff_adjacent);
     return out;
 
     error:
-        free_list(&spiking_ids);
-        free_list(&buff_v);
-        free_list(&buff_adjacent);
+        dynarray_free(&spiking_ids);
+        dynarray_free(&buff_v);
+        dynarray_free(&buff_adjacent);
         free_vdiagram(&out);
         return (s_vdiagram){0};
 }

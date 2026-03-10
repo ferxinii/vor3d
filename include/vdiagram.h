@@ -6,7 +6,6 @@
 #include "scplx.h"
 #include "bpoly.h"
 #include "convh.h"
-#include "lists.h"
 
 #define VBUFF_N_INIT 1000  // Used for efficient mallocing, incrementing by blocks if necessary
 

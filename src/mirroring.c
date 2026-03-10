@@ -1,6 +1,6 @@
 
 #include "mirroring.h"
-#include "lists.h"
+#include "dynarray.h"
 #include "bpoly.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -147,7 +147,7 @@ static inline void plane_3D_to_2D(s_point X, s_point O, s_point u, s_point v, do
     out[1] = dot_prod(d, v);
 }
 
-static bool should_mirror(const s_point face[3], const s_points *seeds, int best_n, int *best_idx, int id, double TOL, s_list *buff_constraints)
+static bool should_mirror(const s_point face[3], const s_points *seeds, int best_n, int *best_idx, int id, double TOL, s_dynarray *buff_constraints)
 {   /* Checks if the weighted voronoi diagram in the plane of face intersects the face */
     /* Project onto 2D */
     s_point n, u, v;
@@ -177,7 +177,7 @@ static bool should_mirror(const s_point face[3], const s_points *seeds, int best
     double ws = ds*ds - 2*fabs(ds)*plane_offset;
 
     /* Add constraints */
-    s_list *C = buff_constraints;
+    s_dynarray *C = buff_constraints;
     C->N = 0;
     for (int ii=0; ii<best_n; ii++) {
         if (ii == id) continue;
@@ -187,14 +187,14 @@ static bool should_mirror(const s_point face[3], const s_points *seeds, int best
         s_constraint con = { .a = 2*(t[0]-s[0]),
                              .b = 2*(t[1]-s[1]),
                              .c = (t[0]*t[0]+t[1]*t[1] + wt)-(s[0]*s[0]+s[1]*s[1] + ws) };
-        if (!list_push(C, &con)) goto error;
+        if (!dynarray_push(C, &con)) goto error;
     }
 
     /* Add triangle as constraints */
     s_constraint triangle_con[3];  constraints_from_triangle(t1, t2, t3, triangle_con);
-    if (!list_push(C, &triangle_con[0])) goto error;
-    if (!list_push(C, &triangle_con[1])) goto error;
-    if (!list_push(C, &triangle_con[2])) goto error;
+    if (!dynarray_push(C, &triangle_con[0])) goto error;
+    if (!dynarray_push(C, &triangle_con[1])) goto error;
+    if (!dynarray_push(C, &triangle_con[2])) goto error;
 
     /* Check feasability */
     return LP_is_feasible(C->N, C->items, TOL);
@@ -258,8 +258,8 @@ static void insert_topk(int idx[], double val[], int *n, int k, int new_idx, dou
 int extend_sites_mirroring_initial(const s_bpoly *bp, double EPS_degenerate, double TOL, s_points *inout_seeds)
 {   /* 0 ERROR, 1 OK */
     (void)should_mirror, (void)should_mirror_OLD, (void)TOL;  // Here for when debugging avoiding warnings
-    s_list buff_constraints = list_initialize(sizeof(s_constraint), 20);
-    s_list mirrored = list_initialize(sizeof(s_point), bp->convh.Nf);
+    s_dynarray buff_constraints = dynarray_initialize(sizeof(s_constraint), 20);
+    s_dynarray mirrored = dynarray_initialize(sizeof(s_point), bp->convh.Nf);
 
     for (int ff=0; ff<bp->convh.Nf; ff++) {
         // printf("ff: %d / %d. inout_seeds.N : %d\n", ff, bp->convh.Nf, inout_seeds->N);
@@ -282,7 +282,7 @@ int extend_sites_mirroring_initial(const s_bpoly *bp, double EPS_degenerate, dou
         for (int ii=0; ii<best_n; ii++) {
             if (should_mirror(face, inout_seeds, best_n, best_idx, ii, TOL, &buff_constraints)) {
                 s_point p_mirror = mirror_plane(normal, d_plane, inout_seeds->p[best_idx[ii]]);
-                if (!list_push(&mirrored, &p_mirror)) goto error;
+                if (!dynarray_push(&mirrored, &p_mirror)) goto error;
             }
         }
     }
@@ -297,14 +297,14 @@ int extend_sites_mirroring_initial(const s_bpoly *bp, double EPS_degenerate, dou
     inout_seeds->p = tmp;
     inout_seeds->N += mirrored.N;
 
-    free_list(&buff_constraints);
-    free_list(&mirrored);
+    dynarray_free(&buff_constraints);
+    dynarray_free(&mirrored);
     return 1;
     
     error:
         fprintf(stderr, "Error in exten_sites_mirroring!\n");
-        free_list(&buff_constraints);
-        free_list(&mirrored);
+        dynarray_free(&buff_constraints);
+        dynarray_free(&mirrored);
         return 0;
 }
 

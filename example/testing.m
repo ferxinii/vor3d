@@ -12,7 +12,6 @@ P(:,4) = P(:,4)+1;
 trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'Cyan', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
 hold on;
 
-
 P = readmatrix("build/nonmani.txt");
 scatter3(v(P+1,1), v(P+1,2), v(P+1,3), "green"); hold on;
 
@@ -92,7 +91,7 @@ for k = 1:numel(files)
 
 end
 
-    view(3);
+view(3);
 
 
 a = 5;
@@ -102,7 +101,6 @@ scatter3(h(a,1), h(a,2), h(a,3), 'green');
 
 
 %%
-
 k = 3;
 [v, f] = loadHull(fullfile(files(k).folder, files(k).name));
 trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'Cyan', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
@@ -116,7 +114,6 @@ hold on;
 %%
 [v, f] = loadHull("build/v2.m");
 trisurf(f, v(:,1), v(:,2), v(:,3), 'FaceColor', 'cyan', 'FaceAlpha', 0.3, 'LineWidth', 0.001);
-
 
 
 

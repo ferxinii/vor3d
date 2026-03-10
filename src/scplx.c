@@ -3,6 +3,7 @@
 #include "points.h"
 #include "gtests.h"
 #include "gnuplotc.h"
+#include "dynarray.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -222,13 +223,13 @@ static int new_mark_stamp(s_scplx *setup)
     return setup->mark_stamp;
 }
 
-static int mark_ncells_incident_face_STEP(int mark_stamp, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_list *out_ncell_ptrs)
+static int mark_ncells_incident_face_STEP(int mark_stamp, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_dynarray *out_ncell_ptrs)
 {
     for (int ii=0; ii<4; ii++) if (inarray(v_localid, 3-dim_face, ii)) {
         s_ncell *adjacent_ncell = ncell->opposite[ii];  
         if (adjacent_ncell && adjacent_ncell->mark_token != mark_stamp) {
             adjacent_ncell->mark_token = mark_stamp;
-            if (!list_push(out_ncell_ptrs, &adjacent_ncell)) return 0;
+            if (!dynarray_push(out_ncell_ptrs, &adjacent_ncell)) return 0;
             
             int new_v_localid[3-dim_face];
             face_localid_of_adjacent_ncell(ncell, dim_face, v_localid, ii, new_v_localid);
@@ -240,7 +241,7 @@ static int mark_ncells_incident_face_STEP(int mark_stamp, s_ncell *ncell, int di
     return 1;
 }
 
-int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_list *out_ncell_ptrs)
+int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_dynarray *out_ncell_ptrs)
 {   /* 0 ERROR, 1 OK */
     if (dim_face < 0 || dim_face >= 3) {
         fprintf(stderr, "dim_face must be >= 0 && < 3\n");
@@ -251,7 +252,7 @@ int ncells_incident_face(s_scplx *setup, s_ncell *ncell, int dim_face, const int
     ncell->mark_token = mark_stamp;
 
     out_ncell_ptrs->N = 0;
-    if (!list_push(out_ncell_ptrs, &ncell)) return 0;
+    if (!dynarray_push(out_ncell_ptrs, &ncell)) return 0;
     
     /* Recursion: */
     if (!mark_ncells_incident_face_STEP(mark_stamp, ncell, dim_face, v_localid, out_ncell_ptrs)) return 0;
