@@ -2,10 +2,8 @@
 #include "points.h"
 #include "convh.h"
 #include "scplx.h"
-#include "bpoly.h"
 #include "vdiagram.h"
 #include "convh.h"
-#include "bpoly.h"
 #include "dynarray.h"
 #include "gnuplotc.h"
 #include <float.h>
@@ -37,7 +35,6 @@ static size_t size_serialize_vdiagram(const s_vdiagram *vd)
     size_t size_ch = 0;
     serialize_convhull(&vd->bpoly.convh, NULL, &size_ch, NULL);
     size += size_ch;
-    size += sizeof(double);     /* dmax */
     size += sizeof(s_point);    /* CM */
     size += sizeof(s_point);    /* min */
     size += sizeof(s_point);    /* max */
@@ -87,7 +84,6 @@ int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, 
     size_t size_ch;
     serialize_convhull(&vd->bpoly.convh, p, &size_ch, NULL);
     p += size_ch;
-    memcpy(p, &vd->bpoly.dmax, sizeof(double));     p += sizeof(double);     
     memcpy(p, &vd->bpoly.CM, sizeof(s_point));      p += sizeof(s_point);    
     memcpy(p, &vd->bpoly.min, sizeof(s_point));     p += sizeof(s_point);    
     memcpy(p, &vd->bpoly.max, sizeof(s_point));     p += sizeof(s_point);    
@@ -128,7 +124,6 @@ int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_rea
     if (!deserialize_convhull(p, &vd.bpoly.convh, &read)) 
         { free(vd.seeds.p); return 0; };
     p += read;
-    memcpy(&vd.bpoly.dmax, p, sizeof(double));     p += sizeof(double);     
     memcpy(&vd.bpoly.CM, p, sizeof(s_point));      p += sizeof(s_point);    
     memcpy(&vd.bpoly.min, p, sizeof(s_point));     p += sizeof(s_point);    
     memcpy(&vd.bpoly.max, p, sizeof(s_point));     p += sizeof(s_point);    
@@ -311,7 +306,19 @@ static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_dynarray *inci
     return ch;
 
     error:
-        fprintf(stderr, "Error in convhull_from_marked_ncells.\n");
+        fprintf(stderr, "Error in convhull_from_incident_ncells.\n");
+        for (int ii=0; ii<points.N; ii++) {
+            printf("%d: (%f, %f, %f)\n", ii, points.p[ii].x, points.p[ii].y, points.p[ii].z);
+        }
+        printf("dt->N_ncells: %d, incident ncells: %d\n", dt->N_ncells, incident->N);
+
+        int i=0;
+        for (s_ncell *nc = dt->head; nc; nc = nc->next) {
+            printf("%d:  (%d,%d,%d,%d)\n", i++, nc->vertex_id[0], nc->vertex_id[1], nc->vertex_id[2], nc->vertex_id[3]);
+        }
+        assert(1==0);
+        // write_points_to_csv("crash_vd.csv", "w", &dt->points);
+        exit(1);
         return convhull_NAN;
 }
 
@@ -343,6 +350,7 @@ static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_d
     s_dynarray *incident = buff_incident;
     if (!incident_ncells_to_vertex(dt, seed_id, incident)) return (s_vcell){0};
 
+    // printf("SEED_ID: %d\n", seed_id);
     s_vcell out = {0};
     out.seed_id = seed_id;
     out.convh = convhull_from_incident_ncells(dt, incident, EPS_degenerate, TOL, buff_v);

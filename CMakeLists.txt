@@ -14,8 +14,10 @@ add_library(vor3d STATIC
     src/bpoly.c
     src/delaunay.c
     src/scplx.c
+    src/acplx.c
     src/vdiagram.c
     src/mirroring.c
+    src/volsph.c
 )
 
 target_include_directories(vor3d

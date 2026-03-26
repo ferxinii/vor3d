@@ -5,12 +5,15 @@
 #include <omp.h>
 #include <math.h>
 #include "vor3d.h"
+#include "random.h"
+#include "dynarray.h"
 
 #define FILE_BP "bp_points.txt.aux"
 #define PLOT_VOLUMES(name) system("./plot_together.plt " name)
 
 double EPS_degenerate = 1e-12, TOL = 1e-12;
 double vol_max_rel_diff = 1e-3;
+s_random_context rctx;
 
 double r_const(double *x, void *params)
 {   
@@ -66,11 +69,28 @@ void append_volumes_to_file(s_vdiagram *vdiagram, char *fname, int id)
     fclose(f);
 }
 
-static void generate_statistics(const s_bpoly *bp, int N_simu, char *FILE_VOLS)
+
+int randint(void *ctx, int N)
+{
+    s_random_context *C = ctx;
+    return random_uniform_range_u64(C, N);
+}
+
+double randd01(void *ctx)
+{
+    s_random_context *C = ctx;
+    return random_uniform_double(C);
+}
+
+
+static void generate_statistics(const s_bpoly *bp, int N_simu, char *FILE_VOLS,
+                                s_dynarray *buff_points, s_dynarray *buff_3dbls)
 {
     clear_volumes_file(FILE_VOLS);
     for (int ii=0; ii<N_simu; ii++) {
-        s_vdiagram vd = vor3d_from_bp_PDS(&r_fun, &r_fun_params, bp, vol_max_rel_diff, 5, EPS_degenerate, TOL);
+        s_vdiagram vd = vor3d_from_bp_PDS(&r_fun, &r_fun_params, bp, vol_max_rel_diff, 5,
+                                          EPS_degenerate, TOL, randint, randd01, &rctx,
+                                          buff_points, buff_3dbls);
         append_volumes_to_file(&vd, FILE_VOLS, ii);
         check_volume(&vd);
         free_vdiagram(&vd);
@@ -79,7 +99,10 @@ static void generate_statistics(const s_bpoly *bp, int N_simu, char *FILE_VOLS)
 
 int main(void)
 {
-    srand(time(NULL));
+    rctx = random_initialize(time(NULL));
+    s_dynarray buff_points = dynarray_initialize(sizeof(s_point), 0);
+    s_dynarray buff_3dbls = dynarray_initialize(sizeof(double)*3, 0);
+
     // system("rm -f plots/*");
     
     int Nsimu = 10;  /* Number of sample lungs for each configuration */
@@ -112,12 +135,13 @@ int main(void)
 
     // ADULT:
     double s = cbrt(5000.0 / TOT_VOL);
-    s_bpoly bp_L_adult = copy_bpoly_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
+    s_bpoly bp_L_adult = bpoly_copy_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_L_adult.min.z;
     r_fun_params.zf = bp_L_adult.max.z;
     r_fun_params.r_mean = 1.1;
     printf("ADULT:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_L_adult.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_L_adult, Nsimu, "virtual_population/L_adult.txt");
+    generate_statistics(&bp_L_adult, Nsimu, "virtual_population/L_adult.txt", 
+                        &buff_points, &buff_3dbls);
         // PLOT
         // s_vdiagram *vd_L = vor3d_from_txt_PDS(&r_fun, "lobes/L.txt", 5);
         // check_volume(vd_L);
@@ -126,30 +150,33 @@ int main(void)
 
     // 13 Y.O.:
     s = cbrt(3000.0 / TOT_VOL);
-    s_bpoly bp_L_13 = copy_bpoly_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
+    s_bpoly bp_L_13 = bpoly_copy_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_L_13.min.z;
     r_fun_params.zf = bp_L_13.max.z;
     r_fun_params.r_mean = 1;
     printf("13YO:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_L_13.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_L_13, Nsimu, "virtual_population/L_13yo.txt");
+    generate_statistics(&bp_L_13, Nsimu, "virtual_population/L_13yo.txt",
+                        &buff_points, &buff_3dbls);
 
     // 8 Y.O.:
     s = cbrt(1500.0 / TOT_VOL);
-    s_bpoly bp_L_8 = copy_bpoly_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
+    s_bpoly bp_L_8 = bpoly_copy_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_L_8.min.z;
     r_fun_params.zf = bp_L_8.max.z;
     r_fun_params.r_mean = 0.9;
     printf("8YO:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_L_8.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_L_8, Nsimu, "virtual_population/L_8yo.txt");
+    generate_statistics(&bp_L_8, Nsimu, "virtual_population/L_8yo.txt",
+                        &buff_points, &buff_3dbls);
 
     // 3 Y.O.:
     s = cbrt(600.0 / TOT_VOL);
-    s_bpoly bp_L_3 = copy_bpoly_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
+    s_bpoly bp_L_3 = bpoly_copy_scaled(&bp_L, s, CM_L, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_L_3.min.z;
     r_fun_params.zf = bp_L_3.max.z;
     r_fun_params.r_mean = 0.7;
     printf("3YO:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_L_3.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_L_3, Nsimu, "virtual_population/L_3yo.txt");
+    generate_statistics(&bp_L_3, Nsimu, "virtual_population/L_3yo.txt", 
+                        &buff_points, &buff_3dbls);
 
 
 
@@ -158,12 +185,13 @@ int main(void)
 
     // ADULT:
     s = cbrt(5000.0 / TOT_VOL);
-    s_bpoly bp_R_adult = copy_bpoly_scaled(&bp_R, 1.06, CM_R, EPS_degenerate, TOL);
+    s_bpoly bp_R_adult = bpoly_copy_scaled(&bp_R, 1.06, CM_R, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_R_adult.min.z;
     r_fun_params.zf = bp_R_adult.max.z;
     r_fun_params.r_mean = 1.1;
     printf("ADULT:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_R_adult.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_R_adult, Nsimu, "virtual_population/R_adult.txt");
+    generate_statistics(&bp_R_adult, Nsimu, "virtual_population/R_adult.txt",
+                        &buff_points, &buff_3dbls);
         // PLOT
         // s_vdiagram *vd_R = vor3d_from_txt_PDS(&r_fun, "lobes/R.txt", 5);
         // check_volume(vd_R);
@@ -172,29 +200,32 @@ int main(void)
 
     // 13 Y.O.:
     s = cbrt(3000.0 / TOT_VOL);
-    s_bpoly bp_R_13 = copy_bpoly_scaled(&bp_R, s, CM_R, EPS_degenerate, TOL);
+    s_bpoly bp_R_13 = bpoly_copy_scaled(&bp_R, s, CM_R, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_R_13.min.z;
     r_fun_params.zf = bp_R_13.max.z;
     r_fun_params.r_mean = 1;
     printf("13YO:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_R_13.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_R_13, Nsimu, "virtual_population/R_13yo.txt");
+    generate_statistics(&bp_R_13, Nsimu, "virtual_population/R_13yo.txt",
+                        &buff_points, &buff_3dbls);
 
     // 8 Y.O.:
     s = cbrt(1500.0 / TOT_VOL);
-    s_bpoly bp_R_8 = copy_bpoly_scaled(&bp_R, s, CM_R, EPS_degenerate, TOL);
+    s_bpoly bp_R_8 = bpoly_copy_scaled(&bp_R, s, CM_R, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_R_8.min.z;
     r_fun_params.zf = bp_R_8.max.z;
     r_fun_params.r_mean = 0.9;
     printf("8YO:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_R_8.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_R_8, Nsimu, "virtual_population/R_8yo.txt");
+    generate_statistics(&bp_R_8, Nsimu, "virtual_population/R_8yo.txt",
+                        &buff_points, &buff_3dbls);
 
     // 3 Y.O.:
     s = cbrt(600.0 / TOT_VOL);
-    s_bpoly bp_R_3 = copy_bpoly_scaled(&bp_R, s, CM_R, EPS_degenerate, TOL);
+    s_bpoly bp_R_3 = bpoly_copy_scaled(&bp_R, s, CM_R, EPS_degenerate, TOL);
     r_fun_params.z0 = bp_R_3.min.z;
     r_fun_params.zf = bp_R_3.max.z;
     r_fun_params.r_mean = 0.7;
     printf("3YO:    s: %g,    Vol %g,    params: (%g, %g, %g)\n", s, bp_R_3.volume, r_fun_params.z0, r_fun_params.zf, r_fun_params.r_mean);
-    generate_statistics(&bp_R_3, Nsimu, "virtual_population/R_3yo.txt");
+    generate_statistics(&bp_R_3, Nsimu, "virtual_population/R_3yo.txt",
+                        &buff_points, &buff_3dbls);
 }
 

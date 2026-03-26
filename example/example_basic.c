@@ -3,13 +3,17 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <omp.h>
+#include <math.h>
 #include "vor3d.h"
+#include "random.h"
+#include "dynarray.h"
 
 #define FILE_BP "bp_points.txt.aux"
 #define PLOT_VOLUMES(name) system("./plot_together.plt " name)
 
 double EPS_degenerate = 1e-12, TOL = 1e-12;
 double vol_max_rel_diff = 1e-3;
+s_random_context *rctx_omp;
 
 double r_const(double *x, void *params)
 {   
@@ -17,6 +21,18 @@ double r_const(double *x, void *params)
     (void)x;
     // return NAN;
     return 1;
+}
+
+int randint(void *ctx, int N)
+{
+    s_random_context *C = ctx;
+    return random_uniform_range_u64(C, N);
+}
+
+double randd01(void *ctx)
+{
+    s_random_context *C = ctx;
+    return random_uniform_double(C);
 }
 
 typedef struct {
@@ -45,13 +61,18 @@ static void check_volume(const s_vdiagram *vd)
     printf("Vol = %f, Diff = %.16f, rel_diff = %.16f\n", vd->bpoly.volume, vd->bpoly.volume - sum_vol, (vd->bpoly.volume - sum_vol) / vd->bpoly.volume);
 }
 
-static void iterate(int iterations, int MAX_TRIES, bool print_progress)
+static void iterate(int iterations, int MAX_TRIES, bool print_progress,
+                    s_dynarray *buff_points_omp, s_dynarray *buff_3dbls_omp)
 {
     int fail = 0;
     #pragma omp parallel for
     for (int ii=0; ii<iterations; ii++) {
         if (print_progress && ii%100 == 0) printf("%d / %d\n", ii, iterations);
-        s_vdiagram vd = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
+        s_vdiagram vd = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff,
+                                           MAX_TRIES, EPS_degenerate, TOL, 
+                                           randint, randd01, &rctx_omp[omp_get_thread_num()], 
+                                           &buff_points_omp[omp_get_thread_num()], 
+                                           &buff_3dbls_omp[omp_get_thread_num()]);
         if (vd.seeds.N == 0) {fail++; continue;}
         // check_volume(&vd);
         free_vdiagram(&vd);
@@ -60,10 +81,76 @@ static void iterate(int iterations, int MAX_TRIES, bool print_progress)
     printf("FAILED %d / %d\n", fail, iterations);
 }
 
+void generate_file_cube_bp(const char *filename, double length)
+{
+    double s = length / 2;
+    
+    FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, s);
+    fprintf(fp, "%f, %f, %f\n", s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, s, s);
+    fclose(fp);
+}
+
+
+void generate_file_tetrahedron_bp(const char *filename, double length)
+{
+    double s = length / 2;
+    
+    FILE *fp = fopen(filename, "w");
+    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
+    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
+    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
+    fprintf(fp, "%f, %f, %f\n", s, s, s);
+    fclose(fp);
+}
+
+
+void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi)
+{
+    // ntheta: example 18; // Number of steps in the polar angle
+    // nphi: example 36;   // Number of steps in the azimuthal angle
+    FILE *fp = fopen(filename, "w");
+    // fprintf(fp, "%d\n\n", 2 + nPhi * (nTheta-1));
+
+    for (int i = 0; i <= nTheta; i++) {
+        double theta = M_PI * i / nTheta;
+        
+        if (i == 0 || i == nTheta) { // If at a pole, compute and write the coordinate once.
+            double x = 0.0;
+            double y = 0.0;
+            double z = radius * cos(theta);  // will be +radius or -radius
+            fprintf(fp, "%f, %f, %f\n", x, y, z);
+        } else {
+            for (int j = 0; j < nPhi; j++) {
+                double phi = 2 * M_PI * j / nPhi;
+                double x = radius * sin(theta) * cos(phi);
+                double y = radius * sin(theta) * sin(phi);
+                double z = radius * cos(theta);
+                fprintf(fp, "%f, %f, %f\n", x, y, z);
+            }
+        }
+    }
+    fclose(fp);
+}
+
+
 int main(void)
 {
-    srand(time(NULL));
-    // system("rm -f plots/*");
+    rctx_omp = malloc(sizeof(s_random_context) * omp_get_max_threads());
+    random_initialize_threads(time(NULL), 1, omp_get_max_threads(), rctx_omp);
+
+    s_dynarray *buff_points_omp = malloc(sizeof(s_dynarray) * omp_get_max_threads());
+    s_dynarray *buff_3dbls_omp = malloc(sizeof(s_dynarray) * omp_get_max_threads());
+    for (int i=0; i<omp_get_max_threads(); i++) {
+        buff_points_omp[i] = dynarray_initialize(sizeof(s_point), 0);
+        buff_3dbls_omp[i] = dynarray_initialize(sizeof(double)*3, 0);
+    }
     
     int MAX_TRIES = 1;
     bool PLOT = false;
@@ -79,10 +166,12 @@ int main(void)
 
     puts("\nTETRAHEDON:");
     generate_file_tetrahedron_bp(FILE_BP, 3);
-    s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
+    s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES,
+                                           EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
+                                           buff_points_omp, buff_3dbls_omp);
     check_volume(&vd_tet);
     free_vdiagram(&vd_tet);
-    iterate(10000, MAX_TRIES, false);
+    iterate(10000, MAX_TRIES, false, buff_points_omp, buff_3dbls_omp);
     if (PLOT) plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
     // exit(1);
 
@@ -103,23 +192,30 @@ int main(void)
 
     puts("\nCUBE:");
     generate_file_cube_bp(FILE_BP, 2);
-    s_vdiagram vd_cube = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, 5, EPS_degenerate, TOL);
+    s_vdiagram vd_cube = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, 5,
+                                            EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
+                                            buff_points_omp, buff_3dbls_omp);
     if (vd_cube.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_cube);
     if (PLOT) plot_vdiagram_differentviews(&vd_cube, "plots/cube", NULL);
     free_vdiagram(&vd_cube);
-    iterate(10000, MAX_TRIES, false);
+    iterate(10000, MAX_TRIES, false, buff_points_omp, buff_3dbls_omp);
     // exit(1);
     
 
     puts("\nSPHERE:");
     generate_file_sphere_bp(FILE_BP, 1.5, 15, 20);
-    s_vdiagram vd_sph = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES, EPS_degenerate, TOL);
+    s_vdiagram vd_sph = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES,
+                                           EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
+                                           buff_points_omp, buff_3dbls_omp);
     write_convhull_to_m(&vd_sph.bpoly.convh, "test_bp.m");
     if (vd_sph.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_sph);
     if (PLOT) plot_vdiagram_differentviews(&vd_sph, "plots/sph", NULL);
     free_vdiagram(&vd_sph);
-    iterate(100, MAX_TRIES, true);
+    iterate(100, MAX_TRIES, true, buff_points_omp, buff_3dbls_omp);
+
+
+    free(rctx_omp);
 }
 

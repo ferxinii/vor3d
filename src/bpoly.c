@@ -1,8 +1,8 @@
 
-#include "bpoly.h"
 #include "points.h"
 #include "convh.h"
 #include "gnuplotc.h"
+#include "vdiagram.h"
 #include <math.h>
 #include <assert.h>
 #include <string.h>
@@ -19,19 +19,26 @@ void free_bpoly(s_bpoly *bpoly)
 }
 
 
-static void extract_dmax_bp(s_bpoly *bpoly)
+double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_DEG, s_point *out)
 {
-    double dmax = 0; 
-    for (int ii=0; ii<bpoly->convh.points.N-1; ii++) {
-        for (int jj=ii+1; jj<bpoly->convh.points.N; jj++) {
-            double d = distance_squared(bpoly->convh.points.p[ii], 
-                                        bpoly->convh.points.p[jj]);
-            if (d > dmax) 
-                dmax = d;
-        }
-    }
-    bpoly->dmax = sqrt(dmax);
+    *out = closest_point_on_convhull_boundary(&bp->convh, p, EPS_DEG);
+    return distance(p, *out);
 }
+
+
+// static void extract_dmax_bp(s_bpoly *bpoly)
+// {
+//     double dmax = 0; 
+//     for (int ii=0; ii<bpoly->convh.points.N-1; ii++) {
+//         for (int jj=ii+1; jj<bpoly->convh.points.N; jj++) {
+//             double d = distance_squared(bpoly->convh.points.p[ii], 
+//                                         bpoly->convh.points.p[jj]);
+//             if (d > dmax) 
+//                 dmax = d;
+//         }
+//     }
+//     bpoly->dmax = sqrt(dmax);
+// }
 
 
 static void extract_min_max_coord(s_bpoly *bpoly)
@@ -59,11 +66,11 @@ static void extract_min_max_coord(s_bpoly *bpoly)
 }
 
 
-s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double TOL)
+s_bpoly bpoly_from_points(const s_points *points, double EPS_DEG, double TOL)
 {   /* New copy of points inside! */
     s_bpoly bpoly;
-    if (convhull_from_points(points, EPS_degenerate, TOL, &bpoly.convh) != 1) goto error;
-    extract_dmax_bp(&bpoly);
+    if (convhull_from_points(points, EPS_DEG, TOL, &bpoly.convh) != 1) goto error;
+    // extract_dmax_bp(&bpoly);
     bpoly.CM = point_average(&bpoly.convh.points);
     extract_min_max_coord(&bpoly);
     bpoly.volume = volume_convhull(&bpoly.convh);
@@ -75,10 +82,10 @@ s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double 
 }
 
 
-s_bpoly bpoly_from_csv(const char *fname, double EPS_degenerate, double TOL)
+s_bpoly bpoly_from_csv(const char *fname, double EPS_DEG, double TOL)
 {
     s_points points = read_points_from_csv(fname);
-    s_bpoly bpoly = bpoly_from_points(&points, EPS_degenerate, TOL);
+    s_bpoly bpoly = bpoly_from_points(&points, EPS_DEG, TOL);
 
     free_points(&points);
     return bpoly;
@@ -90,7 +97,7 @@ s_bpoly bpoly_from_convh(const s_convh *convh)
     s_bpoly bpoly;
     bpoly.convh = copy_convhull(convh);
     if (!convhull_is_valid(&bpoly.convh)) goto error;
-    extract_dmax_bp(&bpoly);
+    // extract_dmax_bp(&bpoly);
     bpoly.CM = point_average(&bpoly.convh.points);
     extract_min_max_coord(&bpoly);
     bpoly.volume = volume_convhull(&bpoly.convh);
@@ -103,12 +110,12 @@ s_bpoly bpoly_from_convh(const s_convh *convh)
 }
 
 
-s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot, double EPS_degenerate, double TOL)
+s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot, double EPS_DEG, double TOL)
 {
     s_points new_p = copy_points(&convh->points);
     homotethy_points(&new_p, s, pivot);
 
-    s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
+    s_bpoly out = bpoly_from_points(&new_p, EPS_DEG, TOL);
     free_points(&new_p);
     return out;
 }
@@ -119,7 +126,7 @@ s_bpoly bpoly_copy(const s_bpoly *in)
 {
     s_bpoly out;
     out.convh = copy_convhull(&in->convh); 
-    out.dmax = in->dmax;
+    // out.dmax = in->dmax;
     out.volume = in->volume;
     out.CM = in->CM;
     out.min = in->min;
@@ -127,46 +134,39 @@ s_bpoly bpoly_copy(const s_bpoly *in)
     return out;
 }
 
-
-
-
-
-
-s_bpoly copy_bpoly_scaled(const s_bpoly *bp, double factor, s_point pivot, double EPS_degenerate, double TOL)
+s_bpoly bpoly_copy_scaled(const s_bpoly *bp, double factor, s_point pivot, double EPS_DEG, double TOL)
 {
     s_points new_p = copy_points(&bp->convh.points);
-    // s_point new_p_average = point_average(&new_p);
     homotethy_points(&new_p, factor, pivot);
-    s_bpoly out = bpoly_from_points(&new_p, EPS_degenerate, TOL);
+    s_bpoly out = bpoly_from_points(&new_p, EPS_DEG, TOL);
     free_points(&new_p);
     return out;
 }
 
 
-s_bpoly copy_bpoly_scaled_volume(const s_bpoly *bp, double objective_volume, double EPS_degenerate, double TOL)
+s_bpoly bpoly_copy_scaled_volume(const s_bpoly *bp, double objective_volume, double EPS_DEG, double TOL)
 {
     double F = objective_volume / (bp)->volume;
     double s = cbrt(F);
-    return copy_bpoly_scaled(bp, s, point_average(&bp->convh.points), EPS_degenerate, TOL);
+    return bpoly_copy_scaled(bp, s, bp->CM, EPS_DEG, TOL);
 }
 
 
 
-// MY IMPLEMENTATION FOR POISSON DISK SAMPLING WITH WEIGHT FUNCTION
-
-// Generate a random candidate point around a given point p.
-// The candidate is generated uniformly in the spherical shell [r, 2r],
-// where r = r_of_x(p).
-static s_point random_point_around(s_point x, double r)
+/* IMPLEMENTATION OF POISSON DISK SAMPLING WITH WEIGHT FUNCTION
+ * Generate a random candidate point around a given point p.
+ * The candidate is generated uniformly in the spherical shell [r, 2r],
+ * where r = r_of_x(p). */
+static s_point random_point_around(double (*randd01)(void *rctx), void *rctx,
+                                   s_point x, double r)
 {
-    double radius = r + r * rand()/((double) RAND_MAX + 1);
+    double radius = r + r * randd01(rctx);
 
     // Generate a random direction uniformly over the sphere:
-    double aux = 1 - 2.0 * rand()/((double) RAND_MAX + 1);
-    if (aux >= 1) aux = 1;
-    if (aux <= -1) aux = -1;
+    double aux = 1 - 2.0 * randd01(rctx);
+    if (aux >= 1) aux = 1; if (aux <= -1) aux = -1;
     double theta = acos(aux);  // polar angle, 0 <= theta <= pi.
-    double phi = 2.0 * M_PI * rand()/((double) RAND_MAX + 1);  // azimuthal, 0 <= phi < 2pi.
+    double phi = 2.0 * M_PI * randd01(rctx);  // azimuthal, 0 <= phi < 2pi.
     
     s_point out;
     out.x = x.x + radius * sin(theta) * cos(phi);
@@ -176,40 +176,47 @@ static s_point random_point_around(s_point x, double r)
 }
 
 
-static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points *samples, double (*rmax)(double*, void*), void *rmax_params, double EPS_degenerate)
+static int poisson_is_valid(const s_bpoly *bpoly, s_point query, const s_points *samples,
+                            double (*rmax)(double*, void*), void *rmax_params, double EPS_DEG)
 {
-    if (test_point_in_convhull(&bpoly->convh, query, EPS_degenerate, 0) != TEST_IN) return 0;
+    if (test_point_in_convhull(&bpoly->convh, query, EPS_DEG, 0) != TEST_IN) return 0;
 
     double rq = rmax(query.coords, rmax_params);
     for (int ii = 0; ii<samples->N; ii++) {
         double rx = rmax(samples->p[ii].coords, rmax_params);
         double minDist = fmin(rq, rx);
         if (distance_squared(query, samples->p[ii]) < (minDist * minDist))
-            return 0; // candidate too close to an existing sample
+            return 0;  // candidate too close to an existing sample
     }
-    return 1; // valid candidate
+    return 1;  // valid candidate
 }
 
 
-s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(double*, void*), void *rmax_params, double EPS_degenerate)
+#define MAX_TRIAL_POINTS 10000
+#define MAX_TRIAL_TESTS 50
+
+s_points generate_poisson_dist_inside(const s_bpoly *bpoly, 
+                                      double (*rmax)(double*, void*), void *rmax_params,
+                                      double (*randd01)(void*), int (*randint)(void*, int),
+                                      void *rctx, double EPS_DEG)
 {
     s_point _samples[MAX_TRIAL_POINTS], _active[MAX_TRIAL_POINTS];
     s_points samples = {.N = 0, .p = _samples};
     s_points active= {.N = 0, .p = _active};
 
-    s_point x = random_point_inside_convhull(&bpoly->convh, EPS_degenerate, bpoly->min, bpoly->max); 
+    s_point x = random_point_inside_convhull(randd01, rctx, &bpoly->convh, EPS_DEG, bpoly->min, bpoly->max); 
     samples.p[samples.N++] = x;
     active.p[active.N++] = x;
 
     while (active.N > 0 && samples.N < MAX_TRIAL_POINTS) {
-        int random_id = rand() / (RAND_MAX / active.N + 1);
+        int random_id = randint(rctx, active.N);
         s_point p = active.p[random_id];
         int found = 0;
 
         double rp = rmax(p.coords, rmax_params);
         for (int ii=0; ii<MAX_TRIAL_TESTS; ii++) {
-            s_point q = random_point_around(p, rp);
-            if (poisson_is_valid(bpoly, q, &samples, rmax, rmax_params, EPS_degenerate)) {
+            s_point q = random_point_around(randd01, rctx, p, rp);
+            if (poisson_is_valid(bpoly, q, &samples, rmax, rmax_params, EPS_DEG)) {
                 samples.p[samples.N++] = q;
                 active.p[active.N++] = q;
                 found = 1;
@@ -218,92 +225,21 @@ s_points generate_poisson_dist_inside(const s_bpoly *bpoly, double (*rmax)(doubl
         }
 
         if (samples.N >= MAX_TRIAL_POINTS-1) {
-            puts("ERROR! Max_trial_points in poisson sampling.\n");
-            exit(1);
+            fprintf(stderr, "ERROR! Max_trial_points in poisson sampling.\n");
+            return points_NAN;
         }
-        
-        if (found == 0) {
-            // Replace activeList[idx] with the last active point and decrease count.
-            active.p[random_id] = active.p[active.N--];
-        }
-    }
 
-    // while (samples.N < 4) {
-    //     x = random_point_inside_convhull(&bpoly->convh, EPS_degenerate, bpoly->min, bpoly->max);
-    //     samples.p[samples.N++] = x;
-    // }
-    // /* Ensure at least there is one point */
-    // if(samples.N == 0) samples.p[samples.N++] = bpoly->CM;
+        // Replace activeList[idx] with the last active point and decrease count.
+        if (found == 0) active.p[random_id] = active.p[--active.N];
+    }
 
     s_points out = copy_points(&samples);
     return out;
 }
 
 
-double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_degenerate, s_point *out)
-{
-    *out = closest_point_on_convhull_boundary(&bp->convh, p, EPS_degenerate);
-    return distance(p, *out);
-}
 
 
-void generate_file_cube_bp(const char *filename, double length)
-{
-    double s = length / 2;
-    
-    FILE *fp = fopen(filename, "w");
-    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
-    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
-    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
-    fprintf(fp, "%f, %f, %f\n", s, -s, -s);
-    fprintf(fp, "%f, %f, %f\n", -s, s, s);
-    fprintf(fp, "%f, %f, %f\n", s, -s, s);
-    fprintf(fp, "%f, %f, %f\n", s, s, -s);
-    fprintf(fp, "%f, %f, %f\n", s, s, s);
-    fclose(fp);
-}
-
-
-void generate_file_tetrahedron_bp(const char *filename, double length)
-{
-    double s = length / 2;
-    
-    FILE *fp = fopen(filename, "w");
-    fprintf(fp, "%f, %f, %f\n", -s, -s, -s);
-    fprintf(fp, "%f, %f, %f\n", -s, -s, s);
-    fprintf(fp, "%f, %f, %f\n", -s, s, -s);
-    fprintf(fp, "%f, %f, %f\n", s, s, s);
-    fclose(fp);
-}
-
-
-void generate_file_sphere_bp(const char *filename, double radius, int nTheta, int nPhi)
-{
-    // ntheta: example 18; // Number of steps in the polar angle
-    // nphi: example 36;   // Number of steps in the azimuthal angle
-    FILE *fp = fopen(filename, "w");
-    // fprintf(fp, "%d\n\n", 2 + nPhi * (nTheta-1));
-
-    for (int i = 0; i <= nTheta; i++) {
-        double theta = M_PI * i / nTheta;
-        
-        if (i == 0 || i == nTheta) { // If at a pole, compute and write the coordinate once.
-            double x = 0.0;
-            double y = 0.0;
-            double z = radius * cos(theta);  // will be +radius or -radius
-            fprintf(fp, "%f, %f, %f\n", x, y, z);
-        } else {
-            for (int j = 0; j < nPhi; j++) {
-                double phi = 2 * M_PI * j / nPhi;
-                double x = radius * sin(theta) * cos(phi);
-                double y = radius * sin(theta) * sin(phi);
-                double z = radius * cos(theta);
-                fprintf(fp, "%f, %f, %f\n", x, y, z);
-            }
-        }
-    }
-    fclose(fp);
-}
 
 
 void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, char *view_command)
