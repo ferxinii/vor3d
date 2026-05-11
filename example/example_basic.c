@@ -67,6 +67,7 @@ static void iterate(int iterations, int MAX_TRIES, bool print_progress,
     int fail = 0;
     #pragma omp parallel for
     for (int ii=0; ii<iterations; ii++) {
+        // printf("%d\n", ii);
         if (print_progress && ii%100 == 0) printf("%d / %d\n", ii, iterations);
         s_vdiagram vd = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff,
                                            MAX_TRIES, EPS_degenerate, TOL, 

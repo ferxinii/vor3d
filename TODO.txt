@@ -1,3 +1,8 @@
+[ ] locally redundant points: implement function, consider when some vertices may belong to big tetra
+[ ] acplx.c: replace power distance conditions with the robust versions
+
+[ ] ncell_walk: better selection of initial random ncell?.
+
 [ ] When clipping a voronoi cell with neighboring planes, make a routine to clip convhull with multiple planes in one go, instead of going one by one. Or better, identify problematic neighboring cells and only clip with those?
 
 [ ] Use memory pools instead of constant malloc.

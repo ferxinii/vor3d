@@ -22,7 +22,6 @@ static s_point mirror_plane(s_point normal, double d_plane, s_point p)
     return out;
 }
 
-
 /* Linear Programming. */
 static void constraints_from_triangle(const double t1[2], const double t2[2], const double t3[2], 
                                       s_LPconstraint2D out[3])
@@ -31,7 +30,7 @@ static void constraints_from_triangle(const double t1[2], const double t2[2], co
     double v2[2] = { t2[0], t2[1] };
     double v3[2] = { t3[0], t3[1] };
 
-    if (orient2d(t1, t2, t3) < 0) {  /* Check proper orientation */
+    if (test_orientation_2d(t1, t2, t3) < 0) {  /* Check proper orientation */
         double tmp[2] = {v1[0], v1[1]};
         v1[0] = v2[0];  v1[1] = v2[1];
         v2[0] = tmp[0]; v2[1] = tmp[1];

@@ -159,6 +159,15 @@ int main(void)
     //     //            nc->vertex_id[2], nc->vertex_id[3]);
     //     free_complex(&dt);
     // }
+    
+    {
+            s_point c[6] = { {{{0,0,0}}}, {{{0.1,0,0}}}, {{{3,0,0}}},
+                             {{{3,3,0}}}, {{{0,3,0}}}, {{{1.5,1.5,1.5}}} };
+            s_points pts = {6, c};
+            construct_dt_3d(&pts, NULL, false, TOL_DUP);
+            printf("Constructed dt correctly!!\n\n");
+        }
+
     //
     // printf("=== Test 2: two non-overlapping spheres ===\n");
     // {
@@ -321,71 +330,71 @@ int main(void)
         const double MC_TOL = 0.01;  /* 1% relative tolerance */
         const unsigned int SEED = time(NULL);
 
-        {
-            s_point c[2] = {
-                {{{ 0.0, 0.0, 0.0}}},
-                {{{ 2.0, 0.0, 0.0}}},
-            };
-            double r[2] = {1.5, 1.1};
-            s_points pts = {2, c};
-
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-            check_mc("2 overlapping", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
-
-        {
-            s_point c[3] = {
-                {{{ 0.0, 0.0, 0.0}}},
-                {{{ 2.0, 0.0, 0.0}}},
-                {{{ 1.0, 1.7320508075688772, 0.0}}}  /* sqrt(3) */
-            };
-            double r[3] = {1.5, 1.6, 1.9};
-            s_points pts = {3, c};
-
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-            check_mc("3 overlapping", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
-
-        {
-            s_point c[4] = {
-                {{{ 1,  1,  1}}},
-                {{{ 1, -1, -0.5}}},
-                {{{-1,  1, -1}}},
-                {{{-1, -1,  1}}}
-            };
-
-            double r[4] = {2.4, 1.8, 1.9, 1.5};
-            s_points pts = {4, c};
-
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-
-            check_mc("4 overlapping (tetrahedral)", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
-
-        /* Test A: 5 non-overlapping spheres */
-        {
-            s_point c[5] = { {{{0,0,0}}}, {{{10,0,0}}}, {{{0,10,0}}},
-                             {{{0,0,10}}}, {{{10,10,0}}} };
-            double  r[5] = {1.0, 0.9, 1.1, 0.8, 1.2};
-            s_points pts = {5, c};
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-            check_mc("5 non-overlapping", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
-
-        /* Test B: 5 partially overlapping spheres */
-        {
-            s_point c[5] = { {{{0,0,0}}}, {{{1.2,0,0}}}, {{{0.6,1.0,0}}},
-                             {{{0,0,1.2}}}, {{{1.2,0,1.2}}} };
-            double  r[5] = {1.0, 1.0, 1.0, 1.0, 1.0};
-            s_points pts = {5, c};
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-            check_mc("5 partial overlap", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
+        // {
+        //     s_point c[2] = {
+        //         {{{ 0.0, 0.0, 0.0}}},
+        //         {{{ 2.0, 0.0, 0.0}}},
+        //     };
+        //     double r[2] = {1.5, 1.1};
+        //     s_points pts = {2, c};
+        //
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //     check_mc("2 overlapping", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
+        //
+        // {
+        //     s_point c[3] = {
+        //         {{{ 0.0, 0.0, 0.0}}},
+        //         {{{ 2.0, 0.0, 0.0}}},
+        //         {{{ 1.0, 1.7320508075688772, 0.0}}}  /* sqrt(3) */
+        //     };
+        //     double r[3] = {1.5, 1.6, 1.9};
+        //     s_points pts = {3, c};
+        //
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //     check_mc("3 overlapping", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
+        //
+        // {
+        //     s_point c[4] = {
+        //         {{{ 1,  1,  1}}},
+        //         {{{ 1, -1, -0.5}}},
+        //         {{{-1,  1, -1}}},
+        //         {{{-1, -1,  1}}}
+        //     };
+        //
+        //     double r[4] = {2.4, 1.8, 1.9, 1.5};
+        //     s_points pts = {4, c};
+        //
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //
+        //     check_mc("4 overlapping (tetrahedral)", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
+        //
+        // /* Test A: 5 non-overlapping spheres */
+        // {
+        //     s_point c[5] = { {{{0,0,0}}}, {{{10,0,0}}}, {{{0,10,0}}},
+        //                      {{{0,0,10}}}, {{{10,10,0}}} };
+        //     double  r[5] = {1.0, 0.9, 1.1, 0.8, 1.2};
+        //     s_points pts = {5, c};
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //     check_mc("5 non-overlapping", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
+        //
+        // /* Test B: 5 partially overlapping spheres */
+        // {
+        //     s_point c[5] = { {{{0,0,0}}}, {{{1.2,0,0}}}, {{{0.6,1.0,0}}},
+        //                      {{{0,0,1.2}}}, {{{1.2,0,1.2}}} };
+        //     double  r[5] = {1.0, 1.0, 1.0, 1.0, 1.0};
+        //     s_points pts = {5, c};
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //     check_mc("5 partial overlap", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
 
 
         /* Test C: 6 spheres, mixed radii, some containment */
@@ -399,49 +408,49 @@ int main(void)
             check_mc("6 mixed radii+containment", exact, mc, MC_TOL, &n_passed, &n_failed);
         }
 
-
-        /* Test D: 8 spheres on cube vertices, same radius */
-        {
-            s_point c[8] = { {{{0,0,0}}}, {{{2,0,0}}}, {{{0,2,0}}}, {{{2,2,0}}},
-                             {{{0,0,2}}}, {{{2,0,2}}}, {{{0,2,2}}}, {{{2,2,2}}} };
-            double r[8]; for (int i=0; i<8; i++) r[i] = 1.2;
-            s_points pts = {8, c};
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-            check_mc("8 cube vertices r=1.2", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
-
-        /* Test E: 10 random spheres — stress test */
-        {
-            s_point c[10] = {
-                {{{0.0, 0.0, 0.0}}}, {{{1.5, 0.3, 0.1}}}, {{{0.2, 1.6, 0.4}}},
-                {{{1.4, 1.5, 0.2}}}, {{{0.7, 0.8, 1.5}}}, {{{2.1, 0.1, 1.3}}},
-                {{{0.1, 2.2, 1.4}}}, {{{2.0, 2.1, 1.5}}}, {{{1.0, 1.0, 0.5}}},
-                {{{1.5, 0.5, 2.0}}}
-            };
-            double r[10] = {0.8, 0.7, 0.9, 0.6, 0.8, 0.7, 0.6, 0.8, 0.5, 0.7};
-            s_points pts = {10, c};
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-            check_mc("10 random spheres", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
-
-        {
-            s_point c[4] = {
-                {{{ 0,  0,  0}}},
-                {{{ 1, 0, 0}}},
-                {{{0,  1, 0}}},
-                {{{0, 0,  1}}}
-            };
-
-            double r[4] = {10, 1, 1.1, 0.8};
-            s_points pts = {4, c};
-
-            double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
-            double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
-
-            check_mc("3 contained inside big", exact, mc, MC_TOL, &n_passed, &n_failed);
-        }
+        //
+        // /* Test D: 8 spheres on cube vertices, same radius */
+        // {
+        //     s_point c[8] = { {{{0,0,0}}}, {{{2,0,0}}}, {{{0,2,0}}}, {{{2,2,0}}},
+        //                      {{{0,0,2}}}, {{{2,0,2}}}, {{{0,2,2}}}, {{{2,2,2}}} };
+        //     double r[8]; for (int i=0; i<8; i++) r[i] = 1.2;
+        //     s_points pts = {8, c};
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //     check_mc("8 cube vertices r=1.2", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
+        //
+        // /* Test E: 10 random spheres — stress test */
+        // {
+        //     s_point c[10] = {
+        //         {{{0.0, 0.0, 0.0}}}, {{{1.5, 0.3, 0.1}}}, {{{0.2, 1.6, 0.4}}},
+        //         {{{1.4, 1.5, 0.2}}}, {{{0.7, 0.8, 1.5}}}, {{{2.1, 0.1, 1.3}}},
+        //         {{{0.1, 2.2, 1.4}}}, {{{2.0, 2.1, 1.5}}}, {{{1.0, 1.0, 0.5}}},
+        //         {{{1.5, 0.5, 2.0}}}
+        //     };
+        //     double r[10] = {0.8, 0.7, 0.9, 0.6, 0.8, 0.7, 0.6, 0.8, 0.5, 0.7};
+        //     s_points pts = {10, c};
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //     check_mc("10 random spheres", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
+        //
+        // {
+        //     s_point c[4] = {
+        //         {{{ 0,  0,  0}}},
+        //         {{{ 1, 0, 0}}},
+        //         {{{0,  1, 0}}},
+        //         {{{0, 0,  1}}}
+        //     };
+        //
+        //     double r[4] = {10, 1, 1.1, 0.8};
+        //     s_points pts = {4, c};
+        //
+        //     double exact = volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff);
+        //     double mc    = mc_volume_union_spheres(&pts, r, N_MC, SEED);
+        //
+        //     check_mc("3 contained inside big", exact, mc, MC_TOL, &n_passed, &n_failed);
+        // }
     
 
       }

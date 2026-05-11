@@ -12,6 +12,95 @@
 #include <math.h>
 
 
+bool are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opposite,
+                         e_delaunay_test_type type)
+{   
+    s_point coords1[4], coords2[4];
+    extract_vertices_ncell(scplx, ncell, coords1);
+    extract_vertices_ncell(scplx, ncell->opposite[id_opposite], coords2);
+
+    if (test_orientation(coords1, coords1[3]) == 0 || 
+        test_orientation(coords2, coords2[3]) == 0) {
+        return false;  /* If any is flat, return 0 */
+    }
+
+    int opp_face_localid;
+    face_localid_of_adjacent_ncell(ncell, 2, &id_opposite, id_opposite, &opp_face_localid);
+    int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
+    
+    int in1;
+    if (scplx->weights) {
+        double weights1[4]; extract_weights_ncell(scplx, ncell, weights1);
+        in1 = test_orthosphere(coords1, weights1, 
+                scplx->points.p[opp_face_vertex_id], scplx->weights[opp_face_vertex_id]);
+    } else {
+        in1 = test_insphere(coords1, scplx->points.p[opp_face_vertex_id]);
+    }
+
+    switch (type) {
+        case DELAUNAY_TEST_STRICT:
+            if (in1 == -1) return true;
+            else return false;
+        case DELAUNAY_TEST_NONSTRICT:
+            if (in1 != 1) return true;
+            else return false;
+    }
+}
+
+bool is_delaunay_3d(const s_scplx *scplx, e_delaunay_test_type type)
+{
+    s_ncell *current = scplx->head;
+    while (current) {
+        s_point vertices_ncell[4];
+        extract_vertices_ncell(scplx, current, vertices_ncell);
+        if (test_orientation(vertices_ncell, vertices_ncell[3]) == 0) {
+            fprintf(stderr, "Flat tetra!! vids: %d %d %d %d\n",
+                current->vertex_id[0], current->vertex_id[1],
+                current->vertex_id[2], current->vertex_id[3]);
+            return false;
+        }
+        for (int ii=0; ii<4; ii++) {
+            if (current->opposite[ii] &&
+                !are_locally_delaunay(scplx, current, ii, type)) {
+                    fprintf(stderr, "Insphere failure: ncell vids %d %d %d %d, opposite vids %d %d %d %d\n",
+                        current->vertex_id[0], current->vertex_id[1],
+                        current->vertex_id[2], current->vertex_id[3],
+                        current->opposite[ii]->vertex_id[0],
+                        current->opposite[ii]->vertex_id[1],
+                        current->opposite[ii]->vertex_id[2],
+                        current->opposite[ii]->vertex_id[3]);
+                return false;
+            }
+        }
+        current = current->next;
+    }
+    return true;
+}
+
+
+static bool p_locally_redundant_in_ncell(const s_scplx *scplx, const s_ncell *nc, int p_id)
+{   /* In unweighted triangulation, all points are NON-redundant */
+    if (!scplx->weights) return false;
+
+    /* If any vertex belongs to big tetra, orthosphere is unbounded/meaningless.
+     * No finite point can be redundant. Think as big tetra having infinite vertices. */
+
+    if (nc->vertex_id[0] < 4 && nc->vertex_id[1] < 4 &&
+        nc->vertex_id[2] < 4 && nc->vertex_id[3] < 4) return false;
+
+    s_point v[4];  double w[4];
+    extract_vertices_and_weights_ncell(scplx, nc, v, w);
+    printf("v: (%d,%d,%d,%d)   w: (%g,%g,%g,%g)   redundant: %d\n",
+            nc->vertex_id[0], nc->vertex_id[1], nc->vertex_id[2], nc->vertex_id[3],
+            w[0], w[1], w[2], w[3], 
+            test_orthosphere(v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    return (test_orthosphere(v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+}
+
+
+
+// ----------------------------------- HELPERS ---------------------------------------------
+//
 static int id_where_equal_int(const int *arr, int N, int entry) 
 {
     for (int ii=0; ii<N; ii++) if (arr[ii] == entry) return ii;
@@ -24,7 +113,6 @@ static int inarray(const int *arr1, int N, int a)
     for (int ii=0; ii<N; ii++) if (arr1[ii] == a) return 1;
     return 0;
 }
-
 
 // ----------------------------------- STACK ---------------------------------------------
 
@@ -169,6 +257,10 @@ static inline void map_vid_lid(s_ncell *ncell, int v1, int *l1, int v2, int *l2,
 
 static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell *OUT_PTRS[3])
 {   
+    // fprintf(stderr, "flip23 called: nc1 vids %d %d %d %d, opp_cell_id=%d\n",
+    // nc1->vertex_id[0], nc1->vertex_id[1],
+    // nc1->vertex_id[2], nc1->vertex_id[3], opp_cell_id);
+
     scplx->N_ncells += 1;
     s_ncell *nc2 = nc1->opposite[opp_cell_id], *nc3 = malloc_ncell();
     if (!nc2) return 0;
@@ -179,7 +271,7 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
     /* Update linked-list of ncells */
     /* ---- NC1 ----- NC2 ---------------- */
     /* ---- NC1 ----- NC2 ----- NC3 ------ */
-    nc3->next = nc2->next; if (nc3->next) nc3->next->prev = nc3;  /* Last migh be null! */
+    nc3->next = nc2->next; if (nc3->next) nc3->next->prev = nc3;
     nc2->next = nc3; nc3->prev = nc2;
 
     /* scplx important indices */
@@ -190,12 +282,12 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
     int d = nc2->vertex_id[opp_face_localid];
     int p = nc1->vertex_id[opp_cell_id];
 
-    int nc1_id_a, nc1_id_b, nc1_id_c, nc1_id_p;  /* Map from global vertex ids to local ids */
+    int nc1_id_a, nc1_id_b, nc1_id_c, nc1_id_p;
     map_vid_lid(nc1, a, &nc1_id_a, b, &nc1_id_b, c, &nc1_id_c, p, &nc1_id_p);
     int nc2_id_a, nc2_id_b, nc2_id_c, nc2_id_d;
     map_vid_lid(nc2, a, &nc2_id_a, b, &nc2_id_b, c, &nc2_id_c, d, &nc2_id_d);
-    
-    /* Update nc1 */
+
+     /* Update nc1 */
     nc1->vertex_id[nc1_id_c] = d;
     nc1->opposite[nc1_id_a] = nc2;
     nc1->opposite[nc1_id_b] = nc3;
@@ -215,8 +307,8 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
         nc1_opp_old[nc1_id_a]->opposite[opp_aux] = nc2;
     }
 
-    /* scplx nc3 */
-    set_ncell_vids(nc3,    p, c, d, a);
+    /* Build nc3 */
+    set_ncell_vids(nc3, p, c, d, a);
     set_ncell_opposite_pointers(nc3,  nc2_opp_old[nc2_id_b], nc1, nc1_opp_old[nc1_id_b], nc2);
     if (nc1_opp_old[nc1_id_b]) {
         int opp_aux; face_localid_of_adjacent_ncell(nc3, 2, &(int){2}, 2, &opp_aux);
@@ -226,17 +318,14 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
         int opp_aux; face_localid_of_adjacent_ncell(nc3, 2, &(int){0}, 0, &opp_aux);
         nc2_opp_old[nc2_id_b]->opposite[opp_aux] = nc3;
     }
-    
+
     if (stack) { stack_push(stack, nc1); stack_push(stack, nc2); stack_push(stack, nc3); }
     if (OUT_PTRS) { OUT_PTRS[0] = nc1; OUT_PTRS[1] = nc2; OUT_PTRS[2] = nc3; }
     return 1;
 }
 
-
-static int can_perform_flip32(const s_scplx *scplx, const s_ncell *ncell, int opp_cell_id, int *ridge_id_2)
+static int can_perform_flip32(const s_ncell *ncell, int opp_cell_id, int *ridge_id_2)
 {   /* Checks if tetra abpd exists */
-    if (scplx->N_ncells < 3) return 0;
-
     int face_vid[3]; extract_ids_face(ncell, 2, &opp_cell_id, face_vid);
     int opp_face_lid; face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_lid);
     
@@ -250,8 +339,10 @@ static int can_perform_flip32(const s_scplx *scplx, const s_ncell *ncell, int op
                 return 1;
         }
     }
+
     return 0;
 }
+
 
 static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell *OUT_PTRS[2])
 {
@@ -262,13 +353,11 @@ static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_i
         nc2 = next_ncell_ridge_cycle(nc1, opp_cell_id, ridge_id_2, &v2_main, &v2_2);
         nc3 = next_ncell_ridge_cycle(nc2, v2_main, v2_2, &v3_main, &v3_2);
     }
-
     s_ncell *nc1_opp_old[4]; opposite_pointers_ncell(nc1, nc1_opp_old);
     s_ncell *nc2_opp_old[4]; opposite_pointers_ncell(nc2, nc2_opp_old);
     s_ncell *nc3_opp_old[4]; opposite_pointers_ncell(nc3, nc3_opp_old);
 
-    /* We remove nc3 */
-    /* ----- NC3->PREV ----- NC3 ----- NC3->NEXT ----- */
+    /* Remove nc3 from linked list */
     s_ncell *nc3_next = nc3->next;
     if (nc3->next) nc3->next->prev = nc3->prev;
     if (nc3->prev) nc3->prev->next = nc3_next;
@@ -277,21 +366,20 @@ static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_i
     /* scplx important indices */
     int lid_ridge[2] = {opp_cell_id, ridge_id_2};
     int vid_ridge[2]; extract_ids_face(nc1, 1, lid_ridge, vid_ridge);
-
     int p = nc1->vertex_id[opp_cell_id];
     int a = nc1->vertex_id[ridge_id_2];
     int b = vid_ridge[0];
     int c = vid_ridge[1];
     int d = nc2->vertex_id[opp_face_localid];
 
-    int nc1_id_a, nc1_id_b, nc1_id_c, nc1_id_p;  /* Map from global vertex ids to local ids */
+    int nc1_id_a, nc1_id_b, nc1_id_c, nc1_id_p;
     map_vid_lid(nc1, a, &nc1_id_a, b, &nc1_id_b, c, &nc1_id_c, p, &nc1_id_p);
     int nc2_id_a, nc2_id_b, nc2_id_c, nc2_id_d;
     map_vid_lid(nc2, a, &nc2_id_a, b, &nc2_id_b, c, &nc2_id_c, d, &nc2_id_d);
     int nc3_id_b, nc3_id_c, nc3_id_d, nc3_id_p;
     map_vid_lid(nc3, b, &nc3_id_b, c, &nc3_id_c, d, &nc3_id_d, p, &nc3_id_p);
-    
-    /* Update nc1 */
+
+     /* Update nc1 */
     nc1->vertex_id[nc1_id_c] = d;
     nc1->opposite[nc1_id_b] = nc2;
     nc1->opposite[nc1_id_p] = nc2_opp_old[nc2_id_c];
@@ -318,7 +406,7 @@ static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_i
         int opp_aux; face_localid_of_adjacent_ncell(nc2, 2, &nc2_id_a, nc2_id_a, &opp_aux);
         nc3_opp_old[nc3_id_b]->opposite[opp_aux] = nc2;
     }
-    
+
     if (stack) stack_remove_ncell(stack, nc3);
     free_ncell(nc3);
     if (stack) { stack_push(stack, nc1); stack_push(stack, nc2); }
@@ -328,38 +416,84 @@ static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_i
 
 static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int opp_cell_id, int *ridge_id_2)
 {   /* In general, in config44 no need for coplanarity. But since this flip is only done on a degenerate case, 
-       it makes the test simpler. */
-    if (scplx->N_ncells < 4) return 0;
-
-    /* Determine ridge */
+       it makes the test simpler. ridge_id_2 is the other vertex NOT belonging to the ridge. */
+    /* Determine ridge along which we are in config44 */
     int opp_face_localid; face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
     int face_vid[3]; extract_ids_face(ncell, 2, &opp_cell_id, face_vid);
     s_point face_points[3] = {scplx->points.p[face_vid[0]], scplx->points.p[face_vid[1]], scplx->points.p[face_vid[2]]};
     s_point point_p = scplx->points.p[ncell->vertex_id[opp_cell_id]];
     s_point point_d = scplx->points.p[ncell->opposite[opp_cell_id]->vertex_id[opp_face_localid]];
 
-    if (orientation_robust((s_point[3]){point_p, face_points[0], face_points[1]}, point_d) == 0) {
-        *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]);
-    } else if (orientation_robust((s_point[3]){point_p, face_points[1], face_points[2]}, point_d) == 0) {
-        *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vid[0]);
-    } else if (orientation_robust((s_point[3]){point_p, face_points[2], face_points[0]}, point_d) == 0) {
-        *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_vid[1]);
-    } else {
-        assert(1 == 0 && "Should never reach this! Edge triangle intersect already gave a degenerate intersection...");
+    int o0 = test_orientation((s_point[3]){point_p, face_points[0], face_points[1]}, point_d);
+    int o1 = test_orientation((s_point[3]){point_p, face_points[1], face_points[2]}, point_d);
+    int o2 = test_orientation((s_point[3]){point_p, face_points[2], face_points[0]}, point_d);
+    int num_ridges = (o0 == 0) + (o1 == 0) + (o2 == 0); 
+    assert(num_ridges == 1 || num_ridges == 2);
+
+    int AUX_ridge_id_2[2];  int k=0;
+    if (o0 == 0) {
+        AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]);
+    } 
+    if (o1 == 0) {
+        AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[0]);
+    } 
+    if (o2 == 0) {
+        AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[1]);
+    } 
+
+    // printf("Traversing ridge:\n");
+    for (int i=0; i<k; i++) {
+        // print_ncell(ncell);
+        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
+        //         scplx->points.p[ncell->vertex_id[0]].x, scplx->points.p[ncell->vertex_id[0]].y, scplx->points.p[ncell->vertex_id[0]].z,
+        //         scplx->points.p[ncell->vertex_id[1]].x, scplx->points.p[ncell->vertex_id[1]].y, scplx->points.p[ncell->vertex_id[1]].z,
+        //         scplx->points.p[ncell->vertex_id[2]].x, scplx->points.p[ncell->vertex_id[2]].y, scplx->points.p[ncell->vertex_id[2]].z,
+        //         scplx->points.p[ncell->vertex_id[3]].x, scplx->points.p[ncell->vertex_id[3]].y, scplx->points.p[ncell->vertex_id[3]].z);
+
+
+        *ridge_id_2 = AUX_ridge_id_2[i];
+
+        int nc2_id1, nc2_id2;
+        s_ncell *nc2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &nc2_id1, &nc2_id2);
+        if (!nc2) continue;
+        // print_ncell(nc2);
+        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
+        //         scplx->points.p[nc2->vertex_id[0]].x, scplx->points.p[nc2->vertex_id[0]].y, scplx->points.p[nc2->vertex_id[0]].z,
+        //         scplx->points.p[nc2->vertex_id[1]].x, scplx->points.p[nc2->vertex_id[1]].y, scplx->points.p[nc2->vertex_id[1]].z,
+        //         scplx->points.p[nc2->vertex_id[2]].x, scplx->points.p[nc2->vertex_id[2]].y, scplx->points.p[nc2->vertex_id[2]].z,
+        //         scplx->points.p[nc2->vertex_id[3]].x, scplx->points.p[nc2->vertex_id[3]].y, scplx->points.p[nc2->vertex_id[3]].z);
+
+        int nc3_id1, nc3_id2;
+        s_ncell *nc3 = next_ncell_ridge_cycle(nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
+        if (!nc3) continue;
+        // print_ncell(nc3);
+        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
+        //         scplx->points.p[nc3->vertex_id[0]].x, scplx->points.p[nc3->vertex_id[0]].y, scplx->points.p[nc3->vertex_id[0]].z,
+        //         scplx->points.p[nc3->vertex_id[1]].x, scplx->points.p[nc3->vertex_id[1]].y, scplx->points.p[nc3->vertex_id[1]].z,
+        //         scplx->points.p[nc3->vertex_id[2]].x, scplx->points.p[nc3->vertex_id[2]].y, scplx->points.p[nc3->vertex_id[2]].z,
+        //         scplx->points.p[nc3->vertex_id[3]].x, scplx->points.p[nc3->vertex_id[3]].y, scplx->points.p[nc3->vertex_id[3]].z);
+
+
+
+        int nc4_id1, nc4_id2;
+        s_ncell *nc4 = next_ncell_ridge_cycle(nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
+        if (!nc4) continue;
+        // print_ncell(nc4);
+        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
+        //         scplx->points.p[nc4->vertex_id[0]].x, scplx->points.p[nc3->vertex_id[0]].y, scplx->points.p[nc4->vertex_id[0]].z,
+        //         scplx->points.p[nc4->vertex_id[1]].x, scplx->points.p[nc4->vertex_id[1]].y, scplx->points.p[nc4->vertex_id[1]].z,
+        //         scplx->points.p[nc4->vertex_id[2]].x, scplx->points.p[nc4->vertex_id[2]].y, scplx->points.p[nc4->vertex_id[2]].z,
+        //         scplx->points.p[nc4->vertex_id[3]].x, scplx->points.p[nc4->vertex_id[3]].y, scplx->points.p[nc4->vertex_id[3]].z);
+
+
+
+        // printf("nc4->opp[nc4_id1]: %p\n", nc4->opposite[nc4_id1]);
+
+        if (nc4->opposite[nc4_id1] == ncell) return 1;
+        // printf("TRY 2\n");
     }
-
-    /* Check that in config44 by traversing ridge */
-    int nc2_id1, nc2_id2;
-    s_ncell *nc2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &nc2_id1, &nc2_id2);
-    if (!nc2) return 0;
-    int nc3_id1, nc3_id2;
-    s_ncell *nc3 = next_ncell_ridge_cycle(nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
-    if (!nc3) return 0;
-    int nc4_id1, nc4_id2;
-    s_ncell *nc4 = next_ncell_ridge_cycle(nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
-    if (!nc4) return 0;
-    return (nc4->opposite[nc4_id1] == ncell);
-
+    // printf("NOT FOUND RIDGE\n");
+    return 0;
 }
 
 static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell *OUT_PTRS[4]) 
@@ -376,7 +510,8 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
     int d = opp_face_vid;
 
     s_ncell *FLIP23_PTRS[3];
-    if (!flip23(scplx, NULL, ncell, id_ridge_1, opp_face_lid, FLIP23_PTRS)) return 0;  /* TOWARDS NC2 */
+    /* TOWARDS NC2 */
+    if (!flip23(scplx, NULL, ncell, id_ridge_1, opp_face_lid, FLIP23_PTRS)) return 0;
 
     /* Find which ncell added shares ridge. Currently, no way to predict this. */
     s_ncell *nc5;
@@ -385,6 +520,9 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
         if (inarray(FLIP23_PTRS[ii]->vertex_id, 4, a) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, c) &&
             inarray(FLIP23_PTRS[ii]->vertex_id, 4, d) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, p)) {
             nc5 = FLIP23_PTRS[ii];
+            // printf("Pushed to the stack after flip23 in flip44:\n");
+            // print_ncell(FLIP23_PTRS[(ii+1)%3]);
+            // print_ncell(FLIP23_PTRS[(ii+2)%3]);
             if (stack) { stack_push(stack, FLIP23_PTRS[(ii+1)%3]); stack_push(stack, FLIP23_PTRS[(ii+2)%3]); }
             if (OUT_PTRS) { OUT_PTRS[0] = FLIP23_PTRS[(ii+1)%3]; OUT_PTRS[1] = FLIP23_PTRS[(ii+2)%3]; }
             debug_found = 1;
@@ -392,6 +530,7 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
         }
     }
     assert(debug_found == 1 && "Could not perform flip44...");
+    // printf("NC5: (%d, %d, %d, %d)\n", nc5->vertex_id[0], nc5->vertex_id[1], nc5->vertex_id[2], nc5->vertex_id[3]);
 
     /* 2) flip32 */
     int nc5_p = id_where_equal_int(nc5->vertex_id, 4, ncell->vertex_id[id_ridge_1]);
@@ -400,11 +539,153 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
     int nc3_id2; face_localid_of_adjacent_ncell(nc5, 2, &nc5_p, nc5_p, &nc3_id2);
     int nc3_opp_face_lid; face_localid_of_adjacent_ncell(nc3, 2, &nc3_id1, nc3_id1, &nc3_opp_face_lid);
 
+
     s_ncell *FLIP32_PTRS[2];
+    // printf("FLIP44 CALLING FLIP32:\n");
     flip32(scplx, NULL, nc3, nc3_id1, nc3_id2, nc3_opp_face_lid, FLIP32_PTRS);
     if(stack) { stack_push(stack, FLIP32_PTRS[0]); stack_push(stack, FLIP32_PTRS[1]); }
     if (OUT_PTRS) { OUT_PTRS[2] = FLIP32_PTRS[0]; OUT_PTRS[3] = FLIP32_PTRS[1]; }
+
+    // printf("Pushed to the stack after flip32 in flip44:\n");
+            // print_ncell(FLIP32_PTRS[0]);
+            // print_ncell(FLIP32_PTRS[1]);
+
+
     return 1;
+}
+
+
+static int can_perform_flip41(const s_ncell *ncell, int opp_cell_id, int *redundant_localid)
+{
+    int face_vid[3]; extract_ids_face(ncell, 2, &opp_cell_id, face_vid);
+    int opp_face_lid; face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_lid);
+    s_ncell *opp_ncell = ncell->opposite[opp_cell_id];
+    int p_vid = ncell->vertex_id[opp_cell_id];
+
+    /* For each edge of shared face, check if degree-3 tetrahedron exists */
+    int degree3_edges[3][2], n_degree3 = 0;
+    for (int i=0; i<3; i++) {
+        int va = face_vid[i], vb = face_vid[(i+1)%3];
+        for (int j=0; j<4; j++) {
+            s_ncell *nb = opp_ncell->opposite[j];
+            if (nb && nb != ncell &&
+                inarray(nb->vertex_id, 4, p_vid) &&
+                inarray(nb->vertex_id, 4, va)    &&
+                inarray(nb->vertex_id, 4, vb)) {
+                degree3_edges[n_degree3][0] = va;
+                degree3_edges[n_degree3][1] = vb;
+                n_degree3++;
+                break;
+            }
+        }
+    }
+
+    if (n_degree3 != 2) return 0;
+
+    /* Redundant vertex is common to both degree-3 edges */
+    int redundant_vid = -1;
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 2; j++)
+            if (degree3_edges[0][i] == degree3_edges[1][j])
+                redundant_vid = degree3_edges[0][i];
+
+    assert(redundant_vid != -1);
+    *redundant_localid = id_where_equal_int(ncell->vertex_id, 4, redundant_vid);
+    return 1;
+}
+
+
+static void flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid, bool *ignored)
+{
+    int r_vid = ncell->vertex_id[r_localid];
+    scplx->N_ncells -= 3;
+    ignored[r_vid] = true;
+
+    /* Determine the 4 ncells in the star of redundant_vid */
+    s_ncell *star[4]; 
+    star[0] = ncell;
+    int k = 1;
+    for (int i = 0; i < 4; i++) {
+        if (i == r_localid) continue;
+        s_ncell *nb = ncell->opposite[i];
+        if (nb && inarray(nb->vertex_id, 4, r_vid))
+            star[k++] = nb;
+    }
+    assert(k == 4 && "flip41: redundant vertex does not have exactly 4 tetrahedra in its star");
+
+
+    /* Precompute old opposite pointers before modifying anything */
+    s_ncell *nc1_opp_old[4]; opposite_pointers_ncell(star[0], nc1_opp_old);
+    s_ncell *nc2_opp_old[4]; opposite_pointers_ncell(star[1], nc2_opp_old);
+    s_ncell *nc3_opp_old[4]; opposite_pointers_ncell(star[2], nc3_opp_old);
+    s_ncell *nc4_opp_old[4]; opposite_pointers_ncell(star[3], nc4_opp_old);
+
+    /* Local id of redundant vertex in each ncell */
+    int nc1_r = id_where_equal_int(star[0]->vertex_id, 4, r_vid);
+    int nc2_r = id_where_equal_int(star[1]->vertex_id, 4, r_vid);
+    int nc3_r = id_where_equal_int(star[2]->vertex_id, 4, r_vid);
+    int nc4_r = id_where_equal_int(star[3]->vertex_id, 4, r_vid);
+
+    /* 4 vertices that will be kept */
+    int a = ncell->vertex_id[(r_localid+1)%4];  
+    int b = ncell->vertex_id[(r_localid+2)%4];  
+    int c = ncell->vertex_id[(r_localid+3)%4];
+    int d = -1;
+    for (int i=0; i<4; i++) {
+        int aux = star[1]->vertex_id[i];
+        if (aux != a && aux != b && aux != c && aux != r_vid) d = aux;
+    }
+    assert(d != -1);
+
+
+    /* Update nc1 to be the surviving tetrahedron */
+    set_ncell_vids(star[0], a, b, c, d);
+
+    /* Correct opposite pointer correspondence. 
+     * out_i is opposite to whichever of {a,b,c,d} is absent from star[i]. */
+    int abcd[4] = {a, b, c, d};
+    s_ncell *out_raw[4]  = {nc1_opp_old[nc1_r], nc2_opp_old[nc2_r],
+                            nc3_opp_old[nc3_r], nc4_opp_old[nc4_r]};
+    s_ncell *out[4]      = {NULL, NULL, NULL, NULL};
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            if (!inarray(star[i]->vertex_id, 4, abcd[j]))
+                { out[j] = out_raw[i]; break; }
+
+    set_ncell_opposite_pointers(star[0], out[0], out[1], out[2], out[3]);
+
+    /* Update outer neighbors. local ids now correctly match out[] */
+    for (int j = 0; j < 4; j++) {
+        if (out[j]) {
+            int opp_aux; face_localid_of_adjacent_ncell(star[0], 2, &j, j, &opp_aux);
+            out[j]->opposite[opp_aux] = star[0];
+        }
+    }
+
+
+    /* Remove nc2, nc3, nc4 from linked list */
+    if (star[1]->next) star[1]->next->prev = star[1]->prev;
+    if (star[1]->prev) star[1]->prev->next = star[1]->next;
+    else scplx->head = star[1]->next;
+
+    if (star[2]->next) star[2]->next->prev = star[2]->prev;
+    if (star[2]->prev) star[2]->prev->next = star[2]->next;
+    else scplx->head = star[2]->next;
+
+    if (star[3]->next) star[3]->next->prev = star[3]->prev;
+    if (star[3]->prev) star[3]->prev->next = star[3]->next;
+    else scplx->head = star[3]->next;
+
+    if (stack) {
+        stack_remove_ncell(stack, star[1]);
+        stack_remove_ncell(stack, star[2]);
+        stack_remove_ncell(stack, star[3]);
+        stack_push(stack, star[0]);
+    }
+
+    free_ncell(star[1]);
+    free_ncell(star[2]);
+    free_ncell(star[3]);
 }
 
 
@@ -465,12 +746,6 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
     regular_tetrahedron(centre, inradius, scplx_points.p);
     perturb_big_tetra(scplx_points.p, inradius);
     
-    for (int i=0; i<points->N; i++) {
-        if (test_point_in_tetrahedron(scplx_points.p, points->p[i], 1e-12, 1e-12) != TEST_IN) {
-            printf("OUTSIDE\n");
-        }
-    }
-
     out->points.N = points->N + 4;
     out->points = scplx_points;
     s_ncell *big_ncell = malloc_ncell();
@@ -491,89 +766,104 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
     return 1;
 }
 
-static int determine_case(const s_point vertices_face[3], s_point p, s_point d) 
-{
-    if (test_point_in_triangle_3D(vertices_face, p, 0, 0) == TEST_BOUNDARY) return 4;
-    e_intersect_type type = test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0, 0);
-    if (type == INTERSECT_DEGENERATE) return 3;
-    if (type == INTERSECT_EMPTY) return 2;
-    if (type == INTERSECT_NONDEGENERATE) return 1;
-    fprintf(stderr, "determine_case: Should never reach this!");
-    assert(1 == 0);
+
+typedef enum type_union_tetra {
+    CASE_CONVEX,
+    CASE_NON_CONVEX,
+    CASE_FLAT,
+    CASE_P_IN_EDGE,
+    CASE_ERROR
+} e_type_union_tetra;
+
+static e_type_union_tetra determine_case(const s_point vertices_face[3], s_point p, s_point d) 
+{   /* two ncells sharing face abc, with opposite vertices p and d */
+    e_geom_test test_p_in_face = test_point_in_triangle_3D(vertices_face, p, 0, 0);
+    if (test_p_in_face == TEST_BOUNDARY) return CASE_P_IN_EDGE;
+
+    /* Checks intersection of segment pd with face */
+    switch (test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0, 0)) {
+        case INTERSECT_DEGENERATE:  
+            /* either pd has endpoint inside abc, or pd intersects edge/vertex */
+            if (test_p_in_face == TEST_IN) {
+                printf("DEBUG!!!!!!!!!      CASE NOT CONSIDERED BEFORE!\n");
+                return CASE_CONVEX;
+            }
+            else return CASE_FLAT;
+        case INTERSECT_EMPTY: return CASE_NON_CONVEX;
+        case INTERSECT_NONDEGENERATE: return CASE_CONVEX;
+        case INTERSECT_ERROR: 
+            printf("ERROR IN DETERMINE CASE! Degenerate triangle?\n");
+            return CASE_ERROR;
+    }
 }
 
-static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id)
+static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored)
 {   /* -1 ERROR, 0 NOT FLIPPED, 1 FLIPPED */
+    if (!ncell->opposite[opp_cell_id]) return 0;
+
     s_point coords_face[3];
     extract_vertices_face(scplx, ncell, 2, &opp_cell_id, coords_face);
 
-    // Extract id of vertex in opposite cell corresponding to the face
-    int opp_face_localid;
+    int opp_face_localid; 
     face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[opp_cell_id])->vertex_id[opp_face_localid];
 
     s_point p = scplx->points.p[ncell->vertex_id[opp_cell_id]];
     s_point d = scplx->points.p[opp_face_vertex_id];
     
-    switch(determine_case(coords_face, p, d)) {
+    switch (determine_case(coords_face, p, d)) {
         int ridge_id_2;
-        case 1:
+        int redundant_localid;
+        case CASE_ERROR: return 0;  /* Degenerate face */
+        case CASE_CONVEX:
+            // printf("CASE 1\n");
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
-        case 2:
-            if (can_perform_flip32(scplx, ncell, opp_cell_id, &ridge_id_2)) {
+        case CASE_NON_CONVEX:
+            // fprintf(stderr, "  CASE 2, can_perform_flip41=%d, can_perform_flip32=%d\n", 
+            //                     can_perform_flip41(ncell, opp_cell_id, &redundant_localid),
+            //                     can_perform_flip32(ncell, opp_cell_id, &ridge_id_2));
+            if (scplx->weights &&
+                can_perform_flip41(ncell, opp_cell_id, &redundant_localid)) {
+                flip41(scplx, stack, ncell, redundant_localid, ignored);
+                return 1;
+            } else if (can_perform_flip32(ncell, opp_cell_id, &ridge_id_2)) {
                 flip32(scplx, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL);
                 return 1;
-            } else return 0; 
-        case 3:
+            } else return 0;
+        case CASE_FLAT:
             if (can_perform_flip44(scplx, ncell, opp_cell_id, &ridge_id_2)) {
                 // printf("CASE 3\n");
                 flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL);
                 return 1;
             } else return 0;
-        case 4:
-            fprintf(stderr, "DEBUG delaunay.c: flip_tetrahedra: CASE 4... UNSURE, UNTESTED\n");
+        case CASE_P_IN_EDGE:
+            // fprintf(stderr, "DEBUG delaunay.c: flip_tetrahedra: CASE 4... UNSURE, UNTESTED\n");
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
     }
     return 0;
 }
 
-static void remove_point_scplx(s_scplx *scplx, int point_id)
-{
-    if (point_id < scplx->points.N-1)
-        for (int ii=point_id; ii<scplx->points.N-1; ii++)
-            scplx->points.p[ii] = scplx->points.p[ii+1];
-
-    scplx->points.p = realloc(scplx->points.p, sizeof(s_point) * (scplx->points.N-1));
-    scplx->points.N--;
-
-    if (scplx->weights) {
-        if (point_id < scplx->points.N)  // N already decremented
-            for (int ii=point_id; ii<scplx->points.N; ii++)
-                scplx->weights[ii] = scplx->weights[ii+1];
-        scplx->weights = realloc(scplx->weights, sizeof(double) * scplx->points.N);
-    }
-}
-
-static int point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point point, double TOL)
+static bool point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point point, double TOL)
 {
     const double TOL2 = TOL*TOL;
     if (distance_squared(scplx->points.p[ncell->vertex_id[0]], point) <= TOL2 || 
         distance_squared(scplx->points.p[ncell->vertex_id[1]], point) <= TOL2 ||
         distance_squared(scplx->points.p[ncell->vertex_id[2]], point) <= TOL2 ||
         distance_squared(scplx->points.p[ncell->vertex_id[3]], point) <= TOL2)
-        return 1;
-    else return 0;
+        return true;
+    else return false;
 }
 
-static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup)
+static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored)
 {   /* -1: ERROR, 0: not inserted, 1: inserted */
     s_point point = scplx->points.p[point_id];
     s_ncell *container_ncell = in_ncell_walk(scplx, point);
 
-    if (point_close_to_ncell_vertex(scplx, container_ncell, point, TOL_dup)) {
-        remove_point_scplx(scplx, point_id);
+    if (point_close_to_ncell_vertex(scplx, container_ncell, point, TOL_dup) ||
+        p_locally_redundant_in_ncell(scplx, container_ncell, point_id)) {
+        ignored[point_id] = true;
         return 0;
     }
 
@@ -582,73 +872,130 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
         int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
-        if (current->opposite[opp_cell_id] && !are_locally_delaunay(scplx, current, opp_cell_id, DELAUNAY_TEST_STRICT))
-            if (flip_tetrahedra(scplx, stack, current, opp_cell_id) == -1) return -1;
+        if (!current->opposite[opp_cell_id]) continue;
+
+        // /* Only process cells that contain point_id */
+        // if (!inarray(current->vertex_id, 4, point_id)) continue;  /* 
+        if (!are_locally_delaunay(scplx, current, opp_cell_id, DELAUNAY_TEST_STRICT))
+            if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
     }
     return 1;
 }
 
-static void remove_big_tetra(s_scplx *scplx)
+static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_tetra)
 {
-    s_ncell *current = scplx->head;
-    while (current) {
-        s_ncell *next = current->next;
-        for (int ii=0; ii<4; ii++) if (current->vertex_id[ii] < 4) {  // This checks if a vertex is part of BIG TETRA
-            if (current->next) (current->next)->prev = current->prev;
-            if (current->prev) (current->prev)->next = next;
-            else scplx->head = current->next;
+    if (!keep_big_tetra) {
+        /* Mark first 4 indices as ignored */
+        for (int i = 0; i < 4; i++) ignored[i] = true;
+        
+        /* Remove any ncell referencing big tetra vertices */
+        s_ncell *current = scplx->head;
+        while (current) {
+            s_ncell *next = current->next;
+            for (int ii=0; ii<4; ii++) if (current->vertex_id[ii] < 4) { 
+                if (current->next) (current->next)->prev = current->prev;
+                if (current->prev) (current->prev)->next = next;
+                else scplx->head = current->next;
 
-            // Update opposite's opposite to NULL
-            for (int jj=0; jj<4; jj++) if (current->opposite[jj]) {
-                for (int kk=0; kk<4; kk++) if (current->opposite[jj]->opposite[kk] == current) {
-                    current->opposite[jj]->opposite[kk] = NULL;
-                    break;
+                /* Update opposite's opposite to NULL */
+                for (int jj=0; jj<4; jj++) if (current->opposite[jj]) {
+                    for (int kk=0; kk<4; kk++) if (current->opposite[jj]->opposite[kk] == current) {
+                        current->opposite[jj]->opposite[kk] = NULL;
+                        break;
+                    }
                 }
+
+                free_ncell(current);
+                scplx->N_ncells--;
+                break;
             }
-
-            free_ncell(current);
-            scplx->N_ncells--;
-            break;
+            current = next;
         }
-        current = next;
     }
 
-    /* Update points and their ids */
-    for (int ii=0; ii<scplx->points.N-4; ii++)
-        scplx->points.p[ii] = scplx->points.p[ii+4];
-
-    scplx->points.p = realloc(scplx->points.p, sizeof(s_point) * (scplx->points.N-4));
-    scplx->points.N -= 4;
-
-    for (s_ncell *c=scplx->head; c; c=c->next) 
-        for (int kk=0; kk<4; kk++)
-            c->vertex_id[kk] -= 4;
-
-    /* Weights */
-    if (scplx->weights) {
-        for (int ii=0; ii<scplx->points.N; ii++)   // N already decremented by 4
-            scplx->weights[ii] = scplx->weights[ii+4];
-        scplx->weights = realloc(scplx->weights, sizeof(double) * scplx->points.N);
+    /* Compact points / weights, and build remap table */
+    int *remap = malloc(sizeof(int) * scplx->points.N);
+    int k = 0;
+    for (int i = 0; i < scplx->points.N; i++) {
+        if (ignored[i]) { remap[i] = -1; continue; }
+        scplx->points.p[k] = scplx->points.p[i];
+        if (scplx->weights) scplx->weights[k] = scplx->weights[i];
+        remap[i] = k++;
     }
+    scplx->points.N = k;
+    scplx->points.p = realloc(scplx->points.p, sizeof(s_point) * k);
+    if (scplx->weights) scplx->weights = realloc(scplx->weights, sizeof(double) * k);
+
+    /* Update vertex ids */
+    for (s_ncell *c = scplx->head; c; c = c->next) {
+        for (int i = 0; i < 4; i++) {
+            assert(remap[c->vertex_id[i]] != -1 && "Ignored point still referenced by tetra.");
+            c->vertex_id[i] = remap[c->vertex_id[i]];
+        }
+    }
+
+    free(remap);
 }
 
 
-s_scplx construct_dt_3d(const s_points *points, const double *weights, bool keep_big_tetra, double TOL_duplicates)
+s_scplx construct_dt_3d(const s_points *points, const double *weights,
+                        bool keep_big_tetra, double TOL_duplicates)
 {
+    bool *ignored = calloc(points->N + 4, sizeof(bool));  /* Space for big tetra */
+    if (!ignored) goto error;
+
     s_dstack stack = stack_create();
     s_scplx scplx; if (!initialize_scplx(points, weights, &scplx)) goto error;
 
-    int ii = 4;  /* First 4 are big tetra, which already is inserted */
-    while (ii < scplx.points.N) {
-        int o = insert_one_point(&scplx, ii, &stack, TOL_duplicates);
-        if (o == 1) ii++;
-        else if (o == -1) goto error;
-    }
-    
-    if (!keep_big_tetra) remove_big_tetra(&scplx);
 
-    if (!is_delaunay_3d(&scplx, DELAUNAY_TEST_NONSTRICT))
+    /* First 4 are big tetra, which already is inserted */
+    for (int ii=4; ii<scplx.points.N; ii++) {
+        // printf("\n\n%d\n", ii);
+        // print_scomplex(&scplx);
+
+        if (insert_one_point(&scplx, ii, &stack, TOL_duplicates, ignored) == -1) goto error;
+
+        if (!is_delaunay_3d(&scplx, DELAUNAY_TEST_NONSTRICT)) {
+            fprintf(stderr, "%d: DT is not Delaunay!\n", ii);
+            print_scomplex(&scplx);
+            exit(1);
+        }
+    }
+
+
+    
+
+    if (!is_delaunay_3d(&scplx, DELAUNAY_TEST_NONSTRICT)) {
         fprintf(stderr, "WARNING: DT is not Delaunay!\n");
+        write_points_to_csv("error.csv", "w", points);
+        s_ncell *c = scplx.head;
+        while (c) {
+            s_point v[4]; extract_vertices_ncell(&scplx, c, v);
+            if (test_orientation(v, v[3]) == 0) {
+                fprintf(stderr, "Flat tetra coords:\n");
+                fprintf(stderr, "  v0(%d): %.6f %.6f %.6f\n", c->vertex_id[0], v[0].x, v[0].y, v[0].z);
+                fprintf(stderr, "  v1(%d): %.6f %.6f %.6f\n", c->vertex_id[1], v[1].x, v[1].y, v[1].z);
+                fprintf(stderr, "  v2(%d): %.6f %.6f %.6f\n", c->vertex_id[2], v[2].x, v[2].y, v[2].z);
+                fprintf(stderr, "  v3(%d): %.6f %.6f %.6f\n", c->vertex_id[3], v[3].x, v[3].y, v[3].z);
+            }
+            c = c->next;
+        }
+        exit(1);
+    }
+
+    s_ncell *c = scplx.head;
+    while (c) {
+        s_point v[4]; extract_vertices_ncell(&scplx, c, v);
+        if (test_orientation(v, v[3]) == 0)
+            fprintf(stderr, "Flat tetra in final result (%p): %d %d %d %d\n",
+                c,
+                c->vertex_id[0], c->vertex_id[1],
+                c->vertex_id[2], c->vertex_id[3]);
+        c = c->next;
+    }
+
+    
+    remove_ignored_points(&scplx, ignored, keep_big_tetra);
 
     stack_free(&stack);  
     return scplx;

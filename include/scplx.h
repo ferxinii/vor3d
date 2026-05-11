@@ -22,10 +22,6 @@ typedef struct ncell {  // Must live in heap
     bool mask_alpha;  // if it belongs to the alpha complex (for a given alpha)
 } s_ncell;
 
-typedef enum delaunay_test_type {
-    DELAUNAY_TEST_STRICT,
-    DELAUNAY_TEST_NONSTRICT
-} e_delaunay_test_type;
 
 typedef struct dynarray s_dynarray;
 typedef struct hash_table s_hash_table;
@@ -35,9 +31,6 @@ void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *scplx);
 
 
-int are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opposite, 
-                         e_delaunay_test_type type);
-int is_delaunay_3d(const s_scplx *scplx, e_delaunay_test_type type);
 int test_point_in_ncell(const s_scplx *scplx, const s_ncell *ncell, s_point query);
 s_ncell *bruteforce_find_ncell_containing(const s_scplx *scplx, s_point p);
 s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p);

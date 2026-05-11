@@ -9,7 +9,7 @@
 /* Orthosphere of every simplex. */
 
 static void tetra_orthosphere(const s_point p[4], const double w[4], double EPS_DEGEN, 
-                              s_point *out_c, double *out_r2)
+                       s_point *out_c, double *out_r2)
 {
     double A[3][3], b[3];
     double r0_2 = norm_squared(p[0]);

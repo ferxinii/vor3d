@@ -162,8 +162,9 @@ void extract_vertices_and_weights_ncell(const s_scplx *scplx, const s_ncell *nce
 {
     for (int ii=0; ii<4; ii++) {
         int vid = ncell->vertex_id[ii];
+
         p_out[ii] = scplx->points.p[vid];
-        w_out[ii] = scplx->weights[vid];
+        w_out[ii] = scplx->weights ? scplx->weights[vid] : 0.0;
     }
 }
 
@@ -354,64 +355,6 @@ int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face, const int
 }
 
 
-int are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opposite, e_delaunay_test_type type)
-{   // Points on circumscribed sphere are VALID
-    s_point coords1[4];
-    s_point coords2[4];
-    extract_vertices_ncell(scplx, ncell, coords1);
-    extract_vertices_ncell(scplx, ncell->opposite[id_opposite], coords2);
-
-    // assert(!(orientation_robust(coords1, coords1[3]) == 0 && 
-    //          orientation_robust(coords2, coords2[3]) == 0) &&
-    //        "Cannot check delaunayness, both ncells are degenerate.");
-
-    if (orientation_robust(coords1, coords1[3]) == 0 || 
-        orientation_robust(coords2, coords2[3]) == 0) return 1;  /* TODO unsure of what to return! */
-
-    // Extract vertex_id of opposite's cell face
-    int opp_face_localid;
-    face_localid_of_adjacent_ncell(ncell, 2, &id_opposite, id_opposite, &opp_face_localid);
-    int opp_face_vertex_id = (ncell->opposite[id_opposite])->vertex_id[opp_face_localid];
-    
-    // Perform insphere test: weighted or unweighted.
-    int in1;
-    if (scplx->weights) {
-        double weights1[4]; extract_weights_ncell(scplx, ncell, weights1);
-        in1 = insphere_weighted_robust(coords1, weights1, 
-                scplx->points.p[opp_face_vertex_id], scplx->weights[opp_face_vertex_id]);
-    } else {
-        in1 = insphere_robust(coords1, scplx->points.p[opp_face_vertex_id]);
-    }
-
-    switch (type) {
-        case DELAUNAY_TEST_STRICT:
-            if (in1 == -1) return 1;
-            else return 0;     
-        case DELAUNAY_TEST_NONSTRICT:
-            if (in1 != 1) return 1;
-            else return 0;
-    }
-}
-
-
-int is_delaunay_3d(const s_scplx *scplx, e_delaunay_test_type type)
-{
-    s_point vertices_ncell[4];
-    s_ncell *current = scplx->head;
-    while (current) {
-        extract_vertices_ncell(scplx, current, vertices_ncell);
-        if (orientation_robust(vertices_ncell, vertices_ncell[3]) == 0) {
-            puts("Flat tetra!!");
-            return 0;
-        }
-        for (int ii=0; ii<4; ii++) {
-            if (current->opposite[ii] &&
-                !are_locally_delaunay(scplx, current, ii, type)) return 0;
-        }
-        current = current->next;
-    }
-    return 1;
-}
 
 int test_point_in_ncell(const s_scplx *scplx, const s_ncell *ncell, s_point query)
 {   // TODO Assumes consistent ordering of vertices?
@@ -492,8 +435,8 @@ s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
 
         extract_vertices_face(scplx, current, 2, &ii, facet_vertices);
 
-        int o1 = orientation_robust(facet_vertices, opposite_vertex);
-        int o2 = orientation_robust(facet_vertices, p);
+        int o1 = test_orientation(facet_vertices, opposite_vertex);
+        int o2 = test_orientation(facet_vertices, p);
         
         if (o1 == 0) {  /* Tetrahedron is degenerate */
             if (next != prev) {  /* We come from a different adjacent one, so walk towards */
