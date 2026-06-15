@@ -302,7 +302,7 @@ static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_dynarray *inci
 
     s_points points = {.N = vertices->N, .p = vertices->items};  /* No need to free, external buffer */
     s_convh ch;
-    if (convhull_from_points(&points, EPS_degenerate, TOL, &ch) != 1) goto error;
+    if (convhull_from_points(&points, EPS_degenerate, &ch) != 1) goto error;
     return ch;
 
     error:
@@ -364,72 +364,73 @@ static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_d
 }
 
 
-static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double EPS_degenerate, double TOL) 
-{   /* Vertex may be outside of bp... Limitation of mirroring approach used to bound vdiagram? */
-    double TOL_SPIKE = TOL * 1;
-    for (int ii=0; ii<ch->points.N; ii++) {
-        if (test_point_in_convhull(&bp->convh, ch->points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
-            s_point tmp;
-            double distance = find_closest_point_on_bp(bp, ch->points.p[ii], EPS_degenerate, &tmp);
-            if (distance > TOL_SPIKE) return true;
-        }
-    }
-    return false;
-}
+// static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double EPS_degenerate, double TOL) 
+// {   /* Vertex may be outside of bp... Limitation of mirroring approach used to bound vdiagram? */
+//     double TOL_SPIKE = TOL * 1;
+//     for (int ii=0; ii<ch->points.N; ii++) {
+//         if (test_point_in_convhull(&bp->convh, ch->points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
+//             s_point tmp;
+//             double distance = find_closest_point_on_bp(bp, ch->points.p[ii], EPS_degenerate, &tmp);
+//             if (distance > TOL_SPIKE) return true;
+//         }
+//     }
+//     return false;
+// }
 
 
-static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_dynarray *buff_incident)
-{
-    /* Clip with bounding polyhedron */
-    s_convh I;
-    int i = intersection_convhulls(&vd->vcells[vid].convh, &bp->convh, EPS_degenerate, TOL, &I);
-    if (i == 1) {
-        free_convhull(&vd->vcells[vid].convh);
-        vd->vcells[vid].convh = I;
-    }
-
-    /* Clip with neighboring vcells ! */
-    bool *mask = calloc(Nreal, sizeof(bool));
-    if (!mask) goto error;
-    mask[vid] = true;
-    s_dynarray *incident_ncells = buff_incident;
-    if (!incident_ncells_to_vertex(dt, vid, incident_ncells)) goto error;
-
-    for (unsigned ii=0; ii<incident_ncells->N; ii++) {
-        s_ncell *ncell; dynarray_get_value(incident_ncells, ii, &ncell);
-        for (int jj=0; jj<4; jj++) 
-        if (ncell->vertex_id[jj] < Nreal && !mask[ncell->vertex_id[jj]]) {
-            mask[ncell->vertex_id[jj]] = true;
-            s_point plane_n = subtract_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]);
-            s_point plane_p = scale_point(sum_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]), 0.5);
-            s_point plane[3]; if (!plane_from_point_normal(plane_p, plane_n, EPS_degenerate, plane)) goto error;
-
-            s_convh clipped;
-            if (clip_convhull_halfspace(&vd->vcells[vid].convh, plane, EPS_degenerate, TOL, &clipped) == 1) {
-                free_convhull(&vd->vcells[vid].convh);
-                vd->vcells[vid].convh = clipped;
-            }
-        }
-    }
-
-    free(mask);
-    vd->vcells[vid].volume = volume_convhull(&vd->vcells[vid].convh);
-    return 1;
-
-    error:
-        free(mask);
-        return 0;
-}
+// static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_dynarray *buff_incident)
+// {
+//     /* Clip with bounding polyhedron */
+//     s_convh I;
+//     int i = intersection_convhulls(&vd->vcells[vid].convh, &bp->convh, EPS_degenerate, TOL, &I);
+//     if (i == 1) {
+//         free_convhull(&vd->vcells[vid].convh);
+//         vd->vcells[vid].convh = I;
+//     }
+//
+//     /* Clip with neighboring vcells ! */
+//     bool *mask = calloc(Nreal, sizeof(bool));
+//     if (!mask) goto error;
+//     mask[vid] = true;
+//     s_dynarray *incident_ncells = buff_incident;
+//     if (!incident_ncells_to_vertex(dt, vid, incident_ncells)) goto error;
+//
+//     for (unsigned ii=0; ii<incident_ncells->N; ii++) {
+//         s_ncell *ncell; dynarray_get_value(incident_ncells, ii, &ncell);
+//         for (int jj=0; jj<4; jj++) 
+//         if (ncell->vertex_id[jj] < Nreal && !mask[ncell->vertex_id[jj]]) {
+//             mask[ncell->vertex_id[jj]] = true;
+//             s_point plane_n = subtract_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]);
+//             s_point plane_p = scale_point(sum_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]), 0.5);
+//             s_point plane[3]; if (!plane_from_point_normal(plane_p, plane_n, EPS_degenerate, plane)) goto error;
+//
+//             s_convh clipped;
+//             if (clip_convhull_halfspace(&vd->vcells[vid].convh, plane, EPS_degenerate, TOL, &clipped) == 1) {
+//                 free_convhull(&vd->vcells[vid].convh);
+//                 vd->vcells[vid].convh = clipped;
+//             }
+//         }
+//     }
+//
+//     free(mask);
+//     vd->vcells[vid].volume = volume_convhull(&vd->vcells[vid].convh);
+//     return 1;
+//
+//     error:
+//         free(mask);
+//         return 0;
+// }
 
 
 
 
 s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
 {   /* copy of bpoly inside */
-    s_dynarray spiking_ids = dynarray_initialize(sizeof(int), 10);      /* Id of spiking cells */
+    // s_dynarray spiking_ids = dynarray_initialize(sizeof(int), 10);      /* Id of spiking cells */
     s_dynarray buff_v = dynarray_initialize(sizeof(s_point), 10);       /* Place to store vertices of each cell before convhull */
     s_dynarray buff_adjacent = dynarray_initialize(sizeof(s_ncell*), 10);  
-    if (!spiking_ids.items || !buff_v.items || !buff_adjacent.items) goto error;
+    // if (!spiking_ids.items || !buff_v.items || !buff_adjacent.items) goto error;
+    if (!buff_v.items || !buff_adjacent.items) goto error;
 
     s_vdiagram out = malloc_vdiagram(dt, Nreal);
     out.bpoly = bpoly_copy(bpoly);
@@ -441,25 +442,25 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int
             fprintf(stderr, "voronoi_from_delaunay_3d: Could not construct vdiagram.\n");
             goto error;
         }
-        if (vcell_spikes_outside_bp(bpoly, &out.vcells[ii].convh, EPS_degenerate, TOL)) {
-            if (!dynarray_push(&spiking_ids, &ii)) goto error;
-        }
+        // if (vcell_spikes_outside_bp(bpoly, &out.vcells[ii].convh, EPS_degenerate, TOL)) {
+        //     if (!dynarray_push(&spiking_ids, &ii)) goto error;
+        // }
     }
 
-    /* Clip spiking cells */
-    for (unsigned ii=0; ii<spiking_ids.N; ii++) {
-        int vid; dynarray_get_value(&spiking_ids, ii, &vid);
-        clip_vcell(dt, bpoly, &out, vid, Nreal, EPS_degenerate, TOL, &buff_adjacent);
-    }
+    // /* Clip spiking cells */
+    // for (unsigned ii=0; ii<spiking_ids.N; ii++) {
+    //     int vid; dynarray_get_value(&spiking_ids, ii, &vid);
+    //     clip_vcell(dt, bpoly, &out, vid, Nreal, EPS_degenerate, TOL, &buff_adjacent);
+    // }
 
     
-    dynarray_free(&spiking_ids);
+    // dynarray_free(&spiking_ids);
     dynarray_free(&buff_v);
     dynarray_free(&buff_adjacent);
     return out;
 
     error:
-        dynarray_free(&spiking_ids);
+        // dynarray_free(&spiking_ids);
         dynarray_free(&buff_v);
         dynarray_free(&buff_adjacent);
         free_vdiagram(&out);

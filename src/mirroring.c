@@ -1,196 +1,358 @@
 
-#include "dynarray.h"
-#include "LP.h"
 #include "points.h"
-#include "gtests.h"
+#include "dynarray.h"
+#include "voronoi_predicates.h"
+#include "robust_predicates.h"
 #include "vdiagram.h"
+#include "scplx.h"
 #include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include <assert.h>
 #include <stdbool.h>
-#include <math.h>
+#include <stdio.h>
 
+/* Identifies a constraint.  TRI* idx is unused (set to -1).
+ * CSEED idx is the constraint's position in the best_idx[] array. */
+typedef enum { TRI0, TRI1, TRI2, CSEED } e_ctype;
+typedef struct { e_ctype type; int idx; } s_cid;
 
-static s_point mirror_plane(s_point normal, double d_plane, s_point p)
+static int lp_D(const s_point face[3], s_point s,
+         const s_points *seeds, const int *best_idx,
+         s_cid i, s_cid j)
 {
-    double factor = 2 * (d_plane - dot_prod(normal, p));
-    s_point out;
-    out.x = p.x + factor * normal.x;
-    out.y = p.y + factor * normal.y;
-    out.z = p.z + factor * normal.z;
-    return out;
+    s_point A = face[0], B = face[1], C = face[2];
+
+    /* CSEED x CSEED */
+    if (i.type == CSEED && j.type == CSEED) {
+        s_point ti = seeds->p[best_idx[i.idx]];
+        s_point tj = seeds->p[best_idx[j.idx]];
+        return lp_det2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                       s.x,s.y,s.z,
+                       ti.x,ti.y,ti.z, tj.x,tj.y,tj.z);
+    }
+
+    /* CSEED x TRI */
+    if (i.type == CSEED && j.type != CSEED) {
+        s_point ti = seeds->p[best_idx[i.idx]];
+        if (j.type == TRI0) return -lp_D_T0_S(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (j.type == TRI1) return -lp_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (j.type == TRI2) return -lp_D_T2_S(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+    }
+
+    /* TRI x CSEED */
+    if (i.type != CSEED && j.type == CSEED) {
+        s_point tj = seeds->p[best_idx[j.idx]];
+        if (i.type == TRI0) return lp_D_T0_S(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (i.type == TRI1) return lp_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (i.type == TRI2) return lp_D_T2_S(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+    }
+
+    /* TRI x TRI */
+    if (i.type == j.type) return 0;  // Repeated arguments == 0
+    else if (i.type == TRI0 && j.type == TRI1) return 1;
+    else if (i.type == TRI1 && j.type == TRI0) return -1;
+    else if (i.type == TRI1 && j.type == TRI2) return 1;
+    else if (i.type == TRI2 && j.type == TRI1) return -1;
+    else if (i.type == TRI2 && j.type == TRI0) return 1;
+    else if (i.type == TRI0 && j.type == TRI2) return -1;
+
+    assert(0 && "lp_D: case not implemented");
+    return 0;
 }
 
-/* Linear Programming. */
-static void constraints_from_triangle(const double t1[2], const double t2[2], const double t3[2], 
-                                      s_LPconstraint2D out[3])
+
+static int lp_feasible(const s_point face[3], s_point s,
+                const s_points *seeds, const int *best_idx,
+                s_cid L, s_cid M, s_cid N)
 {
-    s_point2d v1 = {{{ t1[0], t1[1] }}};
-    s_point2d v2 = {{{ t2[0], t2[1] }}};
-    s_point2d v3 = {{{ t3[0], t3[1] }}};
+    s_point A = face[0], B = face[1], C = face[2];
 
-    if (test_orientation_2d((s_point2d[]){v1, v2}, v3) < 0) {  /* Check proper orientation */
-        s_point2d tmp = v1;
-        v1.x = v2.x;  v1.y = v2.y;
-        v2.x = tmp.x; v2.y = tmp.y;
+    /* duplicate CSEED constraints -> degenerate intersection, return 0 */
+    if (L.type == CSEED && M.type == CSEED && L.idx == M.idx) return 0;
+    if (L.type == CSEED && N.type == CSEED && L.idx == N.idx) return 0;
+    if (M.type == CSEED && N.type == CSEED && M.idx == N.idx) return 0;
+
+    /* swap so TRI always precedes CSEED in (L,M); sign is unchanged by this swap */
+    if (L.type == CSEED && M.type != CSEED) { s_cid tmp = L; L = M; M = tmp; }
+
+    /* TRI x TRI x CSEED */
+    if (L.type != CSEED && M.type != CSEED && N.type == CSEED) {
+        s_point ti = seeds->p[best_idx[N.idx]];
+        if (L.type == TRI0 && M.type == TRI1)
+            return lp_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (L.type == TRI1 && M.type == TRI2)
+            return lp_feasible_T1_T2_S(B.x,B.y,B.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (L.type == TRI0 && M.type == TRI2)
+            return lp_feasible_T0_T2_S(C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
     }
 
-    out[0] = (s_LPconstraint2D){ v2.y-v1.y, -(v2.x-v1.x), (v2.y-v1.y)*v1.x - (v2.x-v1.x)*v1.y };
-    out[1] = (s_LPconstraint2D){ v3.y-v2.y, -(v3.x-v2.x), (v3.y-v2.y)*v2.x - (v3.x-v2.x)*v2.y };
-    out[2] = (s_LPconstraint2D){ v1.y-v3.y, -(v1.x-v3.x), (v1.y-v3.y)*v3.x - (v1.x-v3.x)*v3.y };
+    /* TRI x CSEED x CSEED */
+    if (L.type != CSEED && M.type == CSEED && N.type == CSEED) {
+        s_point tj = seeds->p[best_idx[M.idx]];
+        s_point tl = seeds->p[best_idx[N.idx]];
+        if (L.type == TRI0)
+            return lp_feasible_T0_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                                      s.x,s.y,s.z, tj.x,tj.y,tj.z, tl.x,tl.y,tl.z);
+        if (L.type == TRI1)
+            return lp_feasible_T1_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                                      s.x,s.y,s.z, tj.x,tj.y,tj.z, tl.x,tl.y,tl.z);
+        if (L.type == TRI2)
+            return lp_feasible_T2_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                                      s.x,s.y,s.z, tj.x,tj.y,tj.z, tl.x,tl.y,tl.z);
+    }
+
+    /* TRI x CSEED x TRI */
+    if (L.type != CSEED && M.type == CSEED && N.type != CSEED) {
+        if (N.type == L.type) return 0;
+        s_point tj = seeds->p[best_idx[M.idx]];
+        if (L.type == TRI0 && N.type == TRI1)
+            return lp_feasible_T0_S_T1(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (L.type == TRI0 && N.type == TRI2)
+            return lp_feasible_T0_S_T2(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (L.type == TRI1 && N.type == TRI0)
+            return lp_feasible_T1_S_T0(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (L.type == TRI1 && N.type == TRI2)
+            return lp_feasible_T1_S_T2(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (L.type == TRI2 && N.type == TRI0)
+            return lp_feasible_T2_S_T0(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (L.type == TRI2 && N.type == TRI1)
+            return lp_feasible_T2_S_T1(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+    }
+
+    /* CSEED x CSEED x TRI */
+    if (L.type == CSEED && M.type == CSEED && N.type != CSEED) {
+        s_point tj = seeds->p[best_idx[L.idx]];
+        s_point tk = seeds->p[best_idx[M.idx]];
+        if (N.type == TRI0)
+            return lp_feasible_S_S_T0(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                                      s.x,s.y,s.z, tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
+        if (N.type == TRI1)
+            return lp_feasible_S_S_T1(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                                      s.x,s.y,s.z, tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
+        if (N.type == TRI2)
+            return lp_feasible_S_S_T2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                                      s.x,s.y,s.z, tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
+    }
+
+    /* TRI x TRI x TRI: intersection is a vertex, always inside unless any two match */
+    if (L.type != CSEED && M.type != CSEED && N.type != CSEED)
+        return (L.type == M.type || N.type == L.type || N.type == M.type) ? 0 : 1;
+
+    /* CSEED x CSEED x CSEED */
+    if (L.type == CSEED && M.type == CSEED && N.type == CSEED) {
+        s_point tL = seeds->p[best_idx[L.idx]];
+        s_point tM = seeds->p[best_idx[M.idx]];
+        s_point tN = seeds->p[best_idx[N.idx]];
+        return lp_det2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                       s.x,s.y,s.z, tL.x,tL.y,tL.z, tM.x,tM.y,tM.z)
+             * lp_det3(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+                       s.x,s.y,s.z, tL.x,tL.y,tL.z, tM.x,tM.y,tM.z,
+                       tN.x,tN.y,tN.z);
+    }
+
+    assert(0 && "lp_feasible: unhandled constraint combination");
 }
 
 
-
-/* Mirroring criteria based on weighted 2D Voronoi diagram */
-static bool should_mirror(const s_point face[3], const s_points *seeds, int best_n, int *best_idx,
-                          int id, double TOL, int (*randint)(void* rctx, int), void* rctx,
-                          s_dynarray *buff_3dbls)
-{   /* Checks if the weighted voronoi diagram in the plane of face intersects the face */
-    /* Project onto 2D */
-    s_point n, u, v;
-    if (!basis_vectors_plane(face, TOL, &n, &u, &v)) {
-        fprintf(stderr, "should_mirror: Could not construct basis for plane of face. Ignoring face.\n");
-        return false;
-    }
-    double t1[2] = {0, 0};  /* Plane origin is face[0] */
-    double t2[2];  project_point_to_plane_2D(face[1], face[0], u, v, t2);
-    double t3[2];  project_point_to_plane_2D(face[2], face[0], u, v, t3);
-    double s[2];   project_point_to_plane_2D(seeds->p[best_idx[id]], face[0], u, v, s);
-
-    /* Find closest point to plane to determine appropriate plane offset */
-    // s_point closest = project_to_plane_3D(seeds->p[0], n, plane_d);
-    // double d2min = distance_squared(seeds->p[0], closest);
-    // for (int ii=1; ii<seeds->N; ii++) {
-    //     closest = project_to_plane_3D(seeds->p[ii], n, plane_d);
-    //     double d2 = distance_squared(seeds->p[ii], closest);
-    //     if (d2 < d2min) d2min = d2;
-    // }
-    // double plane_offset = sqrt(d2min) / 3;
-    double plane_offset = 0;
-
-    double ds = signed_distance_point_to_plane(seeds->p[best_idx[id]], face, TOL);
-    double ws = ds*ds - 2*fabs(ds)*plane_offset;
-
-    /* Add constraints */
-    s_dynarray *C = buff_3dbls;
-    C->N = 0;
-    for (int ii=0; ii<best_n; ii++) {
-        if (ii == id) continue;
-        double t[2];  project_point_to_plane_2D(seeds->p[best_idx[ii]], face[0], u, v, t);
-        double dt = signed_distance_point_to_plane(seeds->p[best_idx[ii]], face, TOL);
-        double wt = dt*dt - 2*fabs(dt)*plane_offset;
-        s_LPconstraint2D con = { .a = 2*(t[0]-s[0]),
-                                .b = 2*(t[1]-s[1]),
-                                .c = (t[0]*t[0]+t[1]*t[1] + wt)-(s[0]*s[0]+s[1]*s[1] + ws) };
-        if (!dynarray_push(C, &con)) goto error;
-    }
-
-    /* Add triangle as constraints */
-    s_LPconstraint2D triangle_con[3];  constraints_from_triangle(t1, t2, t3, triangle_con);
-    if (!dynarray_push(C, &triangle_con[0])) goto error;
-    if (!dynarray_push(C, &triangle_con[1])) goto error;
-    if (!dynarray_push(C, &triangle_con[2])) goto error;
-
-    /* Check feasability */
-    return LP_is_feasible_2D(randint, rctx, C->N, C->items, TOL, NULL, NULL);
-
-    error:
-        fprintf(stderr, "should_mirror: Fatal error. (maybe no memory?)\n");
-        return 0;
-}
-
-
-static void insert_topk(int idx[], double val[], int *n, int k, int new_idx, double new_val)
-{   /* Keep k smallest distances (descending order: worst at 0). Only efficient for small k. */
-	if (*n < k) {
-		int pos = (*n)++;
-		idx[pos] = new_idx;
-		val[pos] = new_val;
-		/* bubble up */
-		while (pos > 0 && val[pos] > val[pos-1]) {
-			double tv = val[pos]; val[pos] = val[pos-1]; val[pos-1] = tv;
-			int ti = idx[pos]; idx[pos] = idx[pos-1]; idx[pos-1] = ti;
-			pos--;
-		}
-	} else if (new_val < val[0]) {
-		/* replace worst */
-		idx[0] = new_idx;
-		val[0] = new_val;
-		/* bubble down */
-		int pos = 0;
-		while (pos+1 < *n && val[pos] < val[pos+1]) {
-			double tv = val[pos]; val[pos] = val[pos+1]; val[pos+1] = tv;
-			int ti = idx[pos]; idx[pos] = idx[pos+1]; idx[pos+1] = ti;
-			pos++;
-		}
-	}
-}
-
-
-int extend_sites_mirroring(const s_bpoly *bp, double EPS_degenerate, double TOL, 
-                           s_points *inout_seeds, int (*randint)(void* rctx, int), void* rctx,
-                           s_dynarray *buff_points, s_dynarray *buff_3dbls)
-{   /* 0 ERROR, 1 OK */
-    s_dynarray *mirrored = buff_points;  mirrored->N = 0;
-
-    for (int ff=0; ff<bp->convh.Nf; ff++) {
-        // printf("ff: %d / %d. inout_seeds.N : %d\n", ff, bp->convh.Nf, inout_seeds->N);
-        s_point face[3]; 
-        convh_get_face(&bp->convh, ff, face);
-        s_point normal = normalize_vec(bp->convh.fnormals[ff], EPS_degenerate);
-        if (!point_is_valid(normal)) continue;
-        double d_plane =  dot_prod(normal, face[0]);
-
-        /* Find k points closest to face, and only these are candidates to mirror */
-        int k = 10;
-        int best_idx[k];
-        double best_dist[k];
-        int best_n = 0;
-        for (int pp=0; pp < inout_seeds->N; pp++) {
-            double d = fabs(signed_distance_point_to_plane_v2(inout_seeds->p[pp], normal, d_plane));
-            insert_topk(best_idx, best_dist, &best_n, k, pp, d);
+/* Update one 1D-LP bound. Returns false if the interval becomes empty or
+ * the line is globally infeasible. When concurrent=true, a zero feasibility
+ * result while tightening a non-null slot signals a concurrent triangle. */
+static bool lp_process_cj(const s_point face[3], s_point s,
+                           const s_points *seeds, const int *seeds_idx,
+                           s_cid ci, s_cid cj,
+                           s_cid *lo, bool *lo_null,
+                           s_cid *hi, bool *hi_null,
+                           bool concurrent)
+{
+    int d = lp_D(face, s, seeds, seeds_idx, ci, cj);
+    if (d == 0) {
+        /* C_j parallel to C_i: use whichever bound is non-null as reference
+         * (same sign for any point on C_i when C_j is parallel). */
+        s_cid ref = *lo_null ? *hi : *lo;
+        int v = lp_feasible(face, s, seeds, seeds_idx, ci, ref, cj);
+        if (v < 0) return false;
+    } else if (d > 0) {
+        if (*lo_null) {
+            *lo = cj; *lo_null = false;
+        } else {
+            int v = lp_feasible(face, s, seeds, seeds_idx, ci, cj, *lo);
+            if (concurrent && v == 0) return false;
+            if (v > 0) *lo = cj;
         }
-        
-        for (int ii=0; ii<best_n; ii++) if (should_mirror(face, inout_seeds, best_n, best_idx, ii,
-                                                          TOL, randint, rctx, buff_3dbls)) {
-            s_point p_mirror = mirror_plane(normal, d_plane, inout_seeds->p[best_idx[ii]]);
-            if (!dynarray_push(mirrored, &p_mirror)) goto error;
+    } else {
+        if (*hi_null) {
+            *hi = cj; *hi_null = false;
+        } else {
+            int v = lp_feasible(face, s, seeds, seeds_idx, ci, cj, *hi);
+            if (concurrent && v == 0) return false;
+            if (v > 0) *hi = cj;
         }
     }
-    // printf("DEBUG: Mirrored.N = %d, total = %d\n", mirrored.N, inout_seeds->N + mirrored.N);
+    if (!*lo_null && !*hi_null) {
+        int empty = lp_feasible(face, s, seeds, seeds_idx, ci, *lo, *hi);
+        if (empty < 0) return false;
+    }
+    return true;
+}
 
 
-    /* Add mirrored to inout_seeds */
-    s_point *tmp = realloc(inout_seeds->p, sizeof(s_point) * (inout_seeds->N + mirrored->N));
-    if (!tmp) goto error;
-    memcpy(&tmp[inout_seeds->N], mirrored->items, mirrored->N * sizeof(s_point));
-    inout_seeds->p = tmp;
-    inout_seeds->N += mirrored->N;
+static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
+                        int N, int seeds_idx[N], int id,
+                        int (*randint)(void *rctx, int), void *rctx)
+{
+    s_point s = seeds->p[seeds_idx[id]];
+    s_cid T0 = {TRI0, -1}, T1 = {TRI1, -1}, T2 = {TRI2, -1};
 
+    /* Step 0: triangle degeneracy. Collinear vertices give orient3d = 0 for
+     * every fourth point; at most two axis-offset candidates fit any plane,
+     * so all three returning 0 is the exact collinearity condition. */
+    {
+        double ax = face[0].x, ay = face[0].y, az = face[0].z;
+        double bx = face[1].x, by = face[1].y, bz = face[1].z;
+        double cx = face[2].x, cy = face[2].y, cz = face[2].z;
+        if (orient3d(ax,ay,az, bx,by,bz, cx,cy,cz, ax+1,ay,az) == 0 &&
+            orient3d(ax,ay,az, bx,by,bz, cx,cy,cz, ax,ay+1,az) == 0 &&
+            orient3d(ax,ay,az, bx,by,bz, cx,cy,cz, ax,ay,az+1) == 0)
+            return false;
+    }
+
+    /* Step 1: initial candidate = T0 ∩ T1 (a triangle vertex). */
+    s_cid A = T0, B = T1;
+
+    /* Fisher-Yates shuffle. */
+    int order[N];
+    for (int i = 0; i < N; i++) order[i] = i;
+    for (int i = N-1; i > 0; i--) {
+        int j = randint(rctx, i+1);
+        int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+    }
+
+    for (int oi = 0; oi < N; oi++) {
+        int i = order[oi];
+        if (i == id) continue;
+        s_cid ci = {CSEED, i};
+
+        int outer_feas = lp_feasible(face, s, seeds, seeds_idx, A, B, ci);
+        if (outer_feas >= 0) continue;
+
+        /* 1D LP on C_i's line. lo/hi track interval endpoints; *_null = true
+         * means that slot is unbounded (no constraint has closed it yet). */
+        s_cid lo = T0, hi = T0; /* dummy init to silence uninit warnings */
+        bool lo_null, hi_null;
+
+        /* Step 3a: seed the interval from C_T0. */
+        int d_i_T0 = lp_D(face, s, seeds, seeds_idx, ci, T0);
+        if (d_i_T0 != 0) {
+            /* Generic case: one slot from C_T0, other stays open. */
+            if (d_i_T0 > 0) { lo = T0; lo_null = false; hi_null = true; }
+            else             { hi = T0; hi_null = false; lo_null = true; }
+            /* C_T1 is the first inner constraint; concurrent-triangle check
+             * fires if the non-null slot's feasible result is exactly 0. */
+            if (!lp_process_cj(face, s, seeds, seeds_idx, ci, T1,
+                                &lo, &lo_null, &hi, &hi_null, true))
+                return false;
+        } else {
+            /* Degenerate case: C_T0 is parallel to C_i.
+             * Check whole line feasibility w.r.t. C_T0, then seed from C_T1. */
+            int par_check = lp_feasible(face, s, seeds, seeds_idx, ci, T1, T0);
+            if (par_check < 0) return false;
+            int d_i_T1 = lp_D(face, s, seeds, seeds_idx, ci, T1);
+            if (d_i_T1 > 0) { lo = T1; lo_null = false; hi_null = true; }
+            else             { hi = T1; hi_null = false; lo_null = true; }
+        }
+
+        /* Step 3c: C_T2, then all SEED constraints before C_i in random order. */
+        if (!lp_process_cj(face, s, seeds, seeds_idx, ci, T2,
+                            &lo, &lo_null, &hi, &hi_null, false))
+            return false;
+
+        for (int oj = 0; oj < oi; oj++) {
+            int jj = order[oj];
+            if (jj == id) continue;
+            s_cid cj = {CSEED, jj};
+            if (!lp_process_cj(face, s, seeds, seeds_idx, ci, cj,
+                                &lo, &lo_null, &hi, &hi_null, false))
+                return false;
+        }
+
+        /* Step 4: new candidate is C_i ∩ lo. */
+        A = ci;
+        B = lo;
+    }
+
+    return true;
+}
+
+
+int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
+                            s_scplx *dt, int N_seeds,
+                            int (*randint)(void *rctx, int), void *rctx,
+                            s_dynarray *out_points)
+{   /* Use DT neighbor relationships as LP constraint set instead of all seeds.
+     * LP with fewer constraints has a larger feasible region, so we may generate
+     * extra mirrors (false positives) but never miss a needed one (no false negatives).
+     *
+     * Loop order: seed-outer, face-inner — neighbors are collected once per seed and
+     * reused across all faces, rather than recomputed for every (face, seed) pair. */
+    out_points->N = 0;
+    int Npts = dt->points.N;
+
+    s_ncell **vertex_start = malloc(Npts * sizeof(s_ncell *));
+    int      *v_local_id   = malloc(Npts * sizeof(int));
+    if (!vertex_start || !v_local_id) goto error;
+
+    build_vertex_cell_index(dt, vertex_start, v_local_id);
+
+    /* seeds_idx holds [vi, neighbor_0, ..., neighbor_n] for the current seed.
+     * Reused across seeds; grows automatically via dynarray. */
+    s_dynarray seeds_idx  = dynarray_initialize(sizeof(int), 32);
+    s_dynarray scratch_cells = dynarray_initialize(sizeof(s_ncell *), 64);
+    if (!seeds_idx.items || !scratch_cells.items) goto error;
+
+    for (int i = 0; i < N_seeds; i++) {
+        int vi = 4 + i;
+        if (vertex_start[vi] == NULL) continue;  /* deduplicated seed */
+
+        /* Build seeds_idx = [vi, neighbors...] for this seed. */
+        seeds_idx.N = 0;
+        if (!dynarray_push(&seeds_idx, &vi)) goto error;
+        if (vertex_neighbors(dt, vi, vertex_start[vi], v_local_id[vi],
+                             4, &seeds_idx, &scratch_cells) < 0) goto error;
+
+        /* seeds_idx.items is now a contiguous int[] usable by lp_should_mirror.
+         * id=0 selects vi as the seed under test; all others are constraints. */
+        int  n_total   = (int)seeds_idx.N;
+        int *idx_array = (int *)seeds_idx.items;
+
+        s_point p = dt->points.p[vi];
+
+        for (int ff = 0; ff < bp->convh.Nf; ff++) {
+            s_point face[3];
+            convh_get_face(&bp->convh, ff, face);
+            s_point n = bp->convh.fnormals[ff];
+            double n2 = dot_prod(n, n);
+            if (n2 < EPS_degenerate * EPS_degenerate) continue;
+
+            if (!lp_should_mirror(face, &dt->points, n_total, idx_array, 0, randint, rctx))
+                continue;
+
+            double f = dot_prod(n, face[0]) - dot_prod(n, p);
+            s_point p_mirror = { .x = p.x + 2*(f/n2)*n.x,
+                                 .y = p.y + 2*(f/n2)*n.y,
+                                 .z = p.z + 2*(f/n2)*n.z };
+            if (!dynarray_push(out_points, &p_mirror)) goto error;
+        }
+    }
+
+    dynarray_free(&seeds_idx);
+    dynarray_free(&scratch_cells);
+    free(vertex_start); free(v_local_id);
     return 1;
-    
+
     error:
-        fprintf(stderr, "Error in exten_sites_mirroring!\n");
+        dynarray_free(&seeds_idx);
+        dynarray_free(&scratch_cells);
+        free(vertex_start); free(v_local_id);
+        fprintf(stderr, "Error in extend_sites_mirroring_dt!\n");
         return 0;
 }
-
-
-// static int should_mirror_OLD(s_point normal, double d_plane, s_point face[3], const s_points *all_seeds, int seed_id, double EPS_degenerate)
-// {
-//     s_point s = all_seeds->p[seed_id];
-//     double dist = d_plane - dot_prod(normal, s);
-//     s_point proj_fplane = {{{s.x + dist*normal.x, s.y + dist*normal.y, s.z + dist*normal.z}}};
-//     s_point c = closest_point_on_triangle(face, EPS_degenerate, proj_fplane);
-//     if (!point_is_valid(c)) return 0;
-//     
-//     // Check nearest‐neighbor at c
-//     double d_s = distance_squared(c, s);
-//     for (int jj=0; jj<all_seeds->N; jj++) {
-//         if (jj != seed_id && distance(all_seeds->p[jj], c) + 1e-8 < d_s)
-//             return 0;   // someone else is nearer
-//     }
-//     return 1;
-// }
 

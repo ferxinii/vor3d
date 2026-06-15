@@ -24,7 +24,7 @@ add_subdirectory(../ vor3d_build)
 
 add_executable(example_basic example_basic.c)
 add_executable(example_lungs example_lungs.c)
-add_executable(example_volsph example_volsph.c)
+# add_executable(example_volsph example_volsph.c)
 
 target_link_libraries(example_basic 
         PUBLIC vor3d OpenMP::OpenMP_C
@@ -32,9 +32,9 @@ target_link_libraries(example_basic
 target_link_libraries(example_lungs 
         PUBLIC vor3d OpenMP::OpenMP_C
 )
-target_link_libraries(example_volsph 
-        PUBLIC vor3d 
-)
+# target_link_libraries(example_volsph 
+#         PUBLIC vor3d 
+# )
 
 target_compile_options(example_basic 
     PRIVATE
@@ -44,10 +44,10 @@ target_compile_options(example_lungs
     PRIVATE
         -Wall -Werror -Wextra -O3
 )
-target_compile_options(example_volsph
-    PRIVATE
-        -Wall -Werror -Wextra -O3
-)
+# target_compile_options(example_volsph
+#     PRIVATE
+#         -Wall -Werror -Wextra -O3
+# )
 
 # ------ SETUP INPUT / OUTPUT -------
 # Create symlink for the lobes directory

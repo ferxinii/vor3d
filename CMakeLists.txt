@@ -17,7 +17,7 @@ add_library(vor3d STATIC
     src/acplx.c
     src/vdiagram.c
     src/mirroring.c
-    src/volsph.c
+    # src/volsph.c
 )
 
 target_include_directories(vor3d
@@ -28,6 +28,7 @@ target_include_directories(vor3d
 target_link_libraries(vor3d 
     PRIVATE
         gnuplotC
+        voronoi_predicates
     PUBLIC
         geometry  # Users need to know about s_point
 )

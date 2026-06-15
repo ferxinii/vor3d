@@ -34,31 +34,31 @@ typedef struct vdiagram {
 /* BOUNDING POLYHEDRON */
 /* (New copy of points inside) */
 
-s_bpoly bpoly_from_points(const s_points *points, double EPS_degenerate, double TOL);  
-s_bpoly bpoly_from_csv(const char *fname, double EPS_degenerate, double TOL);
+s_bpoly bpoly_from_points(const s_points *points, double EPS_DEG);  
+s_bpoly bpoly_from_csv(const char *fname, double EPS_DEG);
 s_bpoly bpoly_from_convh(const s_convh *convh);
 s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot,
-                                double EPS_degenerate, double TOL);
+                                double EPS_DEG);
 s_bpoly bpoly_copy(const s_bpoly *in);
 s_bpoly bpoly_copy_scaled(const s_bpoly *bp, double scale, s_point pivot,
-                          double EPS_degenerate, double TOL);
+                          double EPS_DEG);
 s_bpoly bpoly_copy_scaled_volume(const s_bpoly *bp, double objective_volume,
-                                 double EPS_degenerate, double TOL);
+                                 double EPS_DEG);
 void free_bpoly(s_bpoly *bpoly);
 
 s_points generate_poisson_dist_inside(const s_bpoly *bpoly, 
                                       double (*rmax)(double*, void*), void *rmax_params,
                                       double (*randd01)(void*), int (*randint)(void*, int),
                                       void *rctx, double EPS_DEG);
-double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_degenerate, s_point *out);
+double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_DEG, s_point *out);
 
 void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color);
 void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, char *view_command);
 
-int extend_sites_mirroring(const s_bpoly *bp, double EPS_degenerate, double TOL, 
-                           s_points *inout_seeds, int (*randint)(void* rctx, int), void* rctx,
-                           s_dynarray *buff_points, s_dynarray *buff_LPconstraints2D);
-
+int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
+                            s_scplx *dt, int N_seeds,
+                            int (*randint)(void *rctx, int), void *rctx,
+                            s_dynarray *out_points);
 
 /* VORONOI DIAGRAM */
 int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size,
@@ -71,10 +71,10 @@ int vdiagram_is_valid(const s_vdiagram *vd);
 void free_vdiagram(s_vdiagram *vdiagram);
 void print_vcell(const s_vcell *vcell);
 void print_vdiagram(const s_vdiagram *vdiagram);
-int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL);
+int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_DEG, double TOL);
 
 s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal, 
-                                    double EPS_degenerate, double TOL);
+                                    double EPS_DEG, double TOL);
 
 void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, const s_point ranges[2]);
 void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2], char *view_command);

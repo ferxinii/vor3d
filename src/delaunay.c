@@ -724,17 +724,36 @@ static void perturb_big_tetra(s_point out[4], double inradius)
     }
 }
 
-static int initialize_scplx(const s_points *points, const double *weights, s_scplx *out)
+static int initialize_scplx(const s_points *points, const double *weights, s_scplx *out,
+                             const s_point *bb_min_hint, const s_point *bb_max_hint)
 {
     /* scplx->points is extended for the extra nodes of big_ncell, put at the beginning. */
-    s_points scplx_points = { .N = points->N + 4, 
+    s_points scplx_points = { .N = points->N + 4,
                               .p = malloc(sizeof(s_point) * (points->N + 4)) };
     if (!scplx_points.p) return 0;
     for (int ii=0; ii<points->N; ii++)
         scplx_points.p[ii+4] = points->p[ii];
-    
+
     /* Initialize the regular tetrahedron big enough to contain all points. */
-    s_point bmin, bmax; bounding_box_points(points, &bmin, &bmax);
+    s_point bmin, bmax;
+    if (points->N > 0) {
+        bounding_box_points(points, &bmin, &bmax);
+    } else if (bb_min_hint && bb_max_hint) {
+        bmin = *bb_min_hint; bmax = *bb_max_hint;
+    } else {
+        bmin = (s_point){.x=0,.y=0,.z=0}; bmax = (s_point){.x=0,.y=0,.z=0};
+    }
+    /* Expand bounding box with optional hint (needed when seeds are few/coincident). */
+    if (bb_min_hint) {
+        bmin.x = fmin(bmin.x, bb_min_hint->x);
+        bmin.y = fmin(bmin.y, bb_min_hint->y);
+        bmin.z = fmin(bmin.z, bb_min_hint->z);
+    }
+    if (bb_max_hint) {
+        bmax.x = fmax(bmax.x, bb_max_hint->x);
+        bmax.y = fmax(bmax.y, bb_max_hint->y);
+        bmax.z = fmax(bmax.z, bb_max_hint->z);
+    }
     double bdiag = distance(bmin, bmax);
     s_point centre = scale_point(sum_points(bmax, bmin), 0.5);
     /* Add max radius so big tet contains all balls, not just centers. */
@@ -787,10 +806,7 @@ static e_type_union_tetra determine_case(const s_point vertices_face[3], s_point
     switch (test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0, 0)) {
         case INTERSECT_DEGENERATE:  
             /* either pd has endpoint inside abc, or pd intersects edge/vertex */
-            if (test_p_in_face == TEST_IN) {
-                printf("DEBUG!!!!!!!!!      CASE NOT CONSIDERED BEFORE!\n");
-                return CASE_CONVEX;
-            }
+            if (test_p_in_face == TEST_IN) return CASE_CONVEX;
             else return CASE_FLAT;
         case INTERSECT_EMPTY: return CASE_NON_CONVEX;
         case INTERSECT_NONDEGENERATE: return CASE_CONVEX;
@@ -938,37 +954,82 @@ static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_t
 }
 
 
-s_scplx construct_dt_3d(const s_points *points, const double *weights,
-                        bool keep_big_tetra, double TOL_duplicates)
+
+
+/* BUILDER */
+s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, double TOL_dup,
+                              const s_point *bb_min_hint, const s_point *bb_max_hint)
 {
-    bool *ignored = calloc(points->N + 4, sizeof(bool));  /* Space for big tetra */
-    if (!ignored) goto error;
+    s_dt_builder b = {0};
 
-    s_dstack stack = stack_create(); if (!stack.entry) goto error;
-    s_scplx scplx; if (!initialize_scplx(points, weights, &scplx)) goto error;
+    bool *ignored = calloc(seeds->N + 4, sizeof(bool));
+    if (!ignored) return b;
 
+    s_dstack *stack = malloc(sizeof(s_dstack));
+    if (!stack) { free(ignored); return b; }
+    *stack = stack_create();
+    if (!stack->entry) { free(ignored); free(stack); return b; }
 
-    /* First 4 are big tetra, which already is inserted */
-    for (int ii=4; ii<scplx.points.N; ii++) {
-        printf("\n\n%d\n", ii);
-        // print_scomplex(&scplx);
+    if (!initialize_scplx(seeds, weights, &b.dt, bb_min_hint, bb_max_hint)) {
+        free(ignored); stack_free(stack); free(stack); return b;
+    }
 
-        if (insert_one_point(&scplx, ii, &stack, TOL_duplicates, ignored) == -1) goto error;
-
-        if (!is_delaunay_3d(&scplx, DELAUNAY_TEST_NONSTRICT)) {
-            fprintf(stderr, "%d: DT is not Delaunay!\n", ii);
-            print_scomplex(&scplx);
-            exit(1);
+    for (int ii = 4; ii < b.dt.points.N; ii++) {
+        if (insert_one_point(&b.dt, ii, stack, TOL_dup, ignored) == -1) {
+            free(ignored); stack_free(stack); free(stack);
+            free_complex(&b.dt);
+            return (s_dt_builder){0};
         }
     }
-    
 
-    if (!is_delaunay_3d(&scplx, DELAUNAY_TEST_NONSTRICT)) {
+    b._ignored = ignored;
+    b._stack = stack;
+    b._N_original = seeds->N;
+    return b;
+}
+
+
+bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_dup)
+{
+    int N_old = b->dt.points.N;
+    int N_add = new_points->N;
+    int N_new = N_old + N_add;
+
+    s_point *tmp_p = realloc(b->dt.points.p, N_new * sizeof(s_point));
+    if (!tmp_p) return false;
+    b->dt.points.p = tmp_p;
+    memcpy(&b->dt.points.p[N_old], new_points->p, N_add * sizeof(s_point));
+    b->dt.points.N = N_new;
+
+    bool *tmp_ig = realloc(b->_ignored, N_new * sizeof(bool));
+    if (!tmp_ig) return false;
+    b->_ignored = tmp_ig;
+    memset(&b->_ignored[N_old], 0, N_add * sizeof(bool));
+
+    if (b->dt.weights) {
+        double *tmp_w = realloc(b->dt.weights, N_new * sizeof(double));
+        if (!tmp_w) return false;
+        b->dt.weights = tmp_w;
+        for (int i = N_old; i < N_new; i++) b->dt.weights[i] = 0.0;
+    }
+
+    s_dstack *stack = (s_dstack *)b->_stack;
+    for (int i = N_old; i < N_new; i++)
+        if (insert_one_point(&b->dt, i, stack, TOL_dup, b->_ignored) == -1)
+            return false;
+
+    return true;
+}
+
+
+s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal)
+{
+    if (!is_delaunay_3d(&b->dt, DELAUNAY_TEST_NONSTRICT)) {
         fprintf(stderr, "WARNING: DT is not Delaunay!\n");
-        write_points_to_csv("error.csv", "w", points);
-        s_ncell *c = scplx.head;
+        write_points_to_csv("error.csv", "w", &b->dt.points);
+        s_ncell *c = b->dt.head;
         while (c) {
-            s_point v[4]; extract_vertices_ncell(&scplx, c, v);
+            s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
             if (test_orientation(v, v[3]) == 0) {
                 fprintf(stderr, "Flat tetra coords:\n");
                 fprintf(stderr, "  v0(%d): %.6f %.6f %.6f\n", c->vertex_id[0], v[0].x, v[0].y, v[0].z);
@@ -981,29 +1042,51 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
         exit(1);
     }
 
-    s_ncell *c = scplx.head;
-    while (c) {
-        s_point v[4]; extract_vertices_ncell(&scplx, c, v);
+    for (s_ncell *c = b->dt.head; c; c = c->next) {
+        s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
         if (test_orientation(v, v[3]) == 0)
             fprintf(stderr, "Flat tetra in final result (%p): %d %d %d %d\n",
-                c,
+                (void *)c,
                 c->vertex_id[0], c->vertex_id[1],
                 c->vertex_id[2], c->vertex_id[3]);
-        c = c->next;
     }
 
-    
-    remove_ignored_points(&scplx, ignored, keep_big_tetra);
+    if (out_Nreal != NULL) {
+        int surviving = 0;
+        for (int i = 4; i < 4 + b->_N_original; i++)
+            if (!b->_ignored[i]) surviving++;
+        *out_Nreal = surviving;
+    }
 
-    stack_free(&stack);  
-    return scplx;
+    remove_ignored_points(&b->dt, b->_ignored, keep_big_tetra);
 
-    error:
-        fprintf(stderr, "construct_dt_3d: Error.\n");
-        if (ignored) free(ignored);
-        if (stack.entry) stack_free(&stack);
-        return (s_scplx){0};
+    s_dstack *stack = (s_dstack *)b->_stack;
+    stack_free(stack);
+    free(stack);
+    free(b->_ignored);
+    b->_stack = NULL;
+    b->_ignored = NULL;
+
+    return b->dt;
 }
+
+
+s_scplx construct_dt_3d(const s_points *points, const double *weights,
+                        bool keep_big_tetra, double TOL_duplicates, int *out_Nreal)
+{
+    s_dt_builder b = dt_builder_begin(points, weights, TOL_duplicates, NULL, NULL);
+    if (!b._stack) {
+        fprintf(stderr, "construct_dt_3d: Error.\n");
+        return (s_scplx){0};
+    }
+    /* Preserve the old behaviour: *out_Nreal on entry specifies how many of the
+     * first points->N entries are "real" seeds (the rest are mirrors added by
+     * extend_sites_mirroring).  Store that count so dt_builder_end uses it. */
+    if (out_Nreal != NULL && *out_Nreal <= points->N)
+        b._N_original = *out_Nreal;
+    return dt_builder_end(&b, keep_big_tetra, out_Nreal);
+}
+
 
 
 

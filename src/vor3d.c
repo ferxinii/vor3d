@@ -3,6 +3,8 @@
 #include "delaunay.h"
 #include "vdiagram.h"
 #include "points.h"
+#include "dynarray.h"
+
 #include <stdlib.h>
 #include <assert.h>
 #include <math.h>
@@ -84,7 +86,7 @@ static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud) {
 
 static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max_tries, 
                              f_seed_generator f_seeds, seed_userdata ud, int (*randint)(void*, int),
-                             void *rctx, s_dynarray *buff_points, s_dynarray *buff_3dbls)
+                             void *rctx, s_dynarray *buff_points)
 {
     s_vdiagram vd = {0};
     for (int ii = 0; ii < max_tries; ii++) {
@@ -96,13 +98,37 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
         s_points seeds = f_seeds(bp, ud);
         int Nreal = seeds.N;
 
-        if (!extend_sites_mirroring(bp, ud.EPS_DEG, ud.TOL, &seeds, randint, rctx, 
-                                    buff_points, buff_3dbls)) {
-            fprintf(stderr, "vor3d: error extending sites (initial).");
+        /* Phase 1: build initial DT from seeds only, keeping big tetra in place.
+         * Pass bp AABB as hint so the big tetra is large enough even with 1 seed. */
+        s_dt_builder builder = dt_builder_begin(&seeds, NULL, ud.TOL, &bp->min, &bp->max);
+        if (!builder._stack) {
+            fprintf(stderr, "vor3d: error building initial DT.");
             free_points(&seeds);
+            continue;
         }
 
-        s_scplx dt = construct_dt_3d(&seeds, NULL, false, ud.TOL);
+        /* Phase 2: identify mirrors using DT-neighbor-filtered LP */
+        if (!extract_mirrored_points(bp, ud.EPS_DEG, &builder.dt, seeds.N, randint, rctx, buff_points)) {
+            fprintf(stderr, "vor3d: error extending sites.");
+            s_scplx tmp = dt_builder_end(&builder, false, NULL);
+            free_complex(&tmp);
+            free_points(&seeds);
+            continue;
+        }
+
+        /* Phase 3: insert mirrors into the existing DT */
+        s_points mirrors = { .N = (int)buff_points->N,
+                             .p = (s_point *)buff_points->items };
+        if (mirrors.N > 0 && !dt_builder_extend(&builder, &mirrors, ud.TOL)) {
+            fprintf(stderr, "vor3d: error extending DT with mirrors.");
+            s_scplx tmp = dt_builder_end(&builder, false, NULL);
+            free_complex(&tmp);
+            free_points(&seeds);
+            continue;
+        }
+
+        /* Phase 4: finalize DT (remove big tetra, compact) */
+        s_scplx dt = dt_builder_end(&builder, false, &Nreal);
         vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_DEG, ud.TOL);
         free_complex(&dt);
         if (vd.seeds.N == 0) {  /* Retry */
@@ -115,17 +141,18 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
             free_points(&seeds);
             return vd;;
         }
-        // else {
-        //     write_points_to_csv("seeds.csv", "w", &seeds);
-        //     for (int ii=0; ii<vd.seeds.N; ii++) {
-        //         char buff[256];
-        //         snprintf(buff, 256, "v%d.m", ii);
-        //         write_convhull_to_m(&vd.vcells[ii].convh, buff);
-        //     }
-        //     write_convhull_to_m(&vd.bpoly.convh, "bp.m");
-        //     // return (s_vdiagram){0};
-        //     exit(1);
-        // }
+        else {
+            printf("vd.seeds.N = %d, Nreal = %d\n", vd.seeds.N, Nreal);
+            write_points_to_csv("seeds.csv", "w", &vd.seeds);
+            for (int ii=0; ii<vd.seeds.N; ii++) {
+                char buff[256];
+                snprintf(buff, 256, "v%d.m", ii);
+                write_convhull_to_m(&vd.vcells[ii].convh, buff);
+            }
+            write_convhull_to_m(&vd.bpoly.convh, "bp.m");
+            // return (s_vdiagram){0};
+            exit(1);
+        }
         free_points(&seeds);
         free_vdiagram(&vd);
     }
@@ -135,15 +162,14 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff, int max
 
 
 
-
 s_vdiagram vor3d_from_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
                          int max_tries, double EPS_DEG, double TOL, int (*randint)(void*, int),
-                         void *rctx, s_dynarray *buff_points, s_dynarray *buff_3dbls)
+                         void *rctx, s_dynarray *buff_points)
 {
     seed_userdata ud = {.generator.seeds = copy_points(seeds),
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
     return vor3d_core(bp, vol_max_rel_diff, max_tries, &fixed_generator, ud, 
-                      randint, rctx, buff_points, buff_3dbls);
+                      randint, rctx, buff_points);
 }
 
 
@@ -151,26 +177,26 @@ s_vdiagram vor3d_from_bp_PDS(double (*f_radius_poiss)(double*, void*), void *f_p
                              const s_bpoly *bp, double vol_max_rel_diff, int max_tries,
                              double EPS_DEG, double TOL,
                              int (*randint)(void*, int), double (*randd01)(void*),
-                             void *rctx, s_dynarray *buff_points, s_dynarray *buff_3dbls)
+                             void *rctx, s_dynarray *buff_points)
 {   
     seed_userdata ud = {.generator.pds = { .f_radius_poiss = f_radius_poiss, .f_params = f_params,
                                            .randint = randint, .randd01 = randd01, .rctx = rctx },
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
     return vor3d_core(bp, vol_max_rel_diff, max_tries, &PDS_generator, ud,
-                      randint, rctx, buff_points, buff_3dbls);
+                      randint, rctx, buff_points);
 }
 
 
 s_vdiagram vor3d_from_txt(const s_points *seeds, char *file_bounding_polyhedron,
                           double vol_max_rel_diff, int max_tries, double EPS_DEG, double TOL,
                           int (*randint)(void*, int), void *rctx,
-                          s_dynarray *buff_points, s_dynarray *buff_3dbls)
+                          s_dynarray *buff_points)
 {   
-    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_DEG, TOL);
+    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_DEG);
     if (bp.convh.Nf == 0) { puts("Error: bp->Nf == 0..."); exit(1); }
     
     s_vdiagram out = vor3d_from_bp(seeds, &bp, vol_max_rel_diff, max_tries, EPS_DEG, TOL,
-                                   randint, rctx, buff_points, buff_3dbls);
+                                   randint, rctx, buff_points);
 
     free_bpoly(&bp);
     return out;
@@ -181,14 +207,14 @@ s_vdiagram vor3d_from_txt_PDS(double (*f_radius_poiss)(double*, void*), void *f_
                               char *file_bounding_polyhedron, double vol_max_rel_diff,
                               int max_tries, double EPS_DEG, double TOL,
                               int (*randint)(void*, int), double (*randd01)(void*), void *rctx,
-                              s_dynarray *buff_points, s_dynarray *buff_3dbls)
+                              s_dynarray *buff_points)
 {   
-    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_DEG, TOL);
+    s_bpoly bp = bpoly_from_csv(file_bounding_polyhedron, EPS_DEG);
     if (bp.convh.Nf == 0) { puts("Error: bp->Nf == 0..."); exit(1); }
     
     s_vdiagram out = vor3d_from_bp_PDS(f_radius_poiss, f_params, &bp, vol_max_rel_diff,
                                        max_tries, EPS_DEG, TOL,
-                                       randint, randd01, rctx, buff_points, buff_3dbls);
+                                       randint, randd01, rctx, buff_points);
 
     free_bpoly(&bp);
 

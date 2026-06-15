@@ -66,10 +66,10 @@ static void extract_min_max_coord(s_bpoly *bpoly)
 }
 
 
-s_bpoly bpoly_from_points(const s_points *points, double EPS_DEG, double TOL)
+s_bpoly bpoly_from_points(const s_points *points, double EPS_DEG)
 {   /* New copy of points inside! */
     s_bpoly bpoly;
-    if (convhull_from_points(points, EPS_DEG, TOL, &bpoly.convh) != 1) goto error;
+    if (convhull_from_points(points, EPS_DEG, &bpoly.convh) != 1) goto error;
     // extract_dmax_bp(&bpoly);
     bpoly.CM = point_average(&bpoly.convh.points);
     extract_min_max_coord(&bpoly);
@@ -82,10 +82,10 @@ s_bpoly bpoly_from_points(const s_points *points, double EPS_DEG, double TOL)
 }
 
 
-s_bpoly bpoly_from_csv(const char *fname, double EPS_DEG, double TOL)
+s_bpoly bpoly_from_csv(const char *fname, double EPS_DEG)
 {
     s_points points = read_points_from_csv(fname);
-    s_bpoly bpoly = bpoly_from_points(&points, EPS_DEG, TOL);
+    s_bpoly bpoly = bpoly_from_points(&points, EPS_DEG);
 
     free_points(&points);
     return bpoly;
@@ -110,12 +110,12 @@ s_bpoly bpoly_from_convh(const s_convh *convh)
 }
 
 
-s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot, double EPS_DEG, double TOL)
+s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot, double EPS_DEG)
 {
     s_points new_p = copy_points(&convh->points);
     homotethy_points(&new_p, s, pivot);
 
-    s_bpoly out = bpoly_from_points(&new_p, EPS_DEG, TOL);
+    s_bpoly out = bpoly_from_points(&new_p, EPS_DEG);
     free_points(&new_p);
     return out;
 }
@@ -134,21 +134,21 @@ s_bpoly bpoly_copy(const s_bpoly *in)
     return out;
 }
 
-s_bpoly bpoly_copy_scaled(const s_bpoly *bp, double factor, s_point pivot, double EPS_DEG, double TOL)
+s_bpoly bpoly_copy_scaled(const s_bpoly *bp, double factor, s_point pivot, double EPS_DEG)
 {
     s_points new_p = copy_points(&bp->convh.points);
     homotethy_points(&new_p, factor, pivot);
-    s_bpoly out = bpoly_from_points(&new_p, EPS_DEG, TOL);
+    s_bpoly out = bpoly_from_points(&new_p, EPS_DEG);
     free_points(&new_p);
     return out;
 }
 
 
-s_bpoly bpoly_copy_scaled_volume(const s_bpoly *bp, double objective_volume, double EPS_DEG, double TOL)
+s_bpoly bpoly_copy_scaled_volume(const s_bpoly *bp, double objective_volume, double EPS_DEG)
 {
     double F = objective_volume / (bp)->volume;
     double s = cbrt(F);
-    return bpoly_copy_scaled(bp, s, bp->CM, EPS_DEG, TOL);
+    return bpoly_copy_scaled(bp, s, bp->CM, EPS_DEG);
 }
 
 

@@ -44,6 +44,11 @@ void free_ncell(s_ncell *ncell);
 
 int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face,
                          const int *v_localid, s_dynarray *out);
+void build_vertex_cell_index(const s_scplx *scplx, s_ncell **vertex_start, int *v_local_id);  /* Maps each vertex to a cell that contains it */
+int vertex_neighbors(s_scplx *scplx, int v_global,
+                     s_ncell *start_cell, int v_local,
+                     int skip_below, s_dynarray *out_ids,  /* ids >= skip_below are ignored */
+                     s_dynarray *scratch_cells);
 void face_localid_of_adjacent_ncell(const s_ncell *ncell, int dim_face,
                                     const int v_localid[3-dim_face], int id_adjacent,
                                     int out_v_localid[3-dim_face]);

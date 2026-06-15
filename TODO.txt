@@ -1,3 +1,6 @@
+[ ] build_vertex_cell_index: the idea to map each vertex to a cell containing it may be made more optimal and even reused elsewhere (in_ncell_walk for example?)
+[ ] when extending, how do we make sure that all points are still inside the big tetra? Should we not check for this, increasing its size if necessary?
+
 [ ] locally redundant points: implement function, consider when some vertices may belong to big tetra
 [ ] acplx.c: replace power distance conditions with the robust versions
 

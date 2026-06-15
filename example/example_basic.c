@@ -62,7 +62,7 @@ static void check_volume(const s_vdiagram *vd)
 }
 
 static void iterate(int iterations, int MAX_TRIES, bool print_progress,
-                    s_dynarray *buff_points_omp, s_dynarray *buff_3dbls_omp)
+                    s_dynarray *buff_points_omp)
 {
     int fail = 0;
     #pragma omp parallel for
@@ -72,8 +72,7 @@ static void iterate(int iterations, int MAX_TRIES, bool print_progress,
         s_vdiagram vd = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff,
                                            MAX_TRIES, EPS_degenerate, TOL, 
                                            randint, randd01, &rctx_omp[omp_get_thread_num()], 
-                                           &buff_points_omp[omp_get_thread_num()], 
-                                           &buff_3dbls_omp[omp_get_thread_num()]);
+                                           &buff_points_omp[omp_get_thread_num()]); 
         if (vd.seeds.N == 0) {fail++; continue;}
         // check_volume(&vd);
         free_vdiagram(&vd);
@@ -147,10 +146,8 @@ int main(void)
     random_initialize_threads(time(NULL), 1, omp_get_max_threads(), rctx_omp);
 
     s_dynarray *buff_points_omp = malloc(sizeof(s_dynarray) * omp_get_max_threads());
-    s_dynarray *buff_3dbls_omp = malloc(sizeof(s_dynarray) * omp_get_max_threads());
     for (int i=0; i<omp_get_max_threads(); i++) {
         buff_points_omp[i] = dynarray_initialize(sizeof(s_point), 0);
-        buff_3dbls_omp[i] = dynarray_initialize(sizeof(double)*3, 0);
     }
     
     int MAX_TRIES = 1;
@@ -169,10 +166,10 @@ int main(void)
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_vdiagram vd_tet = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES,
                                            EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
-                                           buff_points_omp, buff_3dbls_omp);
+                                           buff_points_omp);
     check_volume(&vd_tet);
     free_vdiagram(&vd_tet);
-    iterate(10000, MAX_TRIES, false, buff_points_omp, buff_3dbls_omp);
+    iterate(10000, MAX_TRIES, false, buff_points_omp);
     if (PLOT) plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
     // exit(1);
 
@@ -195,12 +192,12 @@ int main(void)
     generate_file_cube_bp(FILE_BP, 2);
     s_vdiagram vd_cube = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, 5,
                                             EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
-                                            buff_points_omp, buff_3dbls_omp);
+                                            buff_points_omp);
     if (vd_cube.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_cube);
     if (PLOT) plot_vdiagram_differentviews(&vd_cube, "plots/cube", NULL);
     free_vdiagram(&vd_cube);
-    iterate(10000, MAX_TRIES, false, buff_points_omp, buff_3dbls_omp);
+    iterate(10000, MAX_TRIES, false, buff_points_omp);
     // exit(1);
     
 
@@ -208,13 +205,13 @@ int main(void)
     generate_file_sphere_bp(FILE_BP, 1.5, 15, 20);
     s_vdiagram vd_sph = vor3d_from_txt_PDS(&r_const, NULL, FILE_BP, vol_max_rel_diff, MAX_TRIES,
                                            EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
-                                           buff_points_omp, buff_3dbls_omp);
+                                           buff_points_omp);
     write_convhull_to_m(&vd_sph.bpoly.convh, "test_bp.m");
     if (vd_sph.seeds.N == 0) { puts("Could not construct vd in max_tries."); exit(1); }
     check_volume(&vd_sph);
     if (PLOT) plot_vdiagram_differentviews(&vd_sph, "plots/sph", NULL);
     free_vdiagram(&vd_sph);
-    iterate(100, MAX_TRIES, true, buff_points_omp, buff_3dbls_omp);
+    iterate(100, MAX_TRIES, true, buff_points_omp);
 
 
     free(rctx_omp);

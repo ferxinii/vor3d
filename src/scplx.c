@@ -355,6 +355,53 @@ int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face, const int
 }
 
 
+void build_vertex_cell_index(const s_scplx *scplx, s_ncell **vertex_start, int *v_local_id)
+{   // Maps each vertex to a cell that contains it 
+    for (int i = 0; i < scplx->points.N; i++) vertex_start[i] = NULL;
+    for (s_ncell *c = scplx->head; c; c = c->next)
+        for (int k = 0; k < 4; k++)
+            if (vertex_start[c->vertex_id[k]] == NULL) {
+                vertex_start[c->vertex_id[k]] = c;
+                v_local_id[c->vertex_id[k]] = k;
+            }
+}
+
+
+int vertex_neighbors(s_scplx *scplx, int v_global,
+                     s_ncell *start_cell, int v_local,
+                     int skip_below, s_dynarray *out_ids,
+                     s_dynarray *scratch_cells)
+{
+    /* The 3 local vertex slots NOT equal to v_local are the "opposite" face of v_global.
+     * ncells_incident_face with dim_face=0 traverses all cells sharing those 3 slots,
+     * which is exactly the star (all incident cells) of v_global. */
+    int opp_localids[3], k = 0;
+    for (int j = 0; j < 4; j++) if (j != v_local) opp_localids[k++] = j;
+
+    scratch_cells->N = 0;
+    if (!ncells_incident_face(scplx, start_cell, 0, opp_localids, scratch_cells))
+        return -1;
+
+    bool seen[scplx->points.N];
+    memset(seen, 0, scplx->points.N * sizeof(bool));
+    seen[v_global] = true;
+    for (int i = 0; i < skip_below && i < scplx->points.N; i++) seen[i] = true;
+
+    int count = 0;
+    s_ncell **cells = (s_ncell **)scratch_cells->items;
+    for (unsigned ci = 0; ci < scratch_cells->N; ci++)
+        for (int vi = 0; vi < 4; vi++) {
+            int gid = cells[ci]->vertex_id[vi];
+            if (!seen[gid]) {
+                seen[gid] = true;
+                if (!dynarray_push(out_ids, &gid)) return -1;
+                count++;
+            }
+        }
+    return count;
+}
+
+
 
 int test_point_in_ncell(const s_scplx *scplx, const s_ncell *ncell, s_point query)
 {   // TODO Assumes consistent ordering of vertices?
