@@ -265,7 +265,7 @@ double volume_intersection_3_spheres(double rA, double rB, double rC, double dAB
         if (!has_triple_intersection(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN)) return 0.0;
     }
     
-
+    printf("HERE, has_triple_intersection: %d\n", has_triple_intersection(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN));
     /* Build tetrahedron (4th point is either of the two intersections).*/
     s_tetra_lengths d = tetra_lengths_from_3_spheres(rA, rB, rC, dAB, dAC, dBC);
     s_tetra_dihedral th = dihedral_angles_from_lengths(d);
@@ -296,6 +296,8 @@ double volume_intersection_3_spheres(double rA, double rB, double rC, double dAB
     double D_CA = vol3_area_Dij(rC_2, lCA*lCA, th.th13);
     double D_CB = vol3_area_Dij(rC_2, lCB*lCB, th.th23);
     double VC = rC*sC - lCA*D_CA - lCB*D_CB;
+
+    printf("VA = %g,  VB = %g,  VC = %g\n", VA, VB, VC);
 
     return ( 1.0/3.0*(VA + VB + VC) );
 }
@@ -403,10 +405,14 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
     /* Build Delaunay triangulation and mark alpha complex */
     s_scplx dt = construct_dt_3d(centers, weights, true, TOL_dup);
 
+    print_scomplex(&dt);
+
     s_hash_table ht_faces, ht_edges;
     bool *vertex_mark = malloc(dt.points.N * sizeof(bool));
-    extract_alpha_complex(&dt, true, 0, EPS_DEGEN, buff_ncellPTR, 
+    extract_alpha_complex(&dt, true, 0, buff_ncellPTR, 
                           &ht_faces, &ht_edges, vertex_mark);
+    for (int i=0; i<dt.points.N; i++) if (vertex_mark[i] == true) 
+        printf("vertex %d in acplx\n", i);
 
     /* Compute volume of union */
     double vol = 0.0;
@@ -416,7 +422,10 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
         if (nc_vol <= EPS_DEGEN) continue;
 
         /* FIRST SUM: tets in K */
-        if (nc->mask_alpha) { vol += nc_vol; continue; }
+        if (nc->mask_alpha) { 
+            printf("TET\n");
+            vol += nc_vol; continue; 
+        }
 
         /* SECOND SUM: tets NOT in K */
         s_tetra_dihedral  dihe = dihedral_angles_from_vertices(p, EPS_DEGEN);
@@ -435,6 +444,17 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
                             distance(dt.points.p[face[0]], dt.points.p[face[2]]),
                             distance(dt.points.p[face[1]], dt.points.p[face[2]]),
                             false, EPS_DEGEN);
+            printf("FACE (%d, %d, %d), r=(%g, %g, %g), d=(%g, %g, %g)  %g\n", face[0], face[1], face[2],
+                        radii[face[0]-4], radii[face[1]-4], radii[face[2]-4],
+                        distance(dt.points.p[face[0]], dt.points.p[face[1]]),
+                            distance(dt.points.p[face[0]], dt.points.p[face[2]]),
+                            distance(dt.points.p[face[1]], dt.points.p[face[2]]),
+                    0.5 * volume_intersection_3_spheres(
+                            radii[face[0]-4], radii[face[1]-4], radii[face[2]-4],
+                            distance(dt.points.p[face[0]], dt.points.p[face[1]]),
+                            distance(dt.points.p[face[0]], dt.points.p[face[2]]),
+                            distance(dt.points.p[face[1]], dt.points.p[face[2]]),
+                            false, EPS_DEGEN));
         }
 
         /* EDGES */
@@ -448,6 +468,12 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
             vol -= (theta / (2*M_PI)) 
                     * volume_intersection_2_spheres(radii[edge[0]-4], radii[edge[1]-4], 
                             distance(dt.points.p[edge[0]], dt.points.p[edge[1]]), false);
+            printf("EDGE (%d, %d),   r: (%g, %g), (%g,%g,%g), (%g,%g,%g)  %g\n", edge[0], edge[1], radii[edge[0]-4], radii[edge[1]-4], 
+                    dt.points.p[edge[0]].x, dt.points.p[edge[0]].y, dt.points.p[edge[0]].z,
+                    dt.points.p[edge[1]].x, dt.points.p[edge[1]].y, dt.points.p[edge[1]].z,
+                    (theta / (2*M_PI)) 
+                    * volume_intersection_2_spheres(radii[edge[0]-4], radii[edge[1]-4], 
+                            distance(dt.points.p[edge[0]], dt.points.p[edge[1]]), false));
         }
 
         /* VERTICES: v_localid is the vertex local id (0-3) */
@@ -455,6 +481,8 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
             if (!vertex_mark[nc->vertex_id[v]]) continue;
             double omega = solid_angle_from_vertex_id(&sa, v); 
             vol += (omega / (4*M_PI)) * volume_sphere(radii[nc->vertex_id[v]-4]);
+
+            printf("VERTEX %g\n", (omega / (4*M_PI)) * volume_sphere(radii[nc->vertex_id[v]-4]));
         }
     }
 

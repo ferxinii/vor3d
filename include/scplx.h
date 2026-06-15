@@ -20,6 +20,7 @@ typedef struct ncell {  // Must live in heap
     struct ncell *prev;
     int mark_token;  // Used to mark particular ncells: mark_token == mark_stamp
     bool mask_alpha;  // if it belongs to the alpha complex (for a given alpha)
+    bool in_stack;
 } s_ncell;
 
 

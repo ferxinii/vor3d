@@ -13,7 +13,7 @@
 
 
 bool are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opposite,
-                         e_delaunay_test_type type)
+                          e_delaunay_test_type type)
 {   
     s_point coords1[4], coords2[4];
     extract_vertices_ncell(scplx, ncell, coords1);
@@ -31,7 +31,7 @@ bool are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opp
     int in1;
     if (scplx->weights) {
         double weights1[4]; extract_weights_ncell(scplx, ncell, weights1);
-        in1 = test_orthosphere(coords1, weights1, 
+        in1 = test_orthosphere(4, coords1, weights1, 
                 scplx->points.p[opp_face_vertex_id], scplx->weights[opp_face_vertex_id]);
     } else {
         in1 = test_insphere(coords1, scplx->points.p[opp_face_vertex_id]);
@@ -82,19 +82,55 @@ static bool p_locally_redundant_in_ncell(const s_scplx *scplx, const s_ncell *nc
 {   /* In unweighted triangulation, all points are NON-redundant */
     if (!scplx->weights) return false;
 
-    /* If any vertex belongs to big tetra, orthosphere is unbounded/meaningless.
-     * No finite point can be redundant. Think as big tetra having infinite vertices. */
+    /* Never redundant in a tetrahedron containing sentinel vertices */
+    for (int i = 0; i < 4; i++)
+        if (nc->vertex_id[i] < 4) return false;
 
-    if (nc->vertex_id[0] < 4 && nc->vertex_id[1] < 4 &&
-        nc->vertex_id[2] < 4 && nc->vertex_id[3] < 4) return false;
-
-    s_point v[4];  double w[4];
+    s_point v[4]; double w[4];
     extract_vertices_and_weights_ncell(scplx, nc, v, w);
-    printf("v: (%d,%d,%d,%d)   w: (%g,%g,%g,%g)   redundant: %d\n",
-            nc->vertex_id[0], nc->vertex_id[1], nc->vertex_id[2], nc->vertex_id[3],
-            w[0], w[1], w[2], w[3], 
-            test_orthosphere(v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
-    return (test_orthosphere(v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    return (test_orthosphere(4, v, w, scplx->points.p[p_id], scplx->weights[p_id]) != -1);
+
+
+
+    // s_point v[4];  double w[4];
+    // extract_vertices_and_weights_ncell(scplx, nc, v, w);
+    // return (test_orthosphere(4, v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    //
+    //
+    // /* Count how many and which vertices of nc are part of big tetra */
+    // int N_bigtetra = 0, bigtetra_ids[4] = {0};
+    // for (int i=0; i<4; i++) 
+    //     if (nc->vertex_id[i] < 4) bigtetra_ids[N_bigtetra++] = i;
+    //
+    // /* Select the vertices that are NOT part of big tetra */
+    // s_point v_real[4];  double w_real[4];
+    // for (int i = 0, k = 0; i < 4; i++) {
+    //     bool is_bigtetra = false;
+    //     for (int j = 0; j < N_bigtetra; j++)
+    //         if (bigtetra_ids[j] == i) { is_bigtetra = true; break; }
+    //     if (!is_bigtetra) {
+    //         v_real[k] = v[i];
+    //         w_real[k] = w[i];
+    //         k++;
+    //     }
+    // }
+    //
+    // switch (N_bigtetra) {
+    //     case 0:
+    //         return (test_orthosphere(4, v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    //     case 1:
+    //         // return (test_orthosphere(3, v_real, w_real, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    //         return false;
+    //     case 2:
+    //         return (test_orthosphere(2, v_real, w_real, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    //     case 3:
+    //         return (test_orthosphere(1, v_real, w_real, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
+    //     case 4:
+    //         return false;
+    //     default:
+    //         fprintf(stderr, "p_locally_redundant_in_ncell: error in switch!\n");
+    //         exit(1);
+    // }
 }
 
 
@@ -138,26 +174,32 @@ static void stack_free(s_dstack *stack)
     free(stack->entry);
 }
 
-static void stack_push(s_dstack *stack, s_ncell *ncell)
+static int stack_push(s_dstack *stack, s_ncell *ncell)
 {
-    for (int ii=0; ii<stack->size; ii++) /* Avoid duplicates */
-        if (stack->entry[ii] == ncell) return;
+    if (ncell->in_stack) return 1;  /* Avoid duplicates */
 
     if (stack->size == stack->capacity) { /* Expand if needed */
         stack->capacity *= 2;
         s_ncell **tmp = realloc(stack->entry, stack->capacity * sizeof(s_ncell *));
-        assert(tmp && "realloc failed when increasing stack memory");
+        if (!tmp) { fprintf(stderr, "delaunay.c, stack_push: realloc failed increasing stack\n"); return 0; }
         stack->entry = tmp;
     }
 
     stack->entry[stack->size++] = ncell;
+    ncell->in_stack = true;
+    return 1;
 }
 
 static s_ncell *stack_pop(s_dstack *stack)
 {   
-    if (stack->size == 0) return NULL;
-    stack->size--;
-    return stack->entry[stack->size];
+    while (stack->size > 0) {
+        s_ncell *ncell = stack->entry[--stack->size];
+        if (ncell->in_stack) {
+            ncell->in_stack = false;
+            return ncell;
+        }
+    }
+    return NULL;
 }
 
 static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
@@ -166,6 +208,7 @@ static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
         if (stack->entry[ii] != ncell)  /* Only copy entries that are not the target. */
             stack->entry[newSize++] = stack->entry[ii];
     stack->size = newSize;
+    ncell->in_stack = false;
 }
 
 
@@ -242,7 +285,12 @@ static int flip14(s_scplx *scplx, s_ncell *nc1, int point_id, s_dstack *stack)
     }
 
     /* Push to stack */
-    if (stack) { stack_push(stack, nc1); stack_push(stack, nc2); stack_push(stack, nc3); stack_push(stack, nc4); }
+    if (stack) { 
+        if (!stack_push(stack, nc1)) return 0;
+        if (!stack_push(stack, nc2)) return 0;
+        if (!stack_push(stack, nc3)) return 0;
+        if (!stack_push(stack, nc4)) return 0;
+    }
     return 1;
 }
 
@@ -257,10 +305,6 @@ static inline void map_vid_lid(s_ncell *ncell, int v1, int *l1, int v2, int *l2,
 
 static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell *OUT_PTRS[3])
 {   
-    // fprintf(stderr, "flip23 called: nc1 vids %d %d %d %d, opp_cell_id=%d\n",
-    // nc1->vertex_id[0], nc1->vertex_id[1],
-    // nc1->vertex_id[2], nc1->vertex_id[3], opp_cell_id);
-
     scplx->N_ncells += 1;
     s_ncell *nc2 = nc1->opposite[opp_cell_id], *nc3 = malloc_ncell();
     if (!nc2) return 0;
@@ -319,7 +363,11 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
         nc2_opp_old[nc2_id_b]->opposite[opp_aux] = nc3;
     }
 
-    if (stack) { stack_push(stack, nc1); stack_push(stack, nc2); stack_push(stack, nc3); }
+    if (stack) { 
+        if (!stack_push(stack, nc1)) return 0;
+        if (!stack_push(stack, nc2)) return 0;
+        if (!stack_push(stack, nc3)) return 0;
+    }
     if (OUT_PTRS) { OUT_PTRS[0] = nc1; OUT_PTRS[1] = nc2; OUT_PTRS[2] = nc3; }
     return 1;
 }
@@ -339,12 +387,11 @@ static int can_perform_flip32(const s_ncell *ncell, int opp_cell_id, int *ridge_
                 return 1;
         }
     }
-
     return 0;
 }
 
 
-static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell *OUT_PTRS[2])
+static int flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int ridge_id_2, int opp_face_localid, s_ncell *OUT_PTRS[2])
 {
     scplx->N_ncells -= 1;
     s_ncell *nc2, *nc3;
@@ -409,8 +456,12 @@ static void flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_i
 
     if (stack) stack_remove_ncell(stack, nc3);
     free_ncell(nc3);
-    if (stack) { stack_push(stack, nc1); stack_push(stack, nc2); }
+    if (stack) { 
+        if (!stack_push(stack, nc1)) return 0;
+        if (!stack_push(stack, nc2)) return 0;
+    }
     if (OUT_PTRS) { OUT_PTRS[0] = nc1; OUT_PTRS[1] = nc2; }
+    return 1;
 }
 
 
@@ -431,66 +482,26 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
     assert(num_ridges == 1 || num_ridges == 2);
 
     int AUX_ridge_id_2[2];  int k=0;
-    if (o0 == 0) {
-        AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]);
-    } 
-    if (o1 == 0) {
-        AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[0]);
-    } 
-    if (o2 == 0) {
-        AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[1]);
-    } 
+    if (o0 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]); } 
+    if (o1 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[0]); } 
+    if (o2 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[1]); } 
 
-    // printf("Traversing ridge:\n");
     for (int i=0; i<k; i++) {
-        // print_ncell(ncell);
-        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
-        //         scplx->points.p[ncell->vertex_id[0]].x, scplx->points.p[ncell->vertex_id[0]].y, scplx->points.p[ncell->vertex_id[0]].z,
-        //         scplx->points.p[ncell->vertex_id[1]].x, scplx->points.p[ncell->vertex_id[1]].y, scplx->points.p[ncell->vertex_id[1]].z,
-        //         scplx->points.p[ncell->vertex_id[2]].x, scplx->points.p[ncell->vertex_id[2]].y, scplx->points.p[ncell->vertex_id[2]].z,
-        //         scplx->points.p[ncell->vertex_id[3]].x, scplx->points.p[ncell->vertex_id[3]].y, scplx->points.p[ncell->vertex_id[3]].z);
-
-
         *ridge_id_2 = AUX_ridge_id_2[i];
 
         int nc2_id1, nc2_id2;
         s_ncell *nc2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &nc2_id1, &nc2_id2);
         if (!nc2) continue;
-        // print_ncell(nc2);
-        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
-        //         scplx->points.p[nc2->vertex_id[0]].x, scplx->points.p[nc2->vertex_id[0]].y, scplx->points.p[nc2->vertex_id[0]].z,
-        //         scplx->points.p[nc2->vertex_id[1]].x, scplx->points.p[nc2->vertex_id[1]].y, scplx->points.p[nc2->vertex_id[1]].z,
-        //         scplx->points.p[nc2->vertex_id[2]].x, scplx->points.p[nc2->vertex_id[2]].y, scplx->points.p[nc2->vertex_id[2]].z,
-        //         scplx->points.p[nc2->vertex_id[3]].x, scplx->points.p[nc2->vertex_id[3]].y, scplx->points.p[nc2->vertex_id[3]].z);
 
         int nc3_id1, nc3_id2;
         s_ncell *nc3 = next_ncell_ridge_cycle(nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
         if (!nc3) continue;
-        // print_ncell(nc3);
-        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
-        //         scplx->points.p[nc3->vertex_id[0]].x, scplx->points.p[nc3->vertex_id[0]].y, scplx->points.p[nc3->vertex_id[0]].z,
-        //         scplx->points.p[nc3->vertex_id[1]].x, scplx->points.p[nc3->vertex_id[1]].y, scplx->points.p[nc3->vertex_id[1]].z,
-        //         scplx->points.p[nc3->vertex_id[2]].x, scplx->points.p[nc3->vertex_id[2]].y, scplx->points.p[nc3->vertex_id[2]].z,
-        //         scplx->points.p[nc3->vertex_id[3]].x, scplx->points.p[nc3->vertex_id[3]].y, scplx->points.p[nc3->vertex_id[3]].z);
-
-
 
         int nc4_id1, nc4_id2;
         s_ncell *nc4 = next_ncell_ridge_cycle(nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
         if (!nc4) continue;
-        // print_ncell(nc4);
-        // printf("(%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g),  (%g, %g, %g)\n",
-        //         scplx->points.p[nc4->vertex_id[0]].x, scplx->points.p[nc3->vertex_id[0]].y, scplx->points.p[nc4->vertex_id[0]].z,
-        //         scplx->points.p[nc4->vertex_id[1]].x, scplx->points.p[nc4->vertex_id[1]].y, scplx->points.p[nc4->vertex_id[1]].z,
-        //         scplx->points.p[nc4->vertex_id[2]].x, scplx->points.p[nc4->vertex_id[2]].y, scplx->points.p[nc4->vertex_id[2]].z,
-        //         scplx->points.p[nc4->vertex_id[3]].x, scplx->points.p[nc4->vertex_id[3]].y, scplx->points.p[nc4->vertex_id[3]].z);
-
-
-
-        // printf("nc4->opp[nc4_id1]: %p\n", nc4->opposite[nc4_id1]);
 
         if (nc4->opposite[nc4_id1] == ncell) return 1;
-        // printf("TRY 2\n");
     }
     // printf("NOT FOUND RIDGE\n");
     return 0;
@@ -520,17 +531,16 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
         if (inarray(FLIP23_PTRS[ii]->vertex_id, 4, a) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, c) &&
             inarray(FLIP23_PTRS[ii]->vertex_id, 4, d) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, p)) {
             nc5 = FLIP23_PTRS[ii];
-            // printf("Pushed to the stack after flip23 in flip44:\n");
-            // print_ncell(FLIP23_PTRS[(ii+1)%3]);
-            // print_ncell(FLIP23_PTRS[(ii+2)%3]);
-            if (stack) { stack_push(stack, FLIP23_PTRS[(ii+1)%3]); stack_push(stack, FLIP23_PTRS[(ii+2)%3]); }
+            if (stack) { 
+                if (!stack_push(stack, FLIP23_PTRS[(ii+1)%3])) return 0;
+                if (!stack_push(stack, FLIP23_PTRS[(ii+2)%3])) return 0;
+            }
             if (OUT_PTRS) { OUT_PTRS[0] = FLIP23_PTRS[(ii+1)%3]; OUT_PTRS[1] = FLIP23_PTRS[(ii+2)%3]; }
             debug_found = 1;
             break;
         }
     }
     assert(debug_found == 1 && "Could not perform flip44...");
-    // printf("NC5: (%d, %d, %d, %d)\n", nc5->vertex_id[0], nc5->vertex_id[1], nc5->vertex_id[2], nc5->vertex_id[3]);
 
     /* 2) flip32 */
     int nc5_p = id_where_equal_int(nc5->vertex_id, 4, ncell->vertex_id[id_ridge_1]);
@@ -539,18 +549,13 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
     int nc3_id2; face_localid_of_adjacent_ncell(nc5, 2, &nc5_p, nc5_p, &nc3_id2);
     int nc3_opp_face_lid; face_localid_of_adjacent_ncell(nc3, 2, &nc3_id1, nc3_id1, &nc3_opp_face_lid);
 
-
     s_ncell *FLIP32_PTRS[2];
-    // printf("FLIP44 CALLING FLIP32:\n");
     flip32(scplx, NULL, nc3, nc3_id1, nc3_id2, nc3_opp_face_lid, FLIP32_PTRS);
-    if(stack) { stack_push(stack, FLIP32_PTRS[0]); stack_push(stack, FLIP32_PTRS[1]); }
+    if(stack) { 
+        if (!stack_push(stack, FLIP32_PTRS[0])) return 0;
+        if (!stack_push(stack, FLIP32_PTRS[1])) return 0;
+    }
     if (OUT_PTRS) { OUT_PTRS[2] = FLIP32_PTRS[0]; OUT_PTRS[3] = FLIP32_PTRS[1]; }
-
-    // printf("Pushed to the stack after flip32 in flip44:\n");
-            // print_ncell(FLIP32_PTRS[0]);
-            // print_ncell(FLIP32_PTRS[1]);
-
-
     return 1;
 }
 
@@ -562,7 +567,7 @@ static int can_perform_flip41(const s_ncell *ncell, int opp_cell_id, int *redund
     s_ncell *opp_ncell = ncell->opposite[opp_cell_id];
     int p_vid = ncell->vertex_id[opp_cell_id];
 
-    /* For each edge of shared face, check if degree-3 tetrahedron exists */
+    /* For each edge of shared face, check if degree 3 tetrahedron exists */
     int degree3_edges[3][2], n_degree3 = 0;
     for (int i=0; i<3; i++) {
         int va = face_vid[i], vb = face_vid[(i+1)%3];
@@ -595,7 +600,7 @@ static int can_perform_flip41(const s_ncell *ncell, int opp_cell_id, int *redund
 }
 
 
-static void flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid, bool *ignored)
+static int flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid, bool *ignored)
 {
     int r_vid = ncell->vertex_id[r_localid];
     scplx->N_ncells -= 3;
@@ -612,7 +617,6 @@ static void flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_locali
             star[k++] = nb;
     }
     assert(k == 4 && "flip41: redundant vertex does not have exactly 4 tetrahedra in its star");
-
 
     /* Precompute old opposite pointers before modifying anything */
     s_ncell *nc1_opp_old[4]; opposite_pointers_ncell(star[0], nc1_opp_old);
@@ -636,7 +640,6 @@ static void flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_locali
         if (aux != a && aux != b && aux != c && aux != r_vid) d = aux;
     }
     assert(d != -1);
-
 
     /* Update nc1 to be the surviving tetrahedron */
     set_ncell_vids(star[0], a, b, c, d);
@@ -662,7 +665,6 @@ static void flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_locali
         }
     }
 
-
     /* Remove nc2, nc3, nc4 from linked list */
     if (star[1]->next) star[1]->next->prev = star[1]->prev;
     if (star[1]->prev) star[1]->prev->next = star[1]->next;
@@ -680,12 +682,13 @@ static void flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_locali
         stack_remove_ncell(stack, star[1]);
         stack_remove_ncell(stack, star[2]);
         stack_remove_ncell(stack, star[3]);
-        stack_push(stack, star[0]);
+        if (!stack_push(stack, star[0])) return 0;
     }
 
     free_ncell(star[1]);
     free_ncell(star[2]);
     free_ncell(star[3]);
+    return 1;
 }
 
 
@@ -741,7 +744,7 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
             maxr = fmax(maxr, sqrt(weights[ii]));
     }
     /* inradius min: bdiag/2 + 2*maxr, but the bigger it makes less errors. */
-    double inradius = (2*bdiag + 8*maxr);  
+    double inradius = (2*bdiag + 8*maxr);    // TODO TEST WHY TIGHTENING RESULTS IN FAILS
     // double inradius = 1.1 * (bdiag/2 + 2*maxr);  
     regular_tetrahedron(centre, inradius, scplx_points.p);
     perturb_big_tetra(scplx_points.p, inradius);
@@ -749,7 +752,7 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
     out->points.N = points->N + 4;
     out->points = scplx_points;
     s_ncell *big_ncell = malloc_ncell();
-    if (!big_ncell) return 0;
+    if (!big_ncell) { free_points(&scplx_points); return 0; }
     for (int ii=0; ii<4; ii++) {
         big_ncell->vertex_id[ii] = ii;
         big_ncell->opposite[ii] = NULL;
@@ -758,7 +761,7 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
     out->N_ncells = 1;
     if (weights) {
         out->weights = malloc(sizeof(double) * scplx_points.N);
-        if (!out->weights) return 0;
+        if (!out->weights) {free_ncell(big_ncell); free_points(&scplx_points); return 0; }
         for (int ii=0; ii<4; ii++) out->weights[ii] = 0;
         for (int ii=4, jj=0; ii<points->N+4; ii++) out->weights[ii] = weights[jj++];
     } else out->weights = NULL;
@@ -820,15 +823,12 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
         case CASE_NON_CONVEX:
-            // fprintf(stderr, "  CASE 2, can_perform_flip41=%d, can_perform_flip32=%d\n", 
-            //                     can_perform_flip41(ncell, opp_cell_id, &redundant_localid),
-            //                     can_perform_flip32(ncell, opp_cell_id, &ridge_id_2));
             if (scplx->weights &&
                 can_perform_flip41(ncell, opp_cell_id, &redundant_localid)) {
-                flip41(scplx, stack, ncell, redundant_localid, ignored);
+                if (!flip41(scplx, stack, ncell, redundant_localid, ignored)) return -1;
                 return 1;
             } else if (can_perform_flip32(ncell, opp_cell_id, &ridge_id_2)) {
-                flip32(scplx, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL);
+                if (!flip32(scplx, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL)) return -1;
                 return 1;
             } else return 0;
         case CASE_FLAT:
@@ -944,13 +944,13 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
     bool *ignored = calloc(points->N + 4, sizeof(bool));  /* Space for big tetra */
     if (!ignored) goto error;
 
-    s_dstack stack = stack_create();
+    s_dstack stack = stack_create(); if (!stack.entry) goto error;
     s_scplx scplx; if (!initialize_scplx(points, weights, &scplx)) goto error;
 
 
     /* First 4 are big tetra, which already is inserted */
     for (int ii=4; ii<scplx.points.N; ii++) {
-        // printf("\n\n%d\n", ii);
+        printf("\n\n%d\n", ii);
         // print_scomplex(&scplx);
 
         if (insert_one_point(&scplx, ii, &stack, TOL_duplicates, ignored) == -1) goto error;
@@ -961,8 +961,6 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
             exit(1);
         }
     }
-
-
     
 
     if (!is_delaunay_3d(&scplx, DELAUNAY_TEST_NONSTRICT)) {
@@ -1002,6 +1000,8 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
 
     error:
         fprintf(stderr, "construct_dt_3d: Error.\n");
+        if (ignored) free(ignored);
+        if (stack.entry) stack_free(&stack);
         return (s_scplx){0};
 }
 

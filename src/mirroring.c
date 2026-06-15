@@ -26,19 +26,19 @@ static s_point mirror_plane(s_point normal, double d_plane, s_point p)
 static void constraints_from_triangle(const double t1[2], const double t2[2], const double t3[2], 
                                       s_LPconstraint2D out[3])
 {
-    double v1[2] = { t1[0], t1[1] };
-    double v2[2] = { t2[0], t2[1] };
-    double v3[2] = { t3[0], t3[1] };
+    s_point2d v1 = {{{ t1[0], t1[1] }}};
+    s_point2d v2 = {{{ t2[0], t2[1] }}};
+    s_point2d v3 = {{{ t3[0], t3[1] }}};
 
-    if (test_orientation_2d(t1, t2, t3) < 0) {  /* Check proper orientation */
-        double tmp[2] = {v1[0], v1[1]};
-        v1[0] = v2[0];  v1[1] = v2[1];
-        v2[0] = tmp[0]; v2[1] = tmp[1];
+    if (test_orientation_2d((s_point2d[]){v1, v2}, v3) < 0) {  /* Check proper orientation */
+        s_point2d tmp = v1;
+        v1.x = v2.x;  v1.y = v2.y;
+        v2.x = tmp.x; v2.y = tmp.y;
     }
 
-    out[0] = (s_LPconstraint2D){ v2[1]-v1[1], -(v2[0]-v1[0]), (v2[1]-v1[1])*v1[0] - (v2[0]-v1[0])*v1[1] };
-    out[1] = (s_LPconstraint2D){ v3[1]-v2[1], -(v3[0]-v2[0]), (v3[1]-v2[1])*v2[0] - (v3[0]-v2[0])*v2[1] };
-    out[2] = (s_LPconstraint2D){ v1[1]-v3[1], -(v1[0]-v3[0]), (v1[1]-v3[1])*v3[0] - (v1[0]-v3[0])*v3[1] };
+    out[0] = (s_LPconstraint2D){ v2.y-v1.y, -(v2.x-v1.x), (v2.y-v1.y)*v1.x - (v2.x-v1.x)*v1.y };
+    out[1] = (s_LPconstraint2D){ v3.y-v2.y, -(v3.x-v2.x), (v3.y-v2.y)*v2.x - (v3.x-v2.x)*v2.y };
+    out[2] = (s_LPconstraint2D){ v1.y-v3.y, -(v1.x-v3.x), (v1.y-v3.y)*v3.x - (v1.x-v3.x)*v3.y };
 }
 
 

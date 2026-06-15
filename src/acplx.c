@@ -1,93 +1,14 @@
 
 #include "scplx.h"
-#include "linalg.h"
 #include "hash.h"
 #include "dynarray.h"
+#include "gtests.h"
 #include <float.h>
 
 
-/* Orthosphere of every simplex. */
-
-static void tetra_orthosphere(const s_point p[4], const double w[4], double EPS_DEGEN, 
-                       s_point *out_c, double *out_r2)
-{
-    double A[3][3], b[3];
-    double r0_2 = norm_squared(p[0]);
-    for (int i = 1; i <= 3; i++) {
-        double ri_2 = norm_squared(p[i]);
-        b[i-1] = ri_2 - r0_2 - (w[i] - w[0]);
-        for (int j = 0; j < 3; j++)
-            A[i-1][j] = 2.0 * (p[i].coords[j] - p[0].coords[j]);
-    }
-
-    s_point c;
-    if (solve_3x3_ppivot_inplace(A, b, c.coords, EPS_DEGEN) != 3) goto error;
-
-    if (out_c) *out_c = c;
-    if (out_r2) *out_r2 = distance_squared(c, p[0]) - w[0];
-    return;
-
-    error:
-        if (out_c) { (*out_c).x = DBL_MAX; (*out_c).y = DBL_MAX; (*out_c).z = DBL_MAX; }
-        *out_r2 = DBL_MAX;
-}
-
-static void face_orthosphere(const s_point p[3], const double w[3], double EPS_DEGEN,
-                             s_point *out_c, double *out_r2)
-{   /* Unique sphere centered on the face with same power to the 3 vertices */
-    s_point n, t1, t2;
-    if (basis_vectors_plane(p, EPS_DEGEN, &n, &t1, &t2) == 0) goto error;
-
-    /* Project all 3 vertices onto the plane's 2D coordinate system */
-    double p2D[2][2];  /* p0 is mapped to (0,0) */
-    project_point_to_plane_2D(p[1], p[0], t1, t2, p2D[0]);
-    project_point_to_plane_2D(p[2], p[0], t1, t2, p2D[1]);
-
-    /* Build 2x2 system, accounting for p0 = (0,0) */
-    double A[2][2], b[2];
-    for (int i=0; i<2; i++) {
-        A[i][0] = 2.0 * p2D[i][0];
-        A[i][1] = 2.0 * p2D[i][1];
-        b[i] = p2D[i][0]*p2D[i][0] + p2D[i][1]*p2D[i][1] - (w[i+1] - w[0]);
-    }
-
-    double c[2];  /* Circle center, we won't return it */
-    if (solve_2x2_cramer(A, b, c, EPS_DEGEN) != 2) goto error;
-
-    if (out_c) *out_c = sum_points(p[0], sum_points(scale_point(t1, c[0]),
-                                         scale_point(t2, c[1])));
-    if (out_r2) *out_r2 = c[0]*c[0] + c[1]*c[1] - w[0];
-    return;
-
-    error:
-        if (out_c) { (*out_c).x = DBL_MAX; (*out_c).y = DBL_MAX; (*out_c).z = DBL_MAX; }
-        *out_r2 = DBL_MAX;
-}
-
-static void edge_orthosphere(const s_point p[2], const double w[2], double EPS_DEGEN,
-                             s_point *out_c, double *out_r2)
-{   /* Unique orthosphere centered on the edge with same power to both endpoints */
-    s_point p01 = subtract_points(p[1], p[0]);
-    double d2 = norm_squared(p01);
-    if (d2 < EPS_DEGEN) goto error;
-    double t = 0.5 + (w[0]-w[1])/(2*d2);
-    
-    if (out_c) *out_c = sum_points(p[0], scale_point(p01, t));
-    if (out_r2) *out_r2 = t*t*d2 - w[0];
-    return;
-
-    error:
-        if (out_c) { (*out_c).x = DBL_MAX; (*out_c).y = DBL_MAX; (*out_c).z = DBL_MAX; }
-        if (out_r2) *out_r2 = DBL_MAX;
-}
-
-
-
-/* Test for every simplex */
-
-static bool tetra_test(const s_scplx *scplx, const s_ncell *nc, double alpha, bool has_big_tetra,
-                       double EPS_DEGEN)
-{
+/* Test for every simplex: return true if simplex satisfies radius and conflict conditions */
+static bool tetra_test(const s_scplx *scplx, const s_ncell *nc, double alpha, bool has_big_tetra)
+{   /* Always conflict free, so only check radius condition */
     if (has_big_tetra && (nc->vertex_id[0] < 4 || nc->vertex_id[1] < 4 ||
                           nc->vertex_id[2] < 4 || nc->vertex_id[3] < 4 )) {
         return false;
@@ -95,13 +16,12 @@ static bool tetra_test(const s_scplx *scplx, const s_ncell *nc, double alpha, bo
 
     s_point p[4];  extract_vertices_ncell(scplx, nc, p);
     double  w[4];  extract_weights_ncell(scplx, nc, w);
-    double r2; tetra_orthosphere(p, w, EPS_DEGEN, NULL, &r2);
-    return (r2 <= alpha);  /* Only radius contiditon necessary */
+    return test_orthosphere_w(4, p, w, alpha) <= 0;
 }
 
 
 static bool face_test(const s_scplx *scplx, const s_ncell *nc, int face_localid,
-                      double alpha, bool has_big_tetra, double EPS_DEGEN)
+                      double alpha, bool has_big_tetra)
 {
     if (has_big_tetra) {
         int fid[3]; extract_ids_face(nc, 2, &face_localid, fid);
@@ -111,16 +31,16 @@ static bool face_test(const s_scplx *scplx, const s_ncell *nc, int face_localid,
     /* 1) Radius condition. */
     s_point p[3]; double w[3];
     extract_vertices_and_weights_face(scplx, nc, 2, &face_localid, p, w);
+    if (test_orthosphere_w(3, p, w, alpha) > 0) return false;
 
-    s_point c; double r2;
-    face_orthosphere(p, w, EPS_DEGEN, &c, &r2);
-    if (r2 > alpha) return false;  
-
-    /* 2) Power condition. */
+    /* 2) Conflict condition. */
     /* Vertex opposite in nc */
     int vid1 = nc->vertex_id[face_localid];
-    if (!has_big_tetra || vid1 >= 4)
-        if (power_distance_point_vertex(scplx, vid1, c) < r2) return false;
+    if (!has_big_tetra || vid1 >= 4)   
+        if (test_orthosphere(3, p, w, scplx->points.p[vid1], 
+                             scplx->weights ? scplx->weights[vid1] : 0.0) > 0)
+            return false;
+
     /* Vertex opposite in opp tet */
     s_ncell *opp = nc->opposite[face_localid];
     if (opp) {
@@ -128,7 +48,9 @@ static bool face_test(const s_scplx *scplx, const s_ncell *nc, int face_localid,
         face_localid_of_adjacent_ncell(nc, 2, &face_localid, face_localid, &opp_local);
         int vid2 = opp->vertex_id[opp_local];
         if (!has_big_tetra || vid2 >= 4)
-            if (power_distance_point_vertex(scplx, vid2, c) < r2) return false;
+            if (test_orthosphere(3, p, w, scplx->points.p[vid2], 
+                                 scplx->weights ? scplx->weights[vid2] : 0.0) > 0)
+                return false;
     }
 
     return true;
@@ -139,19 +61,23 @@ typedef struct {
     s_scplx *scplx;
     int gid0, gid1;
     bool has_big_tetra;
-    s_point c; double r2;  /* edge's orthosphere */
+    s_point edge_p[2];
+    double edge_w[2];
     bool empty_ball_ok;   /* output */
 } edge_test_ctx;
 
 static bool AUX_check_edge_acplx(void *C, const s_ncell *nc)
-{   /* Checks power condition */
+{   /* Checks conflict condition */
     edge_test_ctx *ctx = C;
     if (ctx->empty_ball_ok) {
         for (int v = 0; v < 4; ++v) {
             int vid = nc->vertex_id[v];
             if (ctx->has_big_tetra && vid < 4) continue;
             if (vid == ctx->gid0 || vid == ctx->gid1) continue;
-            if (power_distance_point_vertex(ctx->scplx, vid, ctx->c) < ctx->r2) {
+            
+            s_point pv = ctx->scplx->points.p[vid];
+            double  wv  = ctx->scplx->weights ? ctx->scplx->weights[vid] : 0.0;
+            if (test_orthosphere(2, ctx->edge_p, ctx->edge_w, pv, wv) > 0) {
                 ctx->empty_ball_ok = false;
                 return false;
             }
@@ -161,7 +87,7 @@ static bool AUX_check_edge_acplx(void *C, const s_ncell *nc)
 }
 
 static bool edge_test(s_scplx *scplx, const s_ncell *nc, const int edge_endpoints[2],
-                      double alpha, bool has_big_tetra, double EPS_DEGEN)
+                      double alpha, bool has_big_tetra)
 {
     int gid0 = nc->vertex_id[edge_endpoints[0]];
     int gid1 = nc->vertex_id[edge_endpoints[1]];
@@ -173,18 +99,17 @@ static bool edge_test(s_scplx *scplx, const s_ncell *nc, const int edge_endpoint
 
     s_point p[2]; double w[2];
     extract_vertices_and_weights_face(scplx, nc, 1, omitted, p, w);
-    s_point c; double r2;
-    edge_orthosphere(p, w, EPS_DEGEN, &c, &r2);
 
     /* 1) Radius condition. */
-    if (r2 > alpha) return false;
+    if (test_orthosphere_w(2, p, w, alpha) > 0) return false;
 
     /* 2) Power condition by walking ridge. */
     edge_test_ctx ctx = {
         .scplx = scplx,
         .gid0 = gid0, .gid1 = gid1,
         .has_big_tetra = has_big_tetra,
-        .c = c, .r2 = r2,
+        .edge_p[0] = p[0], .edge_p[1] = p[1],
+        .edge_w[0] = w[0], .edge_w[1] = w[1],
         .empty_ball_ok = true,
     };
     walk_ridge_cycle_and_check_ncells(nc, omitted, AUX_check_edge_acplx, &ctx);
@@ -195,27 +120,30 @@ static bool edge_test(s_scplx *scplx, const s_ncell *nc, const int edge_endpoint
 static bool vertex_test(s_scplx *scplx, s_ncell *nc, int v_localid, double alpha,
                         bool has_big_tetra, s_dynarray *buff_ncellPTR)
 {
-    if (has_big_tetra && (nc->vertex_id[v_localid] < 4)) return false;
+    int vid = nc->vertex_id[v_localid];
+    if (has_big_tetra && (vid < 4)) return false;
 
     /* 1) Radius condition */
-    int vid = nc->vertex_id[v_localid];
-    double r2 = scplx->weights ? -scplx->weights[vid] : 0.0;  /* Orthosphere's r2 is -w */
-    if (alpha < r2) return false;
+    s_point pi_pt = scplx->points.p[vid];
+    double  pi_wt = scplx->weights ? scplx->weights[vid] : 0.0;
+    if (test_orthosphere_w(1, &pi_pt, &pi_wt, alpha) > 0) return false;
 
-    /* 2) Power condition by checking star of vertex */
-    int v_localid_ARR[3]; extract_ids_face(nc, 2, &v_localid, v_localid_ARR);
-    ncells_incident_face(scplx, nc, 0, v_localid_ARR, buff_ncellPTR);
-
-    s_point pi = scplx->points.p[vid];
-    for (unsigned i=0; i<buff_ncellPTR->N; i++) {
-        s_ncell **tc = dynarray_get_ptr(buff_ncellPTR, i);
-        for (int j=0; j<4; j++) {
-            int vjd = (*tc)->vertex_id[j];
-            if (vjd == vid) continue;
-            if (has_big_tetra && vjd < 4) continue;
-            if (power_distance_point_vertex(scplx, vjd, pi) < r2) return false;
-        }
-    }
+    (void)buff_ncellPTR;
+    // /* 2) Conflict condition by checking star of vertex */
+    // int v_localid_ARR[3]; extract_ids_face(nc, 2, &v_localid, v_localid_ARR);
+    // ncells_incident_face(scplx, nc, 0, v_localid_ARR, buff_ncellPTR);
+    //
+    // for (unsigned i=0; i<buff_ncellPTR->N; i++) {
+    //     s_ncell **tc = dynarray_get_ptr(buff_ncellPTR, i);
+    //     for (int j=0; j<4; j++) {
+    //         int vjd = (*tc)->vertex_id[j];
+    //         if (vjd == vid) continue;
+    //         if (has_big_tetra && vjd < 4) continue;
+    //         s_point pj = scplx->points.p[vjd];
+    //         double  wj  = scplx->weights ? scplx->weights[vjd] : 0.0;
+    //         if (test_orthosphere(1, &pi_pt, &pi_wt, pj, wj) > 0) return false;
+    //     }
+    // }
 
     return true;
 }
@@ -370,8 +298,7 @@ static int mark_recursive_ncell(s_ncell *nc, s_hash_table *ht_faces,
 }
 
 
-void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, 
-                           double EPS_DEGEN, s_dynarray *buff_ncellPTR,
+void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_dynarray *buff_ncellPTR,
                            s_hash_table *out_faces, s_hash_table *out_edges, 
                            bool *out_vertices)
 {
@@ -385,7 +312,7 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha,
 
     /* Detect ncells */
     for (s_ncell *nc = scplx->head; nc; nc = nc->next) {
-        if (tetra_test(scplx, nc, alpha, has_big_tetra, EPS_DEGEN))
+        if (tetra_test(scplx, nc, alpha, has_big_tetra))
             mark_recursive_ncell(nc, &ht_faces, &ht_edges, vmark);
     }
 
@@ -393,7 +320,7 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha,
     for (s_ncell *nc = scplx->head; nc; nc = nc->next) for (int i=0; i<4; i++) {
         int face_vid[3]; extract_ids_face(nc, 2, &i, face_vid); sort3(face_vid);
         if (!hash_get(&ht_faces, face_vid)) { 
-            if (face_test(scplx, nc, i, alpha, has_big_tetra, EPS_DEGEN)) {
+            if (face_test(scplx, nc, i, alpha, has_big_tetra)) {
                 mark_recursive_face(face_vid, &ht_faces, &ht_edges, vmark);
             } else {
                 hash_insert(&ht_faces, face_vid, &f);
@@ -406,7 +333,7 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha,
         for (int i=0; i<3; i++) for (int j=i+1; j<4; j++) {
             int edge_vid[2] = {nc->vertex_id[i], nc->vertex_id[j]}; sort2(edge_vid);
             if (!hash_get(&ht_edges, edge_vid)) {
-                if (edge_test(scplx, nc, (int[2]){i,j}, alpha, has_big_tetra, EPS_DEGEN)) {
+                if (edge_test(scplx, nc, (int[2]){i,j}, alpha, has_big_tetra)) {
                     mark_recursive_edge(edge_vid, &ht_edges, vmark);
                 } else {
                     bool f = false;
