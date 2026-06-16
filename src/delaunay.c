@@ -898,7 +898,16 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
     return 1;
 }
 
-static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_tetra)
+/*
+ * kept_idx, if non-NULL, is composed in place: for each i in [0, N_kept_idx),
+ * if kept_idx[i] is a valid index into the pre-compaction "real seed" range
+ * (i.e. was produced by an earlier filtering stage as an index there), it is
+ * rewritten to that seed's final compacted index, or -1 if the seed was
+ * dropped here as a near-duplicate. Reuses the remap table already built
+ * for compaction below -- no extra allocation needed.
+ */
+static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_tetra,
+                                  int *kept_idx, int N_kept_idx)
 {
     if (!keep_big_tetra) {
         /* Mark first 4 indices as ignored */
@@ -949,6 +958,11 @@ static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_t
             c->vertex_id[i] = remap[c->vertex_id[i]];
         }
     }
+
+    if (kept_idx)
+        for (int i = 0; i < N_kept_idx; i++)
+            if (kept_idx[i] >= 0)
+                kept_idx[i] = remap[4 + kept_idx[i]];
 
     free(remap);
 }
@@ -1022,23 +1036,24 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
 }
 
 
-s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal)
+s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
+                       int *kept_idx, int N_kept_idx)
 {
     if (!is_delaunay_3d(&b->dt, DELAUNAY_TEST_NONSTRICT)) {
         fprintf(stderr, "WARNING: DT is not Delaunay!\n");
         write_points_to_csv("error.csv", "w", &b->dt.points);
-        s_ncell *c = b->dt.head;
-        while (c) {
-            s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
-            if (test_orientation(v, v[3]) == 0) {
-                fprintf(stderr, "Flat tetra coords:\n");
-                fprintf(stderr, "  v0(%d): %.6f %.6f %.6f\n", c->vertex_id[0], v[0].x, v[0].y, v[0].z);
-                fprintf(stderr, "  v1(%d): %.6f %.6f %.6f\n", c->vertex_id[1], v[1].x, v[1].y, v[1].z);
-                fprintf(stderr, "  v2(%d): %.6f %.6f %.6f\n", c->vertex_id[2], v[2].x, v[2].y, v[2].z);
-                fprintf(stderr, "  v3(%d): %.6f %.6f %.6f\n", c->vertex_id[3], v[3].x, v[3].y, v[3].z);
-            }
-            c = c->next;
-        }
+        // s_ncell *c = b->dt.head;
+        // while (c) {
+        //     s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
+        //     if (test_orientation(v, v[3]) == 0) {
+        //         fprintf(stderr, "Flat tetra coords:\n");
+        //         fprintf(stderr, "  v0(%d): %.6f %.6f %.6f\n", c->vertex_id[0], v[0].x, v[0].y, v[0].z);
+        //         fprintf(stderr, "  v1(%d): %.6f %.6f %.6f\n", c->vertex_id[1], v[1].x, v[1].y, v[1].z);
+        //         fprintf(stderr, "  v2(%d): %.6f %.6f %.6f\n", c->vertex_id[2], v[2].x, v[2].y, v[2].z);
+        //         fprintf(stderr, "  v3(%d): %.6f %.6f %.6f\n", c->vertex_id[3], v[3].x, v[3].y, v[3].z);
+        //     }
+        //     c = c->next;
+        // }
         exit(1);
     }
 
@@ -1058,7 +1073,7 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal)
         *out_Nreal = surviving;
     }
 
-    remove_ignored_points(&b->dt, b->_ignored, keep_big_tetra);
+    remove_ignored_points(&b->dt, b->_ignored, keep_big_tetra, kept_idx, N_kept_idx);
 
     s_dstack *stack = (s_dstack *)b->_stack;
     stack_free(stack);
@@ -1084,7 +1099,7 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
      * extend_sites_mirroring).  Store that count so dt_builder_end uses it. */
     if (out_Nreal != NULL && *out_Nreal <= points->N)
         b._N_original = *out_Nreal;
-    return dt_builder_end(&b, keep_big_tetra, out_Nreal);
+    return dt_builder_end(&b, keep_big_tetra, out_Nreal, NULL, 0);
 }
 
 

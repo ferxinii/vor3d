@@ -1,12 +1,13 @@
 [ ] build_vertex_cell_index: the idea to map each vertex to a cell containing it may be made more optimal and even reused elsewhere (in_ncell_walk for example?)
 [ ] when extending, how do we make sure that all points are still inside the big tetra? Should we not check for this, increasing its size if necessary?
+[ ] Make a context structure (EPS_DEG, TOL, randint(), rctx, ...). Even (geometry_ctx, randint(), rctx).  
+    [ ] Use memory pools instead of constant malloc.
+[ ] Track max error and mean error in the examples
+[ ] Add a debug compilation flag to remove unnecessary checks (delaunayness etc) in the final build and only add these in debug builds ?
 
 [ ] locally redundant points: implement function, consider when some vertices may belong to big tetra
 [ ] acplx.c: replace power distance conditions with the robust versions
 
 [ ] ncell_walk: better selection of initial random ncell?.
 
-[ ] When clipping a voronoi cell with neighboring planes, make a routine to clip convhull with multiple planes in one go, instead of going one by one. Or better, identify problematic neighboring cells and only clip with those?
-
-[ ] Use memory pools instead of constant malloc.
 [ ] Mark ncells: Implement a more efficient approach. (visit_id? so no need to reset to 0s), also return a list of ncells so I dont have to run over all ncells each time?

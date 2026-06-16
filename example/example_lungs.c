@@ -88,7 +88,7 @@ static void generate_statistics(const s_bpoly *bp, int N_simu, char *FILE_VOLS,
 {
     clear_volumes_file(FILE_VOLS);
     for (int ii=0; ii<N_simu; ii++) {
-        s_vdiagram vd = vor3d_from_bp_PDS(&r_fun, &r_fun_params, bp, vol_max_rel_diff, 5,
+        s_vdiagram vd = vor3d_inside_bp_PDS(&r_fun, &r_fun_params, bp, vol_max_rel_diff,
                                           EPS_degenerate, TOL, randint, randd01, &rctx,
                                           buff_points);
         append_volumes_to_file(&vd, FILE_VOLS, ii);
