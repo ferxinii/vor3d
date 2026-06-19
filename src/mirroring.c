@@ -149,7 +149,8 @@ static int lp_feasible(const s_point face[3], s_point s,
                        tN.x,tN.y,tN.z);
     }
 
-    assert(0 && "lp_feasible: unhandled constraint combination");
+    fprintf(stderr, "lp_feasible: unhandled constraint combination\n");
+    return -1;
 }
 
 

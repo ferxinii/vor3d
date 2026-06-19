@@ -142,6 +142,7 @@ static int id_where_equal_int(const int *arr, int N, int entry)
     for (int ii=0; ii<N; ii++) if (arr[ii] == entry) return ii;
     fprintf(stderr, "id_where_equal_int: Could not find id.\n"); 
     assert(1==0);
+    return -10;
 }
 
 static int inarray(const int *arr1, int N, int a)
@@ -478,8 +479,8 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
     int o0 = test_orientation((s_point[3]){point_p, face_points[0], face_points[1]}, point_d);
     int o1 = test_orientation((s_point[3]){point_p, face_points[1], face_points[2]}, point_d);
     int o2 = test_orientation((s_point[3]){point_p, face_points[2], face_points[0]}, point_d);
-    int num_ridges = (o0 == 0) + (o1 == 0) + (o2 == 0); 
-    assert(num_ridges == 1 || num_ridges == 2);
+    assert((o0 == 0) + (o1 == 0) + (o2 == 0) == 1 ||
+           (o0 == 0) + (o1 == 0) + (o2 == 0) == 2);
 
     int AUX_ridge_id_2[2];  int k=0;
     if (o0 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]); } 
@@ -525,8 +526,7 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
     if (!flip23(scplx, NULL, ncell, id_ridge_1, opp_face_lid, FLIP23_PTRS)) return 0;
 
     /* Find which ncell added shares ridge. Currently, no way to predict this. */
-    s_ncell *nc5;
-    int debug_found = 0;
+    s_ncell *nc5 = NULL;
     for (int ii=0; ii<3; ii++) {
         if (inarray(FLIP23_PTRS[ii]->vertex_id, 4, a) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, c) &&
             inarray(FLIP23_PTRS[ii]->vertex_id, 4, d) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, p)) {
@@ -536,11 +536,10 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
                 if (!stack_push(stack, FLIP23_PTRS[(ii+2)%3])) return 0;
             }
             if (OUT_PTRS) { OUT_PTRS[0] = FLIP23_PTRS[(ii+1)%3]; OUT_PTRS[1] = FLIP23_PTRS[(ii+2)%3]; }
-            debug_found = 1;
             break;
         }
     }
-    assert(debug_found == 1 && "Could not perform flip44...");
+    assert(nc5 != NULL && "Could not perform flip44...");
 
     /* 2) flip32 */
     int nc5_p = id_where_equal_int(nc5->vertex_id, 4, ncell->vertex_id[id_ridge_1]);

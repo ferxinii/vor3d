@@ -15,6 +15,7 @@ static int id_where_equal_int(const int *arr, int N, int entry)
     for (int ii=0; ii<N; ii++) if (arr[ii] == entry) return ii;
     fprintf(stderr, "id_where_equal_int: Could not find id.\n"); 
     assert(1==0);
+    return -10;
 }
 
 static int inarray(const int *arr1, int N, int a)
