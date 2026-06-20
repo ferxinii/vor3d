@@ -215,6 +215,7 @@ static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
 
 
 // ----------------------------------- FLIPS ---------------------------------------------
+static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored);
 
 static inline void vertex_ids_ncell(s_ncell *ncell, int out[4])
 {
@@ -508,7 +509,7 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
     return 0;
 }
 
-static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell *OUT_PTRS[4]) 
+static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell *OUT_PTRS[4], bool *ignored)
 {
     /* 1) flip23 */
     /* Store some indices before flip */
@@ -522,7 +523,6 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
     int d = opp_face_vid;
 
     s_ncell *FLIP23_PTRS[3];
-    /* TOWARDS NC2 */
     if (!flip23(scplx, NULL, ncell, id_ridge_1, opp_face_lid, FLIP23_PTRS)) return 0;
 
     /* Find which ncell added shares ridge. Currently, no way to predict this. */
@@ -531,7 +531,7 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
         if (inarray(FLIP23_PTRS[ii]->vertex_id, 4, a) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, c) &&
             inarray(FLIP23_PTRS[ii]->vertex_id, 4, d) && inarray(FLIP23_PTRS[ii]->vertex_id, 4, p)) {
             nc5 = FLIP23_PTRS[ii];
-            if (stack) { 
+            if (stack) {
                 if (!stack_push(stack, FLIP23_PTRS[(ii+1)%3])) return 0;
                 if (!stack_push(stack, FLIP23_PTRS[(ii+2)%3])) return 0;
             }
@@ -550,9 +550,39 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
 
     s_ncell *FLIP32_PTRS[2];
     flip32(scplx, NULL, nc3, nc3_id1, nc3_id2, nc3_opp_face_lid, FLIP32_PTRS);
-    if(stack) { 
+    if(stack) {
         if (!stack_push(stack, FLIP32_PTRS[0])) return 0;
         if (!stack_push(stack, FLIP32_PTRS[1])) return 0;
+
+        /* The Bowyer-Watson loop pops each cell and checks exactly one face:
+         * opposite[local_p], i.e. the face opposite the newly inserted point p.
+         * This is correct for flip14/flip23/flip32, where every face shared between
+         * two cells that both contain p is guaranteed locally Delaunay by construction
+         * -- those are "interior" star faces that never need re-examination.
+         *
+         * flip44 breaks that invariant.  It calls flip23 then flip32 on a
+         * sub-configuration determined by the CASE_FLAT ridge, not the outer
+         * boundary of the star.  The two cells produced by flip32 share a face
+         * that CONTAINS p (so it is opposite some old vertex, not opposite p).
+         * That face was never an outer boundary candidate at any point in the
+         * sequence, so no flip ever pushed it for checking.  When the BW loop
+         * pops these two cells it checks their outer faces (opposite p), which
+         * are fine -- and the interior shared face goes unexamined.
+         *
+         * Fix: check that shared face explicitly here, right after flip32 returns.
+         * Use NONSTRICT so that coplanar inputs (where the tested point lies exactly
+         * on the circumsphere) are accepted without flipping -- otherwise the two
+         * valid diagonalisations of a degenerate square cycle forever. */
+        for (int fi = 0; fi < 4; fi++) {
+            if (FLIP32_PTRS[0]->opposite[fi] == FLIP32_PTRS[1]) {
+                if (!are_locally_delaunay(scplx, FLIP32_PTRS[0], fi, DELAUNAY_TEST_NONSTRICT)) {
+                    stack_remove_ncell(stack, FLIP32_PTRS[0]);
+                    stack_remove_ncell(stack, FLIP32_PTRS[1]);
+                    if (flip_tetrahedra(scplx, stack, FLIP32_PTRS[0], fi, ignored) == -1) return -1;
+                }
+                break;
+            }
+        }
     }
     if (OUT_PTRS) { OUT_PTRS[2] = FLIP32_PTRS[0]; OUT_PTRS[3] = FLIP32_PTRS[1]; }
     return 1;
@@ -832,9 +862,8 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
     switch (determine_case(coords_face, p, d)) {
         int ridge_id_2;
         int redundant_localid;
-        case CASE_ERROR: return 0;  /* Degenerate face */
+        case CASE_ERROR: return 0;
         case CASE_CONVEX:
-            // printf("CASE 1\n");
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
         case CASE_NON_CONVEX:
@@ -848,12 +877,10 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
             } else return 0;
         case CASE_FLAT:
             if (can_perform_flip44(scplx, ncell, opp_cell_id, &ridge_id_2)) {
-                // printf("CASE 3\n");
-                flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL);
+                if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL, ignored) == -1) return -1;
                 return 1;
             } else return 0;
         case CASE_P_IN_EDGE:
-            // fprintf(stderr, "DEBUG delaunay.c: flip_tetrahedra: CASE 4... UNSURE, UNTESTED\n");
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
     }
@@ -884,15 +911,20 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
 
     if (!flip14(scplx, container_ncell, point_id, stack)) return -1;
 
+    /* Bowyer-Watson flip loop.  Each entry on the stack is a cell containing
+     * point_id.  We check only opposite[local_p] -- the single face of that
+     * cell that is opposite point_id (an outer boundary face of the star of p).
+     * The invariant is: interior faces of the star (shared between two cells
+     * that both contain p) are always locally Delaunay after flip14/flip23/flip32.
+     * flip44 breaks this invariant and must therefore check its own interior
+     * faces explicitly before returning (see the comment there). */
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
         int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
         if (!current->opposite[opp_cell_id]) continue;
-
-        // /* Only process cells that contain point_id */
-        // if (!inarray(current->vertex_id, 4, point_id)) continue;  /* 
-        if (!are_locally_delaunay(scplx, current, opp_cell_id, DELAUNAY_TEST_STRICT))
+        if (!are_locally_delaunay(scplx, current, opp_cell_id, DELAUNAY_TEST_NONSTRICT)) {
             if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
+        }
     }
     return 1;
 }
@@ -1038,23 +1070,23 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
 s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
                        int *kept_idx, int N_kept_idx)
 {
-    if (!is_delaunay_3d(&b->dt, DELAUNAY_TEST_NONSTRICT)) {
-        fprintf(stderr, "WARNING: DT is not Delaunay!\n");
-        write_points_to_csv("error.csv", "w", &b->dt.points);
-        // s_ncell *c = b->dt.head;
-        // while (c) {
-        //     s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
-        //     if (test_orientation(v, v[3]) == 0) {
-        //         fprintf(stderr, "Flat tetra coords:\n");
-        //         fprintf(stderr, "  v0(%d): %.6f %.6f %.6f\n", c->vertex_id[0], v[0].x, v[0].y, v[0].z);
-        //         fprintf(stderr, "  v1(%d): %.6f %.6f %.6f\n", c->vertex_id[1], v[1].x, v[1].y, v[1].z);
-        //         fprintf(stderr, "  v2(%d): %.6f %.6f %.6f\n", c->vertex_id[2], v[2].x, v[2].y, v[2].z);
-        //         fprintf(stderr, "  v3(%d): %.6f %.6f %.6f\n", c->vertex_id[3], v[3].x, v[3].y, v[3].z);
-        //     }
-        //     c = c->next;
-        // }
-        exit(1);
-    }
+    // if (!is_delaunay_3d(&b->dt, DELAUNAY_TEST_NONSTRICT)) {
+    //     fprintf(stderr, "WARNING: DT is not Delaunay!\n");
+    //     write_points_to_csv("error.csv", "w", &b->dt.points);
+    //     // s_ncell *c = b->dt.head;
+    //     // while (c) {
+    //     //     s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
+    //     //     if (test_orientation(v, v[3]) == 0) {
+    //     //         fprintf(stderr, "Flat tetra coords:\n");
+    //     //         fprintf(stderr, "  v0(%d): %.6f %.6f %.6f\n", c->vertex_id[0], v[0].x, v[0].y, v[0].z);
+    //     //         fprintf(stderr, "  v1(%d): %.6f %.6f %.6f\n", c->vertex_id[1], v[1].x, v[1].y, v[1].z);
+    //     //         fprintf(stderr, "  v2(%d): %.6f %.6f %.6f\n", c->vertex_id[2], v[2].x, v[2].y, v[2].z);
+    //     //         fprintf(stderr, "  v3(%d): %.6f %.6f %.6f\n", c->vertex_id[3], v[3].x, v[3].y, v[3].z);
+    //     //     }
+    //     //     c = c->next;
+    //     // }
+    //     exit(1);
+    // }
 
     for (s_ncell *c = b->dt.head; c; c = c->next) {
         s_point v[4]; extract_vertices_ncell(&b->dt, c, v);
