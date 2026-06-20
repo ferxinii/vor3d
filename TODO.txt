@@ -5,6 +5,7 @@
 [ ] Track max error and mean error in the examples
 [ ] Add a debug compilation flag to remove unnecessary checks (delaunayness etc) in the final build and only add these in debug builds ?
 
+[ ] build weighted voronoi diagrams: center of ortho-sphere of ncells of weighted DT as voronoi vertices? Is this correct?
 [ ] locally redundant points: implement function, consider when some vertices may belong to big tetra
 [ ] acplx.c: replace power distance conditions with the robust versions
 
