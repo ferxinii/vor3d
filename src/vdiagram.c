@@ -21,7 +21,17 @@ static int id_where_equal(const int *arr1, int N, int a)
 }
 
 
-/* Serialize / deserialize */
+void free_vcell(s_vcell *c)
+{
+    for (int i = 0; i < c->N_pieces; i++) free_convhull(&c->pieces[i]);
+    free(c->pieces);
+    memset(c, 0, sizeof(s_vcell));
+}
+
+
+/* Serialize / deserialize
+ * Format (v2): seeds | bpoly | per-cell: seed_id, volume, N_pieces, pieces[]
+ * N_pieces is always 1 for convex diagrams. */
 static size_t size_serialize_vdiagram(const s_vdiagram *vd)
 {
     int N_seeds = vd->seeds.N;
@@ -41,11 +51,15 @@ static size_t size_serialize_vdiagram(const s_vdiagram *vd)
     size += sizeof(double);     /* volume */
 
     /* vcells */
-    size += sizeof(int) * N_seeds;      /* seed_id */
-    size += sizeof(double) * N_seeds;   /* volume */
     for (int ii=0; ii<N_seeds; ii++) {
-        serialize_convhull(&vd->vcells[ii].convh, NULL, &size_ch, NULL);
-        size += size_ch;
+        size += sizeof(int);    /* seed_id */
+        size += sizeof(double); /* volume */
+        size += sizeof(int);    /* N_pieces */
+        for (int p = 0; p < vd->vcells[ii].N_pieces; p++) {
+            size_t size_p = 0;
+            serialize_convhull(&vd->vcells[ii].pieces[p], NULL, &size_p, NULL);
+            size += size_p;
+        }
     }
 
     return size;
@@ -62,18 +76,18 @@ int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, 
         fprintf(stderr, "ERROR serialize_vdiagram: either provide buffer or let function malloc, but not both.\n");
         return 0;
     }
-    
+
     uint8_t *destination = NULL;
     if (buff_write) {
         destination = buff_write;
     } else {
         destination = malloc(s);
-        if (!destination) return 0; 
+        if (!destination) return 0;
         *out = destination;
-    } 
-    
+    }
+
     uint8_t *p = destination;
-    
+
     /* seeds */
     memcpy(p, &vd->seeds.N, sizeof(int));
     p += sizeof(int);
@@ -84,22 +98,22 @@ int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, 
     size_t size_ch;
     serialize_convhull(&vd->bpoly.convh, p, &size_ch, NULL);
     p += size_ch;
-    memcpy(p, &vd->bpoly.CM, sizeof(s_point));      p += sizeof(s_point);    
-    memcpy(p, &vd->bpoly.min, sizeof(s_point));     p += sizeof(s_point);    
-    memcpy(p, &vd->bpoly.max, sizeof(s_point));     p += sizeof(s_point);    
-    memcpy(p, &vd->bpoly.volume, sizeof(double));   p += sizeof(double);     
-    
+    memcpy(p, &vd->bpoly.CM, sizeof(s_point));      p += sizeof(s_point);
+    memcpy(p, &vd->bpoly.min, sizeof(s_point));     p += sizeof(s_point);
+    memcpy(p, &vd->bpoly.max, sizeof(s_point));     p += sizeof(s_point);
+    memcpy(p, &vd->bpoly.volume, sizeof(double));   p += sizeof(double);
+
     /* vcells */
     for (int ii=0; ii<vd->seeds.N; ii++) {
-        memcpy(p, &vd->vcells[ii].seed_id, sizeof(int));
-        p += sizeof(int);
-        memcpy(p, &vd->vcells[ii].volume, sizeof(double));
-        p += sizeof(double);
-
-        serialize_convhull(&vd->vcells[ii].convh, p, &size_ch, NULL);
-        p += size_ch;
+        memcpy(p, &vd->vcells[ii].seed_id,  sizeof(int));    p += sizeof(int);
+        memcpy(p, &vd->vcells[ii].volume,   sizeof(double)); p += sizeof(double);
+        memcpy(p, &vd->vcells[ii].N_pieces, sizeof(int));    p += sizeof(int);
+        for (int pi=0; pi<vd->vcells[ii].N_pieces; pi++) {
+            serialize_convhull(&vd->vcells[ii].pieces[pi], p, &size_ch, NULL);
+            p += size_ch;
+        }
     }
-    
+
     return 1;
 }
 
@@ -111,46 +125,59 @@ int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_rea
     const uint8_t *p = data;
 
     /* points */
-    memcpy(&vd.seeds.N, p, sizeof(int)); 
+    memcpy(&vd.seeds.N, p, sizeof(int));
     p += sizeof(int);
     assert(vd.seeds.N != 0);
     vd.seeds.p = malloc(sizeof(s_point) * vd.seeds.N);
     if (!vd.seeds.p) return 0;
     memcpy(vd.seeds.p, p, sizeof(s_point) * vd.seeds.N);
     p += sizeof(s_point) * vd.seeds.N;
-    
+
     /* bpoly */
     size_t read;
-    if (!deserialize_convhull(p, &vd.bpoly.convh, &read)) 
+    if (!deserialize_convhull(p, &vd.bpoly.convh, &read))
         { free(vd.seeds.p); return 0; };
     p += read;
-    memcpy(&vd.bpoly.CM, p, sizeof(s_point));      p += sizeof(s_point);    
-    memcpy(&vd.bpoly.min, p, sizeof(s_point));     p += sizeof(s_point);    
-    memcpy(&vd.bpoly.max, p, sizeof(s_point));     p += sizeof(s_point);    
-    memcpy(&vd.bpoly.volume, p, sizeof(double));   p += sizeof(double);     
-    
+    memcpy(&vd.bpoly.CM, p, sizeof(s_point));      p += sizeof(s_point);
+    memcpy(&vd.bpoly.min, p, sizeof(s_point));     p += sizeof(s_point);
+    memcpy(&vd.bpoly.max, p, sizeof(s_point));     p += sizeof(s_point);
+    memcpy(&vd.bpoly.volume, p, sizeof(double));   p += sizeof(double);
+
     /* vcells */
     vd.vcells = malloc(sizeof(s_vcell) * vd.seeds.N);
     if (!vd.vcells) { free(vd.seeds.p); free_bpoly(&vd.bpoly); return 0; }
+    int cells_read = 0;
     for (int ii=0; ii<vd.seeds.N; ii++) {
-        memcpy(&vd.vcells[ii].seed_id, p, sizeof(int));
-        p += sizeof(int);
-        memcpy(&vd.vcells[ii].volume, p, sizeof(double));
-        p += sizeof(double);
+        memcpy(&vd.vcells[ii].seed_id,  p, sizeof(int));    p += sizeof(int);
+        memcpy(&vd.vcells[ii].volume,   p, sizeof(double)); p += sizeof(double);
+        memcpy(&vd.vcells[ii].N_pieces, p, sizeof(int));    p += sizeof(int);
 
-        if (!deserialize_convhull(p, &vd.vcells[ii].convh, &read)) { 
-            for (int jj=0; jj<ii; jj++) free_convhull(&vd.vcells[jj].convh);
-            free(vd.vcells);
-            free(vd.seeds.p);
-            free_bpoly(&vd.bpoly);
-            return 0;
+        vd.vcells[ii].pieces = malloc(sizeof(s_convh) * vd.vcells[ii].N_pieces);
+        if (!vd.vcells[ii].pieces) goto error;
+
+        int pieces_read = 0;
+        for (int pi=0; pi<vd.vcells[ii].N_pieces; pi++) {
+            if (!deserialize_convhull(p, &vd.vcells[ii].pieces[pi], &read)) {
+                for (int jj=0; jj<pieces_read; jj++) free_convhull(&vd.vcells[ii].pieces[jj]);
+                free(vd.vcells[ii].pieces);
+                goto error;
+            }
+            p += read;
+            pieces_read++;
         }
-        p += read;
+        cells_read++;
     }
 
     *out = vd;
     if (bytes_read) *bytes_read = (size_t)(p - data);
     return 1;
+
+error:
+    for (int jj=0; jj<cells_read; jj++) free_vcell(&vd.vcells[jj]);
+    free(vd.vcells);
+    free(vd.seeds.p);
+    free_bpoly(&vd.bpoly);
+    return 0;
 }
 
 int write_serialized_vdiagram(const char *file, const uint8_t *data, size_t size)
@@ -205,7 +232,7 @@ int vdiagram_is_valid(const s_vdiagram *vd)
 
 static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
 {
-    assert(Nreal <= setup->points.N && "Nreal needs to be <= than setup->N"); 
+    assert(Nreal <= setup->points.N && "Nreal needs to be <= than setup->N");
 
     s_vdiagram out;
     memset(&out.bpoly, 0, sizeof(s_bpoly));
@@ -213,7 +240,7 @@ static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
     // setup->points may have more points... Need to copy manually.
     out.seeds = (s_points) { .N = Nreal, .p = malloc(sizeof(s_point)*Nreal) };
     memcpy(out.seeds.p, setup->points.p, sizeof(s_point) * Nreal);
-    
+
     out.vcells = malloc(sizeof(s_vcell) * Nreal);
     memset(out.vcells, 0, sizeof(s_vcell) * Nreal);
     return out;
@@ -221,10 +248,11 @@ static s_vdiagram malloc_vdiagram(const s_scplx *setup, int Nreal)
 
 void free_vdiagram(s_vdiagram *vdiagram)
 {
-    if (vdiagram->vcells)
+    if (vdiagram->vcells) {
         for (int ii=0; ii<vdiagram->seeds.N; ii++)
-            if (convhull_is_valid(&vdiagram->vcells[ii].convh)) free_convhull(&vdiagram->vcells[ii].convh);
-    if (vdiagram->vcells) free(vdiagram->vcells);
+            free_vcell(&vdiagram->vcells[ii]);
+        free(vdiagram->vcells);
+    }
     free_points(&vdiagram->seeds);
     free_bpoly(&vdiagram->bpoly);
     memset(vdiagram, 0, sizeof(s_vdiagram));
@@ -233,10 +261,15 @@ void free_vdiagram(s_vdiagram *vdiagram)
 void print_vcell(const s_vcell *vcell)
 {
     puts("VCELL");
-    printf("Seed: %d, Nv = %d, vol = %f\n", vcell->seed_id, vcell->convh.points.N, vcell->volume);
-    printf("%f, %f, %f\n", vcell->convh.points.p[0].x, vcell->convh.points.p[0].y, vcell->convh.points.p[0].z);
-    for (int ii=1; ii<vcell->convh.points.N; ii++) {
-        printf("%f, %f, %f\n", vcell->convh.points.p[ii].x, vcell->convh.points.p[ii].y, vcell->convh.points.p[ii].z);
+    printf("Seed: %d, N_pieces = %d, vol = %f\n", vcell->seed_id, vcell->N_pieces, vcell->volume);
+    if (vcell->N_pieces > 0) {
+        printf("Piece 0: Nv = %d\n", vcell->pieces[0].points.N);
+        printf("%f, %f, %f\n", vcell->pieces[0].points.p[0].x,
+               vcell->pieces[0].points.p[0].y, vcell->pieces[0].points.p[0].z);
+        for (int ii=1; ii<vcell->pieces[0].points.N; ii++) {
+            printf("%f, %f, %f\n", vcell->pieces[0].points.p[ii].x,
+                   vcell->pieces[0].points.p[ii].y, vcell->pieces[0].points.p[ii].z);
+        }
     }
     printf("\n");
 }
@@ -251,8 +284,9 @@ void print_vdiagram(const s_vdiagram *vdiagram)
 
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL)
 {
+    /* s_vdiagram is always convex (N_pieces == 1) */
     for (int ii=0; ii<vd->seeds.N; ii++) {
-        e_geom_test test = test_point_in_convhull(&vd->vcells[ii].convh, x, EPS_degenerate, TOL);
+        e_geom_test test = test_point_in_convhull(&vd->vcells[ii].pieces[0], x, EPS_degenerate, TOL);
         if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
         if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
     }
@@ -269,14 +303,14 @@ static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, doubl
     s_point circumcentre;
     if (!circumcentre_tetrahedron(v, EPS_degenerate, &circumcentre)) return 0;
     /* From what I have found, it is unavoidable to have near-degenerate ncells (or completely degenerate).
-     * Trying to fit a plane and then find the circumcentre in the projected plane 
+     * Trying to fit a plane and then find the circumcentre in the projected plane
      * gives me strangle results... I find that skipping those ncells works best */
 
     /* Check if vertex already exists */  /* I DONT THINK I NEED THIS! */
-    (void)TOL; 
+    (void)TOL;
     // const double TOL2 = TOL*TOL;
-    // for (unsigned ii=0; ii<vertices->N; ii++) {  
-    //     s_point p; 
+    // for (unsigned ii=0; ii<vertices->N; ii++) {
+    //     s_point p;
     //     if (!list_get_value(vertices, ii, &p)) goto error_list;
     //     if (distance_squared(circumcentre, p) < TOL2) return 0;
     // }
@@ -307,17 +341,17 @@ static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_dynarray *inci
 
     error:
         fprintf(stderr, "Error in convhull_from_incident_ncells.\n");
-        for (int ii=0; ii<points.N; ii++) {
-            printf("%d: (%f, %f, %f)\n", ii, points.p[ii].x, points.p[ii].y, points.p[ii].z);
+        for (int ii=0; ii<(int)vertices->N; ii++) {
+            s_point pt; dynarray_get_value(vertices, ii, &pt);
+            printf("%d: (%f, %f, %f)\n", ii, pt.x, pt.y, pt.z);
         }
-        printf("dt->N_ncells: %d, incident ncells: %d\n", dt->N_ncells, incident->N);
+        printf("dt->N_ncells: %d, incident ncells: %d\n", dt->N_ncells, (int)incident->N);
 
         int i=0;
         for (s_ncell *nc = dt->head; nc; nc = nc->next) {
             printf("%d:  (%d,%d,%d,%d)\n", i++, nc->vertex_id[0], nc->vertex_id[1], nc->vertex_id[2], nc->vertex_id[3]);
         }
         assert(1==0);
-        // write_points_to_csv("crash_vd.csv", "w", &dt->points);
         exit(1);
         return convhull_NAN;
 }
@@ -328,7 +362,7 @@ static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_dynarray 
     /* Find an ncell with this vertex */
     s_ncell *ncell = dt->head;
     int v_localid = id_where_equal(ncell->vertex_id, 4, seed_id);
-    while (v_localid == -1) { 
+    while (v_localid == -1) {
         ncell = ncell->next;
         assert(ncell);
         v_localid = id_where_equal(ncell->vertex_id, 4, seed_id);
@@ -336,7 +370,7 @@ static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_dynarray 
 
     /* Find "complementary" indices to localid */
     int v_localid_COMP[3];
-    for (int ii=0, kk=0; ii<4; ii++) 
+    for (int ii=0, kk=0; ii<4; ii++)
         if (ii != v_localid) v_localid_COMP[kk++] = ii;
 
     /* Find incident ncells to this point */
@@ -350,117 +384,47 @@ static s_vcell extract_voronoi_cell(const s_scplx *dt, int seed_id, double EPS_d
     s_dynarray *incident = buff_incident;
     if (!incident_ncells_to_vertex(dt, seed_id, incident)) return (s_vcell){0};
 
-    // printf("SEED_ID: %d\n", seed_id);
-    s_vcell out = {0};
-    out.seed_id = seed_id;
-    out.convh = convhull_from_incident_ncells(dt, incident, EPS_degenerate, TOL, buff_v);
-    if (!convhull_is_valid(&out.convh)) {
+    s_convh ch = convhull_from_incident_ncells(dt, incident, EPS_degenerate, TOL, buff_v);
+    if (!convhull_is_valid(&ch)) {
         fprintf(stderr, "extract_voronoi_cell: Error extracting convhull of cell.\n");
         return (s_vcell){0};
     }
-    out.volume = volume_convhull(&out.convh);
+
+    s_vcell out = {0};
+    out.seed_id  = seed_id;
+    out.pieces   = malloc(sizeof(s_convh));
+    if (!out.pieces) { free_convhull(&ch); return (s_vcell){0}; }
+    out.pieces[0] = ch;
+    out.N_pieces  = 1;
+    out.volume    = volume_convhull(&out.pieces[0]);
 
     return out;
 }
 
 
-// static bool vcell_spikes_outside_bp(const s_bpoly *bp, const s_convh *ch, double EPS_degenerate, double TOL) 
-// {   /* Vertex may be outside of bp... Limitation of mirroring approach used to bound vdiagram? */
-//     double TOL_SPIKE = TOL * 1;
-//     for (int ii=0; ii<ch->points.N; ii++) {
-//         if (test_point_in_convhull(&bp->convh, ch->points.p[ii], EPS_degenerate, TOL) == TEST_OUT) {
-//             s_point tmp;
-//             double distance = find_closest_point_on_bp(bp, ch->points.p[ii], EPS_degenerate, &tmp);
-//             if (distance > TOL_SPIKE) return true;
-//         }
-//     }
-//     return false;
-// }
-
-
-// static int clip_vcell(const s_scplx *dt, const s_bpoly *bp, s_vdiagram *vd, int vid, int Nreal, double EPS_degenerate, double TOL, s_dynarray *buff_incident)
-// {
-//     /* Clip with bounding polyhedron */
-//     s_convh I;
-//     int i = intersection_convhulls(&vd->vcells[vid].convh, &bp->convh, EPS_degenerate, TOL, &I);
-//     if (i == 1) {
-//         free_convhull(&vd->vcells[vid].convh);
-//         vd->vcells[vid].convh = I;
-//     }
-//
-//     /* Clip with neighboring vcells ! */
-//     bool *mask = calloc(Nreal, sizeof(bool));
-//     if (!mask) goto error;
-//     mask[vid] = true;
-//     s_dynarray *incident_ncells = buff_incident;
-//     if (!incident_ncells_to_vertex(dt, vid, incident_ncells)) goto error;
-//
-//     for (unsigned ii=0; ii<incident_ncells->N; ii++) {
-//         s_ncell *ncell; dynarray_get_value(incident_ncells, ii, &ncell);
-//         for (int jj=0; jj<4; jj++) 
-//         if (ncell->vertex_id[jj] < Nreal && !mask[ncell->vertex_id[jj]]) {
-//             mask[ncell->vertex_id[jj]] = true;
-//             s_point plane_n = subtract_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]);
-//             s_point plane_p = scale_point(sum_points(dt->points.p[ncell->vertex_id[jj]], dt->points.p[vid]), 0.5);
-//             s_point plane[3]; if (!plane_from_point_normal(plane_p, plane_n, EPS_degenerate, plane)) goto error;
-//
-//             s_convh clipped;
-//             if (clip_convhull_halfspace(&vd->vcells[vid].convh, plane, EPS_degenerate, TOL, &clipped) == 1) {
-//                 free_convhull(&vd->vcells[vid].convh);
-//                 vd->vcells[vid].convh = clipped;
-//             }
-//         }
-//     }
-//
-//     free(mask);
-//     vd->vcells[vid].volume = volume_convhull(&vd->vcells[vid].convh);
-//     return 1;
-//
-//     error:
-//         free(mask);
-//         return 0;
-// }
-
-
-
-
 s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int Nreal, double EPS_degenerate, double TOL)
 {   /* copy of bpoly inside */
-    // s_dynarray spiking_ids = dynarray_initialize(sizeof(int), 10);      /* Id of spiking cells */
-    s_dynarray buff_v = dynarray_initialize(sizeof(s_point), 10);       /* Place to store vertices of each cell before convhull */
-    s_dynarray buff_adjacent = dynarray_initialize(sizeof(s_ncell*), 10);  
-    // if (!spiking_ids.items || !buff_v.items || !buff_adjacent.items) goto error;
+    s_dynarray buff_v = dynarray_initialize(sizeof(s_point), 10);
+    s_dynarray buff_adjacent = dynarray_initialize(sizeof(s_ncell*), 10);
     if (!buff_v.items || !buff_adjacent.items) goto error;
 
     s_vdiagram out = malloc_vdiagram(dt, Nreal);
     out.bpoly = bpoly_copy(bpoly);
-    
+
     /* Construct vcells */
     for (int ii=0; ii<Nreal; ii++) {
         out.vcells[ii] = extract_voronoi_cell(dt, ii, EPS_degenerate, TOL, &buff_adjacent, &buff_v);
-        if (!convhull_is_valid(&out.vcells[ii].convh)) {
+        if (!out.vcells[ii].pieces || out.vcells[ii].N_pieces == 0) {
             fprintf(stderr, "voronoi_from_delaunay_3d: Could not construct vdiagram.\n");
             goto error;
         }
-        // if (vcell_spikes_outside_bp(bpoly, &out.vcells[ii].convh, EPS_degenerate, TOL)) {
-        //     if (!dynarray_push(&spiking_ids, &ii)) goto error;
-        // }
     }
 
-    // /* Clip spiking cells */
-    // for (unsigned ii=0; ii<spiking_ids.N; ii++) {
-    //     int vid; dynarray_get_value(&spiking_ids, ii, &vid);
-    //     clip_vcell(dt, bpoly, &out, vid, Nreal, EPS_degenerate, TOL, &buff_adjacent);
-    // }
-
-    
-    // dynarray_free(&spiking_ids);
     dynarray_free(&buff_v);
     dynarray_free(&buff_adjacent);
     return out;
 
     error:
-        // dynarray_free(&spiking_ids);
         dynarray_free(&buff_v);
         dynarray_free(&buff_adjacent);
         free_vdiagram(&out);
@@ -468,11 +432,8 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int
 }
 
 
-
-
-
 // --------------------------------------- PLOTS ------------------------------------------------
-static void randomize_colors(int N, char **colors) 
+static void randomize_colors(int N, char **colors)
 {
     for (int i = N - 1; i > 0; i--) {
         int j = rand() % (i + 1);
@@ -484,10 +445,13 @@ static void randomize_colors(int N, char **colors)
 
 static void plot_add_vcell(s_gnuplot *interface, const s_vcell *vcell, char *config)
 {
-    for (int ii=0; ii<vcell->convh.Nf; ii++) {
-        s_point face[3];
-        convh_get_face(&vcell->convh, ii, face);
-        draw_solid_triangle_3d(interface, face[0].coords, face[1].coords, face[2].coords, config);
+    for (int p = 0; p < vcell->N_pieces; p++) {
+        const s_convh *ch = &vcell->pieces[p];
+        for (int ii=0; ii<ch->Nf; ii++) {
+            s_point face[3];
+            convh_get_face(ch, ii, face);
+            draw_solid_triangle_3d(interface, face[0].coords, face[1].coords, face[2].coords, config);
+        }
     }
 }
 
@@ -507,12 +471,12 @@ void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, con
     s_gnuplot *interface = gnuplot_start(PNG_3D, f_name, size, 18);
     gnuplot_config(interface,  "set pm3d depthorder",
                                "set pm3d border lc 'black' lw 0.1",
-                               "set view 100, 10", 
+                               "set view 100, 10",
                                "set xyplane at 0");
     if (ranges) {
         char buff[1024];
-        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
-                 ranges[0].x, ranges[1].x, ranges[0].y, ranges[1].y, ranges[0].z, ranges[1].z); 
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]",
+                 ranges[0].x, ranges[1].x, ranges[0].y, ranges[1].y, ranges[0].z, ranges[1].z);
         gnuplot_config(interface, buff);
     }
 
@@ -525,10 +489,10 @@ void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, con
 void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2], char *view_command)
 {
     char buff[1024];
-    char *colors[] = { "#000090", "#ee0000", "#7f0000", "#0090ff", "#0fffee", 
+    char *colors[] = { "#000090", "#ee0000", "#7f0000", "#0090ff", "#0fffee",
         "#90ff70", "#ffee00", "#000fff",  "#ff7000" };
     randomize_colors(9, colors);
-    
+
     int size[2] = {2160, 2160};
     s_gnuplot *interface = gnuplot_start(PNG_3D, f_name, size, 18);
     gnuplot_config(interface,  "set pm3d depthorder",
@@ -539,15 +503,14 @@ void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ran
                                "unset ztics",
                                view_command);
     if (ranges) {
-        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
-                 ranges[0].x, ranges[1].x, ranges[0].y, ranges[1].y, ranges[0].z, ranges[1].z); 
+        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]",
+                 ranges[0].x, ranges[1].x, ranges[0].y, ranges[1].y, ranges[0].z, ranges[1].z);
         gnuplot_config(interface, buff);
     }
 
-
     for (int ii=0; ii<vdiagram->seeds.N; ii++) {
         snprintf(buff, 1024, "fs transparent solid 0.2 fc rgb '%s'", colors[ii%8]);
-        plot_add_vcell(interface, &vdiagram->vcells[ii], buff);  
+        plot_add_vcell(interface, &vdiagram->vcells[ii], buff);
     }
     gnuplot_end(interface);
 }
@@ -557,7 +520,7 @@ void plot_vdiagram_differentviews(const s_vdiagram *vdiagram, char *f_name, cons
 {
     char final_name[1024];
     snprintf(final_name, 1024, "%s_v1.png", f_name);
-    plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 60, 1.5"); 
+    plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 60, 1.5");
 
     snprintf(final_name, 1024, "%s_v2.png", f_name);
     plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 90, 1.5");
@@ -568,4 +531,3 @@ void plot_vdiagram_differentviews(const s_vdiagram *vdiagram, char *f_name, cons
     snprintf(final_name, 1024, "%s_v4.png", f_name);
     plot_all_vcells(vdiagram, final_name, ranges, "set view 100, 270, 1.5");
 }
-

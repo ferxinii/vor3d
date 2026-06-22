@@ -24,15 +24,23 @@ add_subdirectory(../ vor3d_build)
 
 add_executable(example_basic example_basic.c)
 add_executable(example_lungs example_lungs.c)
+add_executable(example_nonconvex example_nonconvex.c)
+add_executable(example_bug_coplanar example_bug_coplanar.c)
 # add_executable(example_volsph example_volsph.c)
 
 target_link_libraries(example_basic 
         PUBLIC vor3d OpenMP::OpenMP_C
 )
-target_link_libraries(example_lungs 
+target_link_libraries(example_lungs
         PUBLIC vor3d OpenMP::OpenMP_C
 )
-# target_link_libraries(example_volsph 
+target_link_libraries(example_nonconvex
+        PUBLIC vor3d OpenMP::OpenMP_C
+)
+target_link_libraries(example_bug_coplanar
+        PUBLIC vor3d OpenMP::OpenMP_C
+)
+# target_link_libraries(example_volsph
 #         PUBLIC vor3d 
 # )
 
@@ -41,6 +49,10 @@ target_compile_options(example_basic
         -Wall -Werror -Wextra -O3
 )
 target_compile_options(example_lungs
+    PRIVATE
+        -Wall -Werror -Wextra -O3
+)
+target_compile_options(example_nonconvex
     PRIVATE
         -Wall -Werror -Wextra -O3
 )

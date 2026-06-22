@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "scplx.h"
+#include "trimesh.h"
 
 /* Test Delaunayness of scplx */
 
@@ -44,6 +45,10 @@ typedef struct {
     bool   *_ignored;  /* per-point deduplication flags; size = dt.points.N */
     void   *_stack;    /* opaque: heap-allocated flip stack */
     int     _N_original; /* number of original seeds (before any extend calls) */
+    s_point _bbox_min;          /* accumulated bbox min of all real points inserted so far */
+    s_point _bbox_max;          /* accumulated bbox max of all real points inserted so far */
+    s_point _sentinel_center;   /* centroid of the four sentinel vertices (fixed after begin) */
+    double  _sentinel_inradius; /* current inscribed-sphere radius of the big tetrahedron */
 } s_dt_builder;
 
 /* Phase 1: build DT of seeds, keep big tetra in place.
@@ -79,7 +84,26 @@ int N_ncells_not_big_tetra(s_scplx *scplx);  /* Only makes sense if scplx has ke
 
 
 void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_dynarray *buff_ncellPTR,
-                           s_hash_table *out_faces, s_hash_table *out_edges, 
+                           s_hash_table *out_faces, s_hash_table *out_edges,
                            bool *out_vertices);
+
+
+
+/* Build a Constrained Delaunay Tetrahedralization of the interior of a closed
+ * trimesh, using only the mesh boundary vertices (plus any Steiner midpoints
+ * inserted on edges that are missing from the initial DT).
+ * Returns an s_scplx containing only the interior tetrahedra (centroid inside
+ * the trimesh). The point set may be a superset of mesh->points if Steiner
+ * points were added.  Returns an empty s_scplx ({0}) on error. */
+s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
+                                        double EPS_DEG, double TOL);
+
+
+
+/* Force a bistellar flip on the face shared between ncell and
+ * ncell->opposite[opp_cell_id], bypassing the Delaunay criterion.
+ * Returns 1 if flipped, 0 if not flippable, -1 on error. */
+int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id);
+
 
 #endif

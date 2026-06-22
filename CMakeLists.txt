@@ -13,10 +13,12 @@ add_library(vor3d STATIC
     src/vor3d.c
     src/bpoly.c
     src/delaunay.c
+    src/delaunay_constrained.c
     src/scplx.c
     src/acplx.c
     src/vdiagram.c
     src/mirroring.c
+    src/ncvx.c
     # src/volsph.c
 )
 

@@ -69,7 +69,7 @@ static void iterate(int iterations, bool print_progress, const s_bpoly *bp,
     for (int ii=0; ii<iterations; ii++) {
         // printf("%d\n", ii);
         if (print_progress && ii%100 == 0) printf("%d / %d\n", ii, iterations);
-        s_vdiagram vd = vor3d_inside_bp_PDS(&r_const, NULL, bp, vol_max_rel_diff,
+        s_vdiagram vd = vor3d_in_bp_pds(&r_const, NULL, bp, vol_max_rel_diff,
                                           EPS_degenerate, TOL,
                                           randint, randd01, &rctx_omp[omp_get_thread_num()],
                                           &buff_points_omp[omp_get_thread_num()]);
@@ -156,7 +156,7 @@ int main(void)
     puts("\nTETRAHEDON:");
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_bpoly bp_tet = bpoly_from_csv(FILE_BP, EPS_degenerate);
-    s_vdiagram vd_tet = vor3d_inside_bp_PDS(&r_const, NULL, &bp_tet, vol_max_rel_diff,
+    s_vdiagram vd_tet = vor3d_in_bp_pds(&r_const, NULL, &bp_tet, vol_max_rel_diff,
                                           EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
                                           buff_points_omp);
     check_volume(&vd_tet);
@@ -184,7 +184,7 @@ int main(void)
     puts("\nCUBE:");
     generate_file_cube_bp(FILE_BP, 2);
     s_bpoly bp_cube = bpoly_from_csv(FILE_BP, EPS_degenerate);
-    s_vdiagram vd_cube = vor3d_inside_bp_PDS(&r_const, NULL, &bp_cube, vol_max_rel_diff,
+    s_vdiagram vd_cube = vor3d_in_bp_pds(&r_const, NULL, &bp_cube, vol_max_rel_diff,
                                            EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
                                            buff_points_omp);
     if (!vdiagram_is_valid(&vd_cube)) { puts("Could not construct vd."); exit(1); }
@@ -199,7 +199,7 @@ int main(void)
     puts("\nSPHERE:");
     generate_file_sphere_bp(FILE_BP, 1.5, 15, 20);
     s_bpoly bp_sph = bpoly_from_csv(FILE_BP, EPS_degenerate);
-    s_vdiagram vd_sph = vor3d_inside_bp_PDS(&r_const, NULL, &bp_sph, vol_max_rel_diff,
+    s_vdiagram vd_sph = vor3d_in_bp_pds(&r_const, NULL, &bp_sph, vol_max_rel_diff,
                                           EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
                                           buff_points_omp);
     write_convhull_to_m(&vd_sph.bpoly.convh, "test_bp.m");

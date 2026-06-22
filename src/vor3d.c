@@ -168,7 +168,7 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
         for (int ii = 0; ii < vd.seeds.N; ii++) {
             char buff[256];
             snprintf(buff, 256, "v%d.m", ii);
-            write_convhull_to_m(&vd.vcells[ii].convh, buff);
+            write_convhull_to_m(&vd.vcells[ii].pieces[0], buff);
         }
         write_convhull_to_m(&vd.bpoly.convh, "bp.m");
         free_vdiagram(&vd);
@@ -183,9 +183,9 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
 
 
 
-s_vdiagram vor3d_inside_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
-                          double EPS_DEG, double TOL, int (*randint)(void*, int),
-                          void *rctx, s_dynarray *buff_points, int *out_kept_idx)
+s_vdiagram vor3d_in_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
+                      double EPS_DEG, double TOL, int (*randint)(void*, int),
+                      void *rctx, s_dynarray *buff_points, int *out_kept_idx)
 {
     seed_userdata ud = {.generator.seeds = copy_points(seeds),
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
@@ -194,23 +194,23 @@ s_vdiagram vor3d_inside_bp(const s_points *seeds, const s_bpoly *bp, double vol_
 }
 
 
-s_vdiagram vor3d_inside_convh(const s_points *seeds, const s_convh *convh, double vol_max_rel_diff,
-                              double EPS_DEG, double TOL, int (*randint)(void*, int),
-                              void *rctx, s_dynarray *buff_points, int *out_kept_idx)
+s_vdiagram vor3d_in_convh(const s_points *seeds, const s_convh *convh, double vol_max_rel_diff,
+                          double EPS_DEG, double TOL, int (*randint)(void*, int),
+                          void *rctx, s_dynarray *buff_points, int *out_kept_idx)
 {
     s_bpoly bp = bpoly_from_convh(convh);
-    s_vdiagram out = vor3d_inside_bp(seeds, &bp, vol_max_rel_diff, EPS_DEG, TOL,
-                                     randint, rctx, buff_points, out_kept_idx);
+    s_vdiagram out = vor3d_in_bp(seeds, &bp, vol_max_rel_diff, EPS_DEG, TOL,
+                                  randint, rctx, buff_points, out_kept_idx);
     free_bpoly(&bp);
     return out;
 }
 
 
-s_vdiagram vor3d_inside_bp_PDS(double (*f_radius_poiss)(double*, void*), void *f_params,
-                             const s_bpoly *bp, double vol_max_rel_diff,
-                             double EPS_DEG, double TOL,
-                             int (*randint)(void*, int), double (*randd01)(void*),
-                             void *rctx, s_dynarray *buff_points)
+s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_params,
+                           const s_bpoly *bp, double vol_max_rel_diff,
+                           double EPS_DEG, double TOL,
+                           int (*randint)(void*, int), double (*randd01)(void*),
+                           void *rctx, s_dynarray *buff_points)
 {
     seed_userdata ud = {.generator.pds = { .f_radius_poiss = f_radius_poiss, .f_params = f_params,
                                            .randint = randint, .randd01 = randd01, .rctx = rctx },
