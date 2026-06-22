@@ -161,8 +161,7 @@ static bool lp_process_cj(const s_point face[3], s_point s,
                            const s_points *seeds, const int *seeds_idx,
                            s_cid ci, s_cid cj,
                            s_cid *lo, bool *lo_null,
-                           s_cid *hi, bool *hi_null,
-                           bool concurrent)
+                           s_cid *hi, bool *hi_null)
 {
     int d = lp_D(face, s, seeds, seeds_idx, ci, cj);
     if (d == 0) {
@@ -176,7 +175,6 @@ static bool lp_process_cj(const s_point face[3], s_point s,
             *lo = cj; *lo_null = false;
         } else {
             int v = lp_feasible(face, s, seeds, seeds_idx, ci, cj, *lo);
-            if (concurrent && v == 0) return false;
             if (v > 0) *lo = cj;
         }
     } else {
@@ -184,7 +182,6 @@ static bool lp_process_cj(const s_point face[3], s_point s,
             *hi = cj; *hi_null = false;
         } else {
             int v = lp_feasible(face, s, seeds, seeds_idx, ci, cj, *hi);
-            if (concurrent && v == 0) return false;
             if (v > 0) *hi = cj;
         }
     }
@@ -227,6 +224,7 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
         int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
     }
 
+    /* gate: seed 123 (x≈0.833) on the x=1 face (all verts have x=1) */
     for (int oi = 0; oi < N; oi++) {
         int i = order[oi];
         if (i == id) continue;
@@ -246,10 +244,8 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
             /* Generic case: one slot from C_T0, other stays open. */
             if (d_i_T0 > 0) { lo = T0; lo_null = false; hi_null = true; }
             else             { hi = T0; hi_null = false; lo_null = true; }
-            /* C_T1 is the first inner constraint; concurrent-triangle check
-             * fires if the non-null slot's feasible result is exactly 0. */
             if (!lp_process_cj(face, s, seeds, seeds_idx, ci, T1,
-                                &lo, &lo_null, &hi, &hi_null, true))
+                                &lo, &lo_null, &hi, &hi_null))
                 return false;
         } else {
             /* Degenerate case: C_T0 is parallel to C_i.
@@ -263,7 +259,7 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
 
         /* Step 3c: C_T2, then all SEED constraints before C_i in random order. */
         if (!lp_process_cj(face, s, seeds, seeds_idx, ci, T2,
-                            &lo, &lo_null, &hi, &hi_null, false))
+                            &lo, &lo_null, &hi, &hi_null))
             return false;
 
         for (int oj = 0; oj < oi; oj++) {
@@ -271,7 +267,7 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
             if (jj == id) continue;
             s_cid cj = {CSEED, jj};
             if (!lp_process_cj(face, s, seeds, seeds_idx, ci, cj,
-                                &lo, &lo_null, &hi, &hi_null, false))
+                                &lo, &lo_null, &hi, &hi_null))
                 return false;
         }
 

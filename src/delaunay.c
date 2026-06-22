@@ -140,7 +140,9 @@ static bool p_locally_redundant_in_ncell(const s_scplx *scplx, const s_ncell *nc
 static int id_where_equal_int(const int *arr, int N, int entry) 
 {
     for (int ii=0; ii<N; ii++) if (arr[ii] == entry) return ii;
-    fprintf(stderr, "id_where_equal_int: Could not find id.\n"); 
+    fprintf(stderr, "id_where_equal_int: Could not find id=%d in [", entry);
+    for (int jj = 0; jj < N; jj++) fprintf(stderr, "%d%s", arr[jj], jj<N-1?",":"");
+    fprintf(stderr, "]\n");
     assert(1==0);
     return -10;
 }
@@ -215,7 +217,6 @@ static void stack_remove_ncell(s_dstack *stack, s_ncell *ncell) {
 
 
 // ----------------------------------- FLIPS ---------------------------------------------
-static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored);
 
 static inline void vertex_ids_ncell(s_ncell *ncell, int out[4])
 {
@@ -287,7 +288,7 @@ static int flip14(s_scplx *scplx, s_ncell *nc1, int point_id, s_dstack *stack)
     }
 
     /* Push to stack */
-    if (stack) { 
+    if (stack) {
         if (!stack_push(stack, nc1)) return 0;
         if (!stack_push(stack, nc2)) return 0;
         if (!stack_push(stack, nc3)) return 0;
@@ -365,7 +366,7 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
         nc2_opp_old[nc2_id_b]->opposite[opp_aux] = nc3;
     }
 
-    if (stack) { 
+    if (stack) {
         if (!stack_push(stack, nc1)) return 0;
         if (!stack_push(stack, nc2)) return 0;
         if (!stack_push(stack, nc3)) return 0;
@@ -458,7 +459,7 @@ static int flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
 
     if (stack) stack_remove_ncell(stack, nc3);
     free_ncell(nc3);
-    if (stack) { 
+    if (stack) {
         if (!stack_push(stack, nc1)) return 0;
         if (!stack_push(stack, nc2)) return 0;
     }
@@ -484,9 +485,9 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
            (o0 == 0) + (o1 == 0) + (o2 == 0) == 2);
 
     int AUX_ridge_id_2[2];  int k=0;
-    if (o0 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]); } 
-    if (o1 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[0]); } 
-    if (o2 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[1]); } 
+    if (o0 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]); }
+    if (o1 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[0]); }
+    if (o2 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[1]); }
 
     for (int i=0; i<k; i++) {
         *ridge_id_2 = AUX_ridge_id_2[i];
@@ -494,28 +495,27 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
         int nc2_id1, nc2_id2;
         s_ncell *nc2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &nc2_id1, &nc2_id2);
         if (!nc2) continue;
-
         int nc3_id1, nc3_id2;
         s_ncell *nc3 = next_ncell_ridge_cycle(nc2, nc2_id1, nc2_id2, &nc3_id1, &nc3_id2);
         if (!nc3) continue;
-
         int nc4_id1, nc4_id2;
         s_ncell *nc4 = next_ncell_ridge_cycle(nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
         if (!nc4) continue;
 
         if (nc4->opposite[nc4_id1] == ncell) return 1;
     }
-    // printf("NOT FOUND RIDGE\n");
     return 0;
 }
+
+static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored);
 
 static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell *OUT_PTRS[4], bool *ignored)
 {
     /* 1) flip23 */
     /* Store some indices before flip */
     int opp_face_lid; face_localid_of_adjacent_ncell(ncell, 2, &id_ridge_1, id_ridge_1, &opp_face_lid);
-    int opp_face_vid = ncell->opposite[id_ridge_1]->vertex_id[opp_face_lid];  
-    int lid_ridge[2] = {id_ridge_1, id_ridge_2};  
+    int opp_face_vid = ncell->opposite[id_ridge_1]->vertex_id[opp_face_lid];
+    int lid_ridge[2] = {id_ridge_1, id_ridge_2};
     int vid_ridge[2]; extract_ids_face(ncell, 1, lid_ridge, vid_ridge);
     int p = ncell->vertex_id[id_ridge_1];
     int a = vid_ridge[0];
@@ -826,22 +826,23 @@ typedef enum type_union_tetra {
     CASE_ERROR
 } e_type_union_tetra;
 
-static e_type_union_tetra determine_case(const s_point vertices_face[3], s_point p, s_point d) 
+static e_type_union_tetra determine_case(const s_point vertices_face[3], s_point p, s_point d)
 {   /* two ncells sharing face abc, with opposite vertices p and d */
     e_geom_test test_p_in_face = test_point_in_triangle_3D(vertices_face, p, 0, 0);
     if (test_p_in_face == TEST_BOUNDARY) return CASE_P_IN_EDGE;
 
     /* Checks intersection of segment pd with face */
     switch (test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0, 0)) {
-        case INTERSECT_DEGENERATE:  
+        case INTERSECT_DEGENERATE:
             /* either pd has endpoint inside abc, or pd intersects edge/vertex */
             if (test_p_in_face == TEST_IN) return CASE_CONVEX;
             else return CASE_FLAT;
         case INTERSECT_EMPTY: return CASE_NON_CONVEX;
         case INTERSECT_NONDEGENERATE: return CASE_CONVEX;
-        case INTERSECT_ERROR: 
-            printf("ERROR IN DETERMINE CASE! Degenerate triangle?\n");
+        case INTERSECT_ERROR:
+            fprintf(stderr, "ERROR IN DETERMINE CASE! Degenerate triangle?\n");
             return CASE_ERROR;
+        default: return CASE_ERROR;
     }
 }
 
@@ -862,7 +863,12 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
     switch (determine_case(coords_face, p, d)) {
         int ridge_id_2;
         int redundant_localid;
-        case CASE_ERROR: return 0;
+        case CASE_ERROR:
+            fprintf(stderr, "  flip_tetrahedra: tet vids=[%d,%d,%d,%d]  opp_cell_id=%d  opp_face_vid=%d\n",
+                    ncell->vertex_id[0], ncell->vertex_id[1],
+                    ncell->vertex_id[2], ncell->vertex_id[3],
+                    opp_cell_id, opp_face_vertex_id);
+            return 0;
         case CASE_CONVEX:
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
@@ -880,11 +886,37 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
                 if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL, ignored) == -1) return -1;
                 return 1;
             } else return 0;
-        case CASE_P_IN_EDGE:
+        case CASE_P_IN_EDGE: {
+            s_ncell *nbr = ncell->opposite[opp_cell_id];
+            /* Ring-of-3 check: if any face of nbr (other than the shared face) borders an
+             * existing star tet, then flip23 would create a duplicate tet.  Use flip32 on
+             * the ring {ncell, nbr, existing_star} around the collinear edge instead. */
+            int ring3_ridge_id2 = -1;
+            for (int _fi = 0; _fi < 4; _fi++) {
+                if (_fi == opp_face_localid) continue;
+                s_ncell *_ext = nbr->opposite[_fi];
+                if (_ext && _ext != ncell &&
+                    inarray(_ext->vertex_id, 4, ncell->vertex_id[opp_cell_id])) {
+                    ring3_ridge_id2 = id_where_equal_int(ncell->vertex_id, 4,
+                                                         nbr->vertex_id[_fi]);
+                    break;
+                }
+            }
+            if (ring3_ridge_id2 >= 0) {
+                if (!flip32(scplx, stack, ncell, opp_cell_id, ring3_ridge_id2,
+                            opp_face_localid, NULL)) return -1;
+                return 1;
+            }
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             else return 1;
+        }
     }
     return 0;
+}
+
+int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id)
+{
+    return flip_tetrahedra(dt, NULL, ncell, opp_cell_id, NULL);
 }
 
 static bool point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point point, double TOL)
@@ -920,8 +952,23 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
      * faces explicitly before returning (see the comment there). */
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
+        /* The flip23 interior guard can push tets that don't contain point_id;
+         * skip them here rather than crashing in id_where_equal_int. */
+        if (!inarray(current->vertex_id, 4, point_id)) continue;
         int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
         if (!current->opposite[opp_cell_id]) continue;
+        /* Zero-volume CASE_P_IN_EDGE tets have insphere=0 → NONSTRICT treats them as
+         * locally Delaunay and skips them.  Force a flip so the collinear-edge cascade
+         * completes.  Must come before the d==p guard: flip_tetrahedra handles d==p via
+         * ring-of-3 flip32 in its CASE_P_IN_EDGE branch. */
+        {
+            s_point face_pts[3];
+            extract_vertices_face(scplx, current, 2, &opp_cell_id, face_pts);
+            if (test_point_in_triangle_3D(face_pts, point, 0, 0) == TEST_BOUNDARY) {
+                if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
+                continue;
+            }
+        }
         if (!are_locally_delaunay(scplx, current, opp_cell_id, DELAUNAY_TEST_NONSTRICT)) {
             if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
         }
@@ -1030,12 +1077,71 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
     b._ignored = ignored;
     b._stack = stack;
     b._N_original = seeds->N;
+
+    /* Accumulated bbox: same union as initialize_scplx used for the big tetra. */
+    if (seeds->N > 0) {
+        bounding_box_points(seeds, &b._bbox_min, &b._bbox_max);
+    } else {
+        b._bbox_min = b._bbox_max = (s_point){.x=0,.y=0,.z=0};
+    }
+    if (bb_min_hint) {
+        b._bbox_min.x = fmin(b._bbox_min.x, bb_min_hint->x);
+        b._bbox_min.y = fmin(b._bbox_min.y, bb_min_hint->y);
+        b._bbox_min.z = fmin(b._bbox_min.z, bb_min_hint->z);
+    }
+    if (bb_max_hint) {
+        b._bbox_max.x = fmax(b._bbox_max.x, bb_max_hint->x);
+        b._bbox_max.y = fmax(b._bbox_max.y, bb_max_hint->y);
+        b._bbox_max.z = fmax(b._bbox_max.z, bb_max_hint->z);
+    }
+
+    /* Sentinel centroid and inradius from the built vertices.
+     * The big tet is nearly regular (perturbation 1e-6), so inradius ≈ circumradius/3. */
+    b._sentinel_center = (s_point){.x=0,.y=0,.z=0};
+    for (int i = 0; i < 4; i++) {
+        b._sentinel_center.x += b.dt.points.p[i].x * 0.25;
+        b._sentinel_center.y += b.dt.points.p[i].y * 0.25;
+        b._sentinel_center.z += b.dt.points.p[i].z * 0.25;
+    }
+    double max_R = 0;
+    for (int i = 0; i < 4; i++) {
+        double dx = b.dt.points.p[i].x - b._sentinel_center.x;
+        double dy = b.dt.points.p[i].y - b._sentinel_center.y;
+        double dz = b.dt.points.p[i].z - b._sentinel_center.z;
+        double R = sqrt(dx*dx + dy*dy + dz*dz);
+        if (R > max_R) max_R = R;
+    }
+    b._sentinel_inradius = max_R / 3.0;
+
     return b;
 }
 
 
 bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_dup)
 {
+    /* Expand accumulated bbox to include new points, then grow the big tetra if needed
+     * so every new point falls within its inscribed sphere (same 2×bdiag formula as
+     * initialize_scplx, applied to the now-larger bounding box). */
+    for (int i = 0; i < new_points->N; i++) {
+        s_point p = new_points->p[i];
+        b->_bbox_min.x = fmin(b->_bbox_min.x, p.x);
+        b->_bbox_min.y = fmin(b->_bbox_min.y, p.y);
+        b->_bbox_min.z = fmin(b->_bbox_min.z, p.z);
+        b->_bbox_max.x = fmax(b->_bbox_max.x, p.x);
+        b->_bbox_max.y = fmax(b->_bbox_max.y, p.y);
+        b->_bbox_max.z = fmax(b->_bbox_max.z, p.z);
+    }
+    double needed = 2.0 * distance(b->_bbox_min, b->_bbox_max);
+    if (needed > b->_sentinel_inradius) {
+        double factor = needed / b->_sentinel_inradius;
+        for (int i = 0; i < 4; i++) {
+            b->dt.points.p[i].x = b->_sentinel_center.x + factor * (b->dt.points.p[i].x - b->_sentinel_center.x);
+            b->dt.points.p[i].y = b->_sentinel_center.y + factor * (b->dt.points.p[i].y - b->_sentinel_center.y);
+            b->dt.points.p[i].z = b->_sentinel_center.z + factor * (b->dt.points.p[i].z - b->_sentinel_center.z);
+        }
+        b->_sentinel_inradius = needed;
+    }
+
     int N_old = b->dt.points.N;
     int N_add = new_points->N;
     int N_new = N_old + N_add;
