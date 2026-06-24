@@ -100,10 +100,19 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
 
 
 
+/* Insert a single point into an existing (sentinel-stripped) DT via Bowyer-Watson.
+ * Returns the new point index on success, -1 on failure or near-duplicate. */
+int scplx_insert_point(s_scplx *dt, s_point p, double TOL);
+
+
 /* Force a bistellar flip on the face shared between ncell and
  * ncell->opposite[opp_cell_id], bypassing the Delaunay criterion.
- * Returns 1 if flipped, 0 if not flippable, -1 on error. */
-int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id);
+ * Returns 1 if flipped, 0 if not flippable, -1 on error.
+ * If out_new is non-NULL it receives up to 4 pointers to the new/modified tets;
+ * out_n_new receives their count (2 for flip32, 3 for flip23, 4 for flip44).
+ * Both may be NULL. */
+int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id,
+                 s_ncell **out_new, int *out_n_new);
 
 
 #endif

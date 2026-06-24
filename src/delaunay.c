@@ -507,7 +507,7 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
     return 0;
 }
 
-static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored);
+static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored, s_ncell **out_new, int *out_n_new);
 
 static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_1, int id_ridge_2, s_ncell *OUT_PTRS[4], bool *ignored)
 {
@@ -578,7 +578,7 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
                 if (!are_locally_delaunay(scplx, FLIP32_PTRS[0], fi, DELAUNAY_TEST_NONSTRICT)) {
                     stack_remove_ncell(stack, FLIP32_PTRS[0]);
                     stack_remove_ncell(stack, FLIP32_PTRS[1]);
-                    if (flip_tetrahedra(scplx, stack, FLIP32_PTRS[0], fi, ignored) == -1) return -1;
+                    if (flip_tetrahedra(scplx, stack, FLIP32_PTRS[0], fi, ignored, NULL, NULL) == -1) return -1;
                 }
                 break;
             }
@@ -846,23 +846,24 @@ static e_type_union_tetra determine_case(const s_point vertices_face[3], s_point
     }
 }
 
-static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored)
+static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int opp_cell_id, bool *ignored, s_ncell **out_new, int *out_n_new)
 {   /* -1 ERROR, 0 NOT FLIPPED, 1 FLIPPED */
     if (!ncell->opposite[opp_cell_id]) return 0;
 
     s_point coords_face[3];
     extract_vertices_face(scplx, ncell, 2, &opp_cell_id, coords_face);
 
-    int opp_face_localid; 
+    int opp_face_localid;
     face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
     int opp_face_vertex_id = (ncell->opposite[opp_cell_id])->vertex_id[opp_face_localid];
 
     s_point p = scplx->points.p[ncell->vertex_id[opp_cell_id]];
     s_point d = scplx->points.p[opp_face_vertex_id];
-    
+
     switch (determine_case(coords_face, p, d)) {
         int ridge_id_2;
         int redundant_localid;
+        s_ncell *fp[4];  /* scratch for flip output pointers */
         case CASE_ERROR:
             fprintf(stderr, "  flip_tetrahedra: tet vids=[%d,%d,%d,%d]  opp_cell_id=%d  opp_face_vid=%d\n",
                     ncell->vertex_id[0], ncell->vertex_id[1],
@@ -870,20 +871,30 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
                     opp_cell_id, opp_face_vertex_id);
             return 0;
         case CASE_CONVEX:
-            if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
-            else return 1;
+            if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid,
+                        out_new ? fp : NULL)) return -1;
+            if (out_new) { out_new[0]=fp[0]; out_new[1]=fp[1]; out_new[2]=fp[2]; }
+            if (out_n_new) *out_n_new = 3;
+            return 1;
         case CASE_NON_CONVEX:
             if (scplx->weights &&
                 can_perform_flip41(ncell, opp_cell_id, &redundant_localid)) {
                 if (!flip41(scplx, stack, ncell, redundant_localid, ignored)) return -1;
+                if (out_n_new) *out_n_new = 0;
                 return 1;
             } else if (can_perform_flip32(ncell, opp_cell_id, &ridge_id_2)) {
-                if (!flip32(scplx, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL)) return -1;
+                if (!flip32(scplx, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid,
+                            out_new ? fp : NULL)) return -1;
+                if (out_new) { out_new[0]=fp[0]; out_new[1]=fp[1]; }
+                if (out_n_new) *out_n_new = 2;
                 return 1;
             } else return 0;
         case CASE_FLAT:
             if (can_perform_flip44(scplx, ncell, opp_cell_id, &ridge_id_2)) {
-                if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL, ignored) == -1) return -1;
+                if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2,
+                           out_new ? fp : NULL, ignored) == -1) return -1;
+                if (out_new) { out_new[0]=fp[0]; out_new[1]=fp[1]; out_new[2]=fp[2]; out_new[3]=fp[3]; }
+                if (out_n_new) *out_n_new = 4;
                 return 1;
             } else return 0;
         case CASE_P_IN_EDGE: {
@@ -904,19 +915,25 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
             }
             if (ring3_ridge_id2 >= 0) {
                 if (!flip32(scplx, stack, ncell, opp_cell_id, ring3_ridge_id2,
-                            opp_face_localid, NULL)) return -1;
+                            opp_face_localid, out_new ? fp : NULL)) return -1;
+                if (out_new) { out_new[0]=fp[0]; out_new[1]=fp[1]; }
+                if (out_n_new) *out_n_new = 2;
                 return 1;
             }
-            if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
-            else return 1;
+            if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid,
+                        out_new ? fp : NULL)) return -1;
+            if (out_new) { out_new[0]=fp[0]; out_new[1]=fp[1]; out_new[2]=fp[2]; }
+            if (out_n_new) *out_n_new = 3;
+            return 1;
         }
     }
     return 0;
 }
 
-int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id)
+int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id,
+                 s_ncell **out_new, int *out_n_new)
 {
-    return flip_tetrahedra(dt, NULL, ncell, opp_cell_id, NULL);
+    return flip_tetrahedra(dt, NULL, ncell, opp_cell_id, NULL, out_new, out_n_new);
 }
 
 static bool point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point point, double TOL)
@@ -965,15 +982,38 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
             s_point face_pts[3];
             extract_vertices_face(scplx, current, 2, &opp_cell_id, face_pts);
             if (test_point_in_triangle_3D(face_pts, point, 0, 0) == TEST_BOUNDARY) {
-                if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
+                if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored, NULL, NULL) == -1) return -1;
                 continue;
             }
         }
         if (!are_locally_delaunay(scplx, current, opp_cell_id, DELAUNAY_TEST_NONSTRICT)) {
-            if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
+            if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored, NULL, NULL) == -1) return -1;
         }
     }
     return 1;
+}
+
+int scplx_insert_point(s_scplx *dt, s_point p, double TOL)
+{
+    int new_id = dt->points.N;
+    s_point *tmp = realloc(dt->points.p, (size_t)(new_id + 1) * sizeof(s_point));
+    if (!tmp) return -1;
+    dt->points.p = tmp;
+    dt->points.p[new_id] = p;
+    dt->points.N = new_id + 1;
+
+    bool *ignored = calloc((size_t)(new_id + 1), sizeof(bool));
+    if (!ignored) { dt->points.N--; return -1; }
+
+    s_dstack stack = stack_create();
+    if (!stack.entry) { free(ignored); dt->points.N--; return -1; }
+
+    int res = insert_one_point(dt, new_id, &stack, TOL, ignored);
+    stack_free(&stack);
+    free(ignored);
+
+    if (res <= 0) { dt->points.N--; return -1; }
+    return new_id;
 }
 
 /*

@@ -1,5 +1,4 @@
 [ ] build_vertex_cell_index: the idea to map each vertex to a cell containing it may be made more optimal and even reused elsewhere (in_ncell_walk for example?)
-[ ] when extending, how do we make sure that all points are still inside the big tetra? Should we not check for this, increasing its size if necessary?
 [ ] Make a context structure (EPS_DEG, TOL, randint(), rctx, ...). Even (geometry_ctx, randint(), rctx).  
     [ ] Use memory pools instead of constant malloc.
 [ ] Track max error and mean error in the examples
