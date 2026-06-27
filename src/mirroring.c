@@ -291,13 +291,6 @@ int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
      * Loop order: seed-outer, face-inner — neighbors are collected once per seed and
      * reused across all faces, rather than recomputed for every (face, seed) pair. */
     out_points->N = 0;
-    int Npts = dt->points.N;
-
-    s_ncell **vertex_start = malloc(Npts * sizeof(s_ncell *));
-    int      *v_local_id   = malloc(Npts * sizeof(int));
-    if (!vertex_start || !v_local_id) goto error;
-
-    build_vertex_cell_index(dt, vertex_start, v_local_id);
 
     /* seeds_idx holds [vi, neighbor_0, ..., neighbor_n] for the current seed.
      * Reused across seeds; grows automatically via dynarray. */
@@ -307,12 +300,16 @@ int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
 
     for (int i = 0; i < N_seeds; i++) {
         int vi = 4 + i;
-        if (vertex_start[vi] == NULL) continue;  /* deduplicated seed */
+        if (!dt->point2tet[vi]) continue;  /* deduplicated seed */
+
+        int vi_lid = -1;
+        for (int k = 0; k < 4; k++)
+            if (dt->point2tet[vi]->vertex_id[k] == vi) { vi_lid = k; break; }
 
         /* Build seeds_idx = [vi, neighbors...] for this seed. */
         seeds_idx.N = 0;
         if (!dynarray_push(&seeds_idx, &vi)) goto error;
-        if (vertex_neighbors(dt, vi, vertex_start[vi], v_local_id[vi],
+        if (vertex_neighbors(dt, vi, dt->point2tet[vi], vi_lid,
                              4, &seeds_idx, &scratch_cells) < 0) goto error;
 
         /* seeds_idx.items is now a contiguous int[] usable by lp_should_mirror.
@@ -342,13 +339,11 @@ int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
 
     dynarray_free(&seeds_idx);
     dynarray_free(&scratch_cells);
-    free(vertex_start); free(v_local_id);
     return 1;
 
     error:
         dynarray_free(&seeds_idx);
         dynarray_free(&scratch_cells);
-        free(vertex_start); free(v_local_id);
         fprintf(stderr, "Error in extend_sites_mirroring_dt!\n");
         return 0;
 }

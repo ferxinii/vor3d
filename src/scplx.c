@@ -45,6 +45,7 @@ void free_complex(s_scplx *scplx)
 {
     free_points(&scplx->points);
     if (scplx->weights) free(scplx->weights);
+    if (scplx->point2tet) free(scplx->point2tet);
 
     s_ncell *current = scplx->head;
     while (current) {
@@ -54,6 +55,39 @@ void free_complex(s_scplx *scplx)
     }
 
     memset(scplx, 0, sizeof(s_scplx));
+}
+
+
+void assert_point2tet(const s_scplx *scplx)
+{
+    if (!scplx->point2tet) return;
+
+    /* Every tet's vertices must have a non-NULL entry that contains that vertex. */
+    for (const s_ncell *c = scplx->head; c; c = c->next) {
+        for (int k = 0; k < 4; k++) {
+            int v = c->vertex_id[k];
+            if (!scplx->point2tet[v]) {
+                fprintf(stderr, "assert_point2tet: vertex %d in tet %p has NULL point2tet\n",
+                        v, (const void *)c);
+                assert(scplx->point2tet[v]);
+            }
+        }
+    }
+
+    /* Every non-NULL entry must point to a tet that contains that vertex. */
+    for (int v = 0; v < scplx->points.N; v++) {
+        s_ncell *t = scplx->point2tet[v];
+        if (!t) continue;
+        int found = 0;
+        for (int k = 0; k < 4; k++) found |= (t->vertex_id[k] == v);
+        if (!found) {
+            fprintf(stderr, "assert_point2tet: point2tet[%d] = %p does not contain vertex %d"
+                    " (has %d %d %d %d)\n",
+                    v, (void *)t,
+                    v, t->vertex_id[0], t->vertex_id[1], t->vertex_id[2], t->vertex_id[3]);
+            assert(found);
+        }
+    }
 }
 
 
@@ -356,18 +390,6 @@ int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face, const int
 }
 
 
-void build_vertex_cell_index(const s_scplx *scplx, s_ncell **vertex_start, int *v_local_id)
-{   // Maps each vertex to a cell that contains it 
-    for (int i = 0; i < scplx->points.N; i++) vertex_start[i] = NULL;
-    for (s_ncell *c = scplx->head; c; c = c->next)
-        for (int k = 0; k < 4; k++)
-            if (vertex_start[c->vertex_id[k]] == NULL) {
-                vertex_start[c->vertex_id[k]] = c;
-                v_local_id[c->vertex_id[k]] = k;
-            }
-}
-
-
 int vertex_neighbors(s_scplx *scplx, int v_global,
                      s_ncell *start_cell, int v_local,
                      int skip_below, s_dynarray *out_ids,
@@ -457,11 +479,18 @@ s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
 {
     // return bruteforce_find_ncell_containing(scplx, p);
 
-    s_ncell *current = scplx->head;
     assert(scplx->N_ncells >= 1 && "N_ncells < 1");
-    int randi = (rand() % scplx->N_ncells);  /* Select random ncell to start */
-    for (int ii=0; ii<randi; ii++) 
-        current = current->next;   
+    s_ncell *current = scplx->head;
+    if (scplx->point2tet) {
+        int randi = rand() % scplx->points.N;
+        for (int ii = 0; ii < scplx->points.N; ii++) {
+            int idx = (randi + ii) % scplx->points.N;
+            if (scplx->point2tet[idx]) { current = scplx->point2tet[idx]; break; }
+        }
+    } else {
+        int randi = rand() % scplx->N_ncells;
+        for (int ii = 0; ii < randi; ii++) current = current->next;
+    }
 
     s_point facet_vertices[3];
     s_ncell *prev = current;

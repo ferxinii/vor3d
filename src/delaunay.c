@@ -5,6 +5,7 @@
 #include "scplx.h"
 #include "points.h"
 #include "gtests.h"
+#include "hash.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,6 +243,13 @@ static inline void set_ncell_opposite_pointers(s_ncell *ncell, s_ncell *o1, s_nc
     ncell->opposite[2] = o3;    ncell->opposite[3] = o4;
 }
 
+static inline void p2t_update(s_scplx *sc, s_ncell *nc)
+{
+    if (!sc->point2tet) return;
+    for (int k = 0; k < 4; k++)
+        sc->point2tet[nc->vertex_id[k]] = nc;
+}
+
 static int flip14(s_scplx *scplx, s_ncell *nc1, int point_id, s_dstack *stack)
 {   
     scplx->N_ncells += 3;
@@ -286,6 +294,11 @@ static int flip14(s_scplx *scplx, s_ncell *nc1, int point_id, s_dstack *stack)
         int opp_id; face_localid_of_adjacent_ncell(nc4, 2, &(int){3}, 3, &opp_id);
         nc4->opposite[3]->opposite[opp_id] = nc4;
     }
+
+    p2t_update(scplx, nc1);
+    p2t_update(scplx, nc2);
+    p2t_update(scplx, nc3);
+    p2t_update(scplx, nc4);
 
     /* Push to stack */
     if (stack) {
@@ -365,6 +378,10 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
         int opp_aux; face_localid_of_adjacent_ncell(nc3, 2, &(int){0}, 0, &opp_aux);
         nc2_opp_old[nc2_id_b]->opposite[opp_aux] = nc3;
     }
+
+    p2t_update(scplx, nc1);
+    p2t_update(scplx, nc2);
+    p2t_update(scplx, nc3);
 
     if (stack) {
         if (!stack_push(stack, nc1)) return 0;
@@ -459,6 +476,8 @@ static int flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
 
     if (stack) stack_remove_ncell(stack, nc3);
     free_ncell(nc3);
+    p2t_update(scplx, nc1);
+    p2t_update(scplx, nc2);
     if (stack) {
         if (!stack_push(stack, nc1)) return 0;
         if (!stack_push(stack, nc2)) return 0;
@@ -717,6 +736,8 @@ static int flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid
     free_ncell(star[1]);
     free_ncell(star[2]);
     free_ncell(star[3]);
+    if (scplx->point2tet) scplx->point2tet[r_vid] = NULL;
+    p2t_update(scplx, star[0]);
     return 1;
 }
 
@@ -813,6 +834,11 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
         for (int ii=0; ii<4; ii++) out->weights[ii] = 0;
         for (int ii=4, jj=0; ii<points->N+4; ii++) out->weights[ii] = weights[jj++];
     } else out->weights = NULL;
+
+    out->point2tet = calloc((size_t)scplx_points.N, sizeof(s_ncell *));
+    if (!out->point2tet) { free_ncell(big_ncell); free_points(&scplx_points); return 0; }
+    for (int k = 0; k < 4; k++)
+        out->point2tet[k] = big_ncell;
 
     return 1;
 }
@@ -947,7 +973,8 @@ static bool point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point 
     else return false;
 }
 
-static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored)
+static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored,
+                             s_hash_table *constrained)
 {   /* -1: ERROR, 0: not inserted, 1: inserted */
     s_point point = scplx->points.p[point_id];
     s_ncell *container_ncell = in_ncell_walk(scplx, point);
@@ -974,6 +1001,19 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
         if (!inarray(current->vertex_id, 4, point_id)) continue;
         int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
         if (!current->opposite[opp_cell_id]) continue;
+
+        /* Constrained-aware BW: do not expand the cavity across a constrained face.
+         * This keeps previously-inserted CDT faces in the triangulation after a
+         * Steiner insertion, so Phase B never needs to restart from scratch. */
+        if (constrained) {
+            int fids[3];
+            extract_ids_face(current, 2, &opp_cell_id, fids);
+            if (fids[0] > fids[1]) { int t = fids[0]; fids[0] = fids[1]; fids[1] = t; }
+            if (fids[1] > fids[2]) { int t = fids[1]; fids[1] = fids[2]; fids[2] = t; }
+            if (fids[0] > fids[1]) { int t = fids[0]; fids[0] = fids[1]; fids[1] = t; }
+            if (hash_get(constrained, fids)) continue;
+        }
+
         /* Zero-volume CASE_P_IN_EDGE tets have insphere=0 → NONSTRICT treats them as
          * locally Delaunay and skips them.  Force a flip so the collinear-edge cascade
          * completes.  Must come before the d==p guard: flip_tetrahedra handles d==p via
@@ -1008,7 +1048,30 @@ int scplx_insert_point(s_scplx *dt, s_point p, double TOL)
     s_dstack stack = stack_create();
     if (!stack.entry) { free(ignored); dt->points.N--; return -1; }
 
-    int res = insert_one_point(dt, new_id, &stack, TOL, ignored);
+    int res = insert_one_point(dt, new_id, &stack, TOL, ignored, NULL);
+    stack_free(&stack);
+    free(ignored);
+
+    if (res <= 0) { dt->points.N--; return -1; }
+    return new_id;
+}
+
+int scplx_insert_point_cdt(s_scplx *dt, s_point p, double TOL, s_hash_table *constrained)
+{
+    int new_id = dt->points.N;
+    s_point *tmp = realloc(dt->points.p, (size_t)(new_id + 1) * sizeof(s_point));
+    if (!tmp) return -1;
+    dt->points.p = tmp;
+    dt->points.p[new_id] = p;
+    dt->points.N = new_id + 1;
+
+    bool *ignored = calloc((size_t)(new_id + 1), sizeof(bool));
+    if (!ignored) { dt->points.N--; return -1; }
+
+    s_dstack stack = stack_create();
+    if (!stack.entry) { free(ignored); dt->points.N--; return -1; }
+
+    int res = insert_one_point(dt, new_id, &stack, TOL, ignored, constrained);
     stack_free(&stack);
     free(ignored);
 
@@ -1068,13 +1131,21 @@ static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_t
     scplx->points.N = k;
     scplx->points.p = realloc(scplx->points.p, sizeof(s_point) * k);
     if (scplx->weights) scplx->weights = realloc(scplx->weights, sizeof(double) * k);
+    if (scplx->point2tet) {
+        s_ncell **tmp = realloc(scplx->point2tet, (size_t)k * sizeof(s_ncell *));
+        if (tmp) scplx->point2tet = tmp;
+        memset(scplx->point2tet, 0, (size_t)k * sizeof(s_ncell *));
+    }
 
-    /* Update vertex ids */
+    /* Update vertex ids and rebuild point2tet with compacted indices */
     for (s_ncell *c = scplx->head; c; c = c->next) {
         for (int i = 0; i < 4; i++) {
             assert(remap[c->vertex_id[i]] != -1 && "Ignored point still referenced by tetra.");
             c->vertex_id[i] = remap[c->vertex_id[i]];
         }
+        if (scplx->point2tet)
+            for (int i = 0; i < 4; i++)
+                scplx->point2tet[c->vertex_id[i]] = c;
     }
 
     if (kept_idx)
@@ -1107,7 +1178,7 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
     }
 
     for (int ii = 4; ii < b.dt.points.N; ii++) {
-        if (insert_one_point(&b.dt, ii, stack, TOL_dup, ignored) == -1) {
+        if (insert_one_point(&b.dt, ii, stack, TOL_dup, ignored, NULL) == -1) {
             free(ignored); stack_free(stack); free(stack);
             free_complex(&b.dt);
             return (s_dt_builder){0};
@@ -1204,9 +1275,16 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
         for (int i = N_old; i < N_new; i++) b->dt.weights[i] = 0.0;
     }
 
+    if (b->dt.point2tet) {
+        s_ncell **tmp_p2t = realloc(b->dt.point2tet, N_new * sizeof(s_ncell *));
+        if (!tmp_p2t) return false;
+        b->dt.point2tet = tmp_p2t;
+        for (int i = N_old; i < N_new; i++) b->dt.point2tet[i] = NULL;
+    }
+
     s_dstack *stack = (s_dstack *)b->_stack;
     for (int i = N_old; i < N_new; i++)
-        if (insert_one_point(&b->dt, i, stack, TOL_dup, b->_ignored) == -1)
+        if (insert_one_point(&b->dt, i, stack, TOL_dup, b->_ignored, NULL) == -1)
             return false;
 
     return true;
@@ -1259,6 +1337,7 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
     b->_stack = NULL;
     b->_ignored = NULL;
 
+    // assert_point2tet(&b->dt);
     return b->dt;
 }
 

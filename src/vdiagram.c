@@ -14,12 +14,6 @@
 #include <stdbool.h>
 
 
-static int id_where_equal(const int *arr1, int N, int a)
-{
-    for (int ii=0; ii<N; ii++) if (arr1[ii] == a) return ii;
-    return -1;
-}
-
 
 void free_vcell(s_vcell *c)
 {
@@ -359,21 +353,16 @@ static s_convh convhull_from_incident_ncells(const s_scplx *dt, s_dynarray *inci
 
 static int incident_ncells_to_vertex(const s_scplx *dt, int seed_id, s_dynarray *out)
 {
-    /* Find an ncell with this vertex */
-    s_ncell *ncell = dt->head;
-    int v_localid = id_where_equal(ncell->vertex_id, 4, seed_id);
-    while (v_localid == -1) {
-        ncell = ncell->next;
-        assert(ncell);
-        v_localid = id_where_equal(ncell->vertex_id, 4, seed_id);
-    }
+    s_ncell *ncell = dt->point2tet[seed_id];
+    assert(ncell);
+    int v_localid = -1;
+    for (int k = 0; k < 4; k++)
+        if (ncell->vertex_id[k] == seed_id) { v_localid = k; break; }
 
-    /* Find "complementary" indices to localid */
     int v_localid_COMP[3];
     for (int ii=0, kk=0; ii<4; ii++)
         if (ii != v_localid) v_localid_COMP[kk++] = ii;
 
-    /* Find incident ncells to this point */
     if (!ncells_incident_face((s_scplx*)dt, ncell, 0, v_localid_COMP, out)) return 0;
     return 1;
 }

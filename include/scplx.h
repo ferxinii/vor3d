@@ -5,11 +5,12 @@
 #include "points.h"
 
 typedef struct simplical_complex {  // May in stack
-    s_points points;  
+    s_points points;
     double *weights;  // size point.N, May be NULL if unweighted
     int N_ncells;
     struct ncell *head;  // Linked list of ncells
     int mark_stamp;
+    struct ncell **point2tet;  // [v] = one tet containing vertex v; NULL if unused
 } s_scplx;
 
 
@@ -28,6 +29,7 @@ typedef struct dynarray s_dynarray;
 typedef struct hash_table s_hash_table;
 
 void free_complex(s_scplx *scplx);
+void assert_point2tet(const s_scplx *scplx);
 void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *scplx);
 
@@ -44,7 +46,6 @@ void free_ncell(s_ncell *ncell);
 
 int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face,
                          const int *v_localid, s_dynarray *out);
-void build_vertex_cell_index(const s_scplx *scplx, s_ncell **vertex_start, int *v_local_id);  /* Maps each vertex to a cell that contains it */
 int vertex_neighbors(s_scplx *scplx, int v_global,
                      s_ncell *start_cell, int v_local,
                      int skip_below, s_dynarray *out_ids,  /* ids >= skip_below are ignored */

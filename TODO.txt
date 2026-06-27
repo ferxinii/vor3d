@@ -1,3 +1,5 @@
+[ ] Every call to dt_builder_extend has to realloc the arrays? Can we improve this?
+
 [ ] build_vertex_cell_index: the idea to map each vertex to a cell containing it may be made more optimal and even reused elsewhere (in_ncell_walk for example?)
 [ ] Make a context structure (EPS_DEG, TOL, randint(), rctx, ...). Even (geometry_ctx, randint(), rctx).  
     [ ] Use memory pools instead of constant malloc.
@@ -11,3 +13,10 @@
 [ ] ncell_walk: better selection of initial random ncell?.
 
 [ ] Mark ncells: Implement a more efficient approach. (visit_id? so no need to reset to 0s), also return a list of ncells so I dont have to run over all ncells each time?
+
+[ ] clip_convhull_halfspace (called in clip_vcell_to_domain): currently rebuilds the full convex hull after each half-space cut (4 cuts per candidate tet). Look into a more efficient clipping algorithm (e.g. Sutherland-Hodgman adapted for 3D polyhedra, or direct half-space intersection on the face/edge representation) to avoid repeated convex hull recomputation.
+
+[ ] ensure_ridge_protected (src/delaunay_constrained.c): current Steiner point placement uses the midpoint, which can diverge -- a vertex close to one endpoint keeps encroaching on the shorter sub-segment after each split, causing infinite halving toward that endpoint. The fix is TetGen's "scout + project" approach (tetgen.cxx, delaunizesegments ~L15893 and getsteinerptonsegment ~L15810):
+    1. Walk DT tetrahedra from endpoint A toward B (scoutsegment ~L15612); along the path find the "reference point" refpt = vertex with the largest interior angle subtended by the segment (i.e. deepest inside its diametric circumsphere).
+    2. Place the Steiner point at the orthogonal projection of refpt onto the segment, not the midpoint. Special case: if refpt lies on an adjacent segment sharing an endpoint, mirror refpt's distance from that endpoint. Clamp to [0.2, 0.8] of segment length as a fallback.
+    3. After the split, refpt is no longer inside the circumsphere of either sub-segment, so both can be recovered without further splitting due to refpt. This guarantees termination.

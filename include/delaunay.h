@@ -104,6 +104,12 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
  * Returns the new point index on success, -1 on failure or near-duplicate. */
 int scplx_insert_point(s_scplx *dt, s_point p, double TOL);
 
+/* Constrained-aware variant: the BW cavity does not expand across faces that are
+ * present in `constrained` (a sorted-int[3] key hash table).  Previously-inserted
+ * CDT faces are therefore never destroyed by this insertion.
+ * Returns the new point index on success, -1 on failure or near-duplicate. */
+int scplx_insert_point_cdt(s_scplx *dt, s_point p, double TOL, s_hash_table *constrained);
+
 
 /* Force a bistellar flip on the face shared between ncell and
  * ncell->opposite[opp_cell_id], bypassing the Delaunay criterion.
