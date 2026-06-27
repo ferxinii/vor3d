@@ -13,10 +13,9 @@
 #include <assert.h>
 
 
-static bool edge_in_dt(s_scplx *dt, s_ncell **vertex_start, int *v_local_id,
-                        int va, int vb)
+static bool edge_in_dt(s_scplx *dt, int va, int vb)
 {
-    if (!vertex_start[va]) return false;
+    if (!dt->point2tet[va]) return false;
 
     s_dynarray out_ids = dynarray_initialize(sizeof(int), 16);
     s_dynarray scratch  = dynarray_initialize(sizeof(s_ncell *), 16);
@@ -25,7 +24,10 @@ static bool edge_in_dt(s_scplx *dt, s_ncell **vertex_start, int *v_local_id,
         return false;
     }
 
-    vertex_neighbors(dt, va, vertex_start[va], v_local_id[va], 0, &out_ids, &scratch);
+    int va_lid = -1;
+    for (int k = 0; k < 4; k++)
+        if (dt->point2tet[va]->vertex_id[k] == va) { va_lid = k; break; }
+    vertex_neighbors(dt, va, dt->point2tet[va], va_lid, 0, &out_ids, &scratch);
 
     bool found = false;
     for (unsigned i = 0; i < out_ids.N; i++) {
@@ -106,25 +108,144 @@ static bool edge_pair_eq(const void *a, const void *b)
     return memcmp(a, b, 2 * sizeof(int)) == 0;
 }
 
+/* Angle at V in triangle V-A-B, in radians. Returns 0 for degenerate inputs. */
+static double __attribute__((unused)) interior_angle(s_point v, s_point a, s_point b, double EPS_DEG)
+{
+    double ux = a.x - v.x, uy = a.y - v.y, uz = a.z - v.z;
+    double wx = b.x - v.x, wy = b.y - v.y, wz = b.z - v.z;
+    double lu = sqrt(ux*ux + uy*uy + uz*uz);
+    double lw = sqrt(wx*wx + wy*wy + wz*wz);
+    if (lu <= EPS_DEG || lw <= EPS_DEG) return 0.0;
+    double cosA = (ux*wx + uy*wy + uz*wz) / (lu * lw);
+    if (cosA >  1.0) cosA =  1.0;
+    if (cosA < -1.0) cosA = -1.0;
+    return acos(cosA);
+}
+
+/* Parameter t such that A + t*(B-A) is the orthogonal projection of V onto
+ * line AB. Returns 0.5 for degenerate (zero-length) segments. */
+static double __attribute__((unused)) project_t_onto_segment(s_point v, s_point a, s_point b, double EPS_DEG)
+{
+    double dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    double len2 = dx*dx + dy*dy + dz*dz;
+    if (len2 <= EPS_DEG) return 0.5;
+    return ((v.x - a.x)*dx + (v.y - a.y)*dy + (v.z - a.z)*dz) / len2;
+}
+
+/* Return the DT index of the vertex most deeply inside the diametric circumsphere
+ * of segment [va_dt, vb_dt], i.e. the one with the largest interior angle to AB.
+ * A vertex V is inside the diametric sphere iff dot(A-V, B-V) < 0.
+ * Skips sentinels (indices 0-3) and the endpoints themselves.
+ * Returns -1 if no encroaching vertex exists. */
+static int scout_refpt(const s_scplx *dt, int va_dt, int vb_dt, double EPS_DEG)
+{
+    s_point A = dt->points.p[va_dt];
+    s_point B = dt->points.p[vb_dt];
+    int    refpt  = -1;
+    double angmax = 0.0;
+
+    for (int i = 4; i < dt->points.N; i++) {
+        if (i == va_dt || i == vb_dt) continue;
+        s_point V = dt->points.p[i];
+        double ax = A.x - V.x, ay = A.y - V.y, az = A.z - V.z;
+        double bx = B.x - V.x, by = B.y - V.y, bz = B.z - V.z;
+        if (ax*bx + ay*by + az*bz >= 0.0) continue; /* outside diametric sphere */
+        double ang = interior_angle(V, A, B, EPS_DEG);
+        if (ang > angmax) { angmax = ang; refpt = i; }
+    }
+    return refpt;
+}
+
+/* Compute the Steiner point to insert on segment [va_dt, vb_dt].
+ * refpt_id: result of scout_refpt (-1 → fall back to midpoint).
+ * va_mesh/vb_mesh: mesh-space ids of the two endpoints (for adjacent-Steiner check).
+ * steiner_origins: dynarray of int[2] indexed by DT point id; {-1,-1} = original vertex.
+ *
+ * Adjacent-Steiner rule (mirrors TetGen getsteinerptonsegment):
+ *   if refpt was itself inserted on an edge sharing endpoint A, place the new
+ *   point at the same distance from A as refpt; likewise for B.  This prevents
+ *   the symmetric spiral where a Steiner near A keeps encroaching on sub-segments. */
+static s_point get_steiner_point(const s_scplx *dt,
+                                                          int va_dt, int vb_dt,
+                                                          int refpt_id,
+                                                          int va_mesh, int vb_mesh,
+                                                          const s_dynarray *steiner_origins,
+                                                          double EPS_DEG)
+{
+    s_point A = dt->points.p[va_dt];
+    s_point B = dt->points.p[vb_dt];
+    double t = 0.5;
+
+    if (refpt_id >= 0) {
+        s_point R = dt->points.p[refpt_id];
+
+        /* Check if refpt is a Steiner on an adjacent edge sharing A or B. */
+        int adj = 0;
+        if (refpt_id < (int)steiner_origins->N) {
+            const int *orig = (const int *)dynarray_get_ptr(
+                                  (s_dynarray *)steiner_origins, refpt_id);
+            if (orig[0] != -1) {
+                /* orig[] holds the mesh-space edge (pa, pb) refpt was inserted on. */
+                int pa = orig[0], pb = orig[1];
+                if (pa == va_mesh || pb == va_mesh) {
+                    /* shared endpoint is A: mirror refpt's distance from A */
+                    double lab = sqrt((B.x-A.x)*(B.x-A.x) +
+                                      (B.y-A.y)*(B.y-A.y) +
+                                      (B.z-A.z)*(B.z-A.z));
+                    double lar = sqrt((R.x-A.x)*(R.x-A.x) +
+                                      (R.y-A.y)*(R.y-A.y) +
+                                      (R.z-A.z)*(R.z-A.z));
+                    t = (lab > EPS_DEG) ? lar / lab : 0.5;
+                    adj = 1;
+                } else if (pa == vb_mesh || pb == vb_mesh) {
+                    /* shared endpoint is B: mirror from B */
+                    double lab = sqrt((B.x-A.x)*(B.x-A.x) +
+                                      (B.y-A.y)*(B.y-A.y) +
+                                      (B.z-A.z)*(B.z-A.z));
+                    double lbr = sqrt((R.x-B.x)*(R.x-B.x) +
+                                      (R.y-B.y)*(R.y-B.y) +
+                                      (R.z-B.z)*(R.z-B.z));
+                    t = (lab > EPS_DEG) ? 1.0 - lbr / lab : 0.5;
+                    adj = 1;
+                }
+            }
+        }
+
+        if (!adj)
+            t = project_t_onto_segment(R, A, B, EPS_DEG);
+    }
+
+    /* Clamp to [0.2, 0.8]; fall back to midpoint if outside. */
+    if (t < 0.2 || t > 0.8) t = 0.5;
+
+    return (s_point){ .x = A.x + t*(B.x-A.x),
+                      .y = A.y + t*(B.y-A.y),
+                      .z = A.z + t*(B.z-A.z) };
+}
+
 /* Ensure every trimesh boundary edge is present in the DT.
  * Processes ALL unprotected edges per pass (not one at a time) so each pass
  * is O(N_faces) instead of O(N_faces^2) and the total work is proportional
  * to the number of edges that actually need splitting.
  * mesh->faces holds 0-based canonical indices; the +4 builder offset is
  * applied only at the DT lookup call sites here -- the trimesh is never shifted. */
-static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double TOL)
+static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double EPS_DEG, double TOL)
 {
+    /* steiner_origins[dt_point_id] = {va, vb} (mesh-space) if the point is a
+     * Steiner inserted on edge (va,vb); {-1,-1} for all original vertices.
+     * Kept across passes so scout_refpt can identify adjacent Steiner points. */
+    s_dynarray steiner_origins = dynarray_initialize(sizeof(int[2]), 64);
+    if (!steiner_origins.items) return 0;
+    int neg[2] = {-1, -1};
+    for (int i = 0; i < b->dt.points.N; i++) {
+        if (!dynarray_push(&steiner_origins, neg)) {
+            dynarray_free(&steiner_origins); return 0;
+        }
+    }
+
     int _pass = 0;
     for (;;) {
         _pass++;
-
-        /* Build vertex-to-cell index once per pass. */
-        s_ncell **vertex_start = calloc((size_t)b->dt.points.N, sizeof(s_ncell *));
-        int      *v_local_id   = calloc((size_t)b->dt.points.N, sizeof(int));
-        if (!vertex_start || !v_local_id) {
-            free(vertex_start); free(v_local_id); return 0;
-        }
-        build_vertex_cell_index(&b->dt, vertex_start, v_local_id);
 
         /* Collect all unique unprotected edges (canonical min<max pairs). */
         s_hash_table edge_set;
@@ -132,36 +253,35 @@ static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double TOL)
         if (!hash_init(&edge_set, sizeof(int[2]), sizeof(int),
                        (size_t)(mesh->Nf * 4 + 1), (size_t)(mesh->Nf),
                        edge_pair_hash, edge_pair_eq, NULL)) {
-            free(vertex_start); free(v_local_id); return 0;
+            dynarray_free(&steiner_origins); return 0;
         }
 
         s_dynarray to_split = dynarray_initialize(sizeof(int[2]), 64);
         if (!to_split.items) {
-            hash_free(&edge_set); free(vertex_start); free(v_local_id); return 0;
+            hash_free(&edge_set);
+            dynarray_free(&steiner_origins); return 0;
         }
 
         for (int fi = 0; fi < mesh->Nf; fi++) {
             for (int ei = 0; ei < 3; ei++) {
                 int va = mesh->faces[fi*3 + (ei+1)%3];
                 int vb = mesh->faces[fi*3 + (ei+2)%3];
-                if (edge_in_dt(&b->dt, vertex_start, v_local_id, va + 4, vb + 4))
+                if (edge_in_dt(&b->dt, va + 4, vb + 4))
                     continue;
 
                 int pair[2] = { va < vb ? va : vb, va < vb ? vb : va };
                 if (hash_get(&edge_set, pair)) continue;
                 if (!hash_insert(&edge_set, pair, &dummy)) {
                     hash_free(&edge_set); dynarray_free(&to_split);
-                    free(vertex_start); free(v_local_id); return 0;
+                    dynarray_free(&steiner_origins); return 0;
                 }
                 if (!dynarray_push(&to_split, pair)) {
                     hash_free(&edge_set); dynarray_free(&to_split);
-                    free(vertex_start); free(v_local_id); return 0;
+                    dynarray_free(&steiner_origins); return 0;
                 }
             }
         }
 
-        free(vertex_start);
-        free(v_local_id);
         hash_free(&edge_set);
 
         if (to_split.N == 0) {
@@ -172,30 +292,41 @@ static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double TOL)
         fprintf(stderr, "[CDT]   ridge pass %d: Nf=%d Nv=%d  %u edges to split\n",
                 _pass, mesh->Nf, b->dt.points.N, to_split.N); fflush(stderr);
 
-        /* Insert midpoints into DT and split trimesh edges in batch. */
+        /* Insert scout+project Steiner points and split trimesh edges in batch. */
         for (unsigned i = 0; i < to_split.N; i++) {
             int *pair = (int *)dynarray_get_ptr(&to_split, i);
             int va = pair[0], vb = pair[1];
 
-            s_point pa = b->dt.points.p[va + 4];
-            s_point pb = b->dt.points.p[vb + 4];
-            s_point M  = { .x = (pa.x + pb.x) * 0.5,
-                           .y = (pa.y + pb.y) * 0.5,
-                           .z = (pa.z + pb.z) * 0.5 };
+            int refpt_id = scout_refpt(&b->dt, va + 4, vb + 4, EPS_DEG);
+            s_point M = get_steiner_point(&b->dt, va + 4, vb + 4,
+                                          refpt_id, va, vb,
+                                          &steiner_origins, EPS_DEG);
 
             int new_id_builder = b->dt.points.N;
             s_points single = { .N = 1, .p = &M };
             if (!dt_builder_extend(b, &single, TOL)) {
-                dynarray_free(&to_split); return 0;
+                dynarray_free(&to_split);
+                dynarray_free(&steiner_origins); return 0;
+            }
+
+            /* Record origin edge for the newly inserted point (if not deduped). */
+            if (b->dt.points.N > (int)steiner_origins.N) {
+                int origin[2] = {va, vb};
+                if (!dynarray_push(&steiner_origins, origin)) {
+                    dynarray_free(&to_split);
+                    dynarray_free(&steiner_origins); return 0;
+                }
             }
 
             if (!split_trimesh_edge(mesh, va, vb, new_id_builder - 4)) {
-                dynarray_free(&to_split); return 0;
+                dynarray_free(&to_split);
+                dynarray_free(&steiner_origins); return 0;
             }
         }
 
         dynarray_free(&to_split);
     }
+    dynarray_free(&steiner_origins);
     return 1;
 }
 
@@ -205,16 +336,29 @@ static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double TOL)
 
 static s_ncell *face_in_dt(const s_scplx *dt, int va, int vb, int vc)
 {
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
-        bool ha = false, hb = false, hc = false;
+    s_ncell *start = dt->point2tet[va];
+    if (!start) return NULL;
+    int va_lid = -1;
+    for (int k = 0; k < 4; k++)
+        if (start->vertex_id[k] == va) { va_lid = k; break; }
+    int comp[3]; for (int i = 0, k = 0; i < 4; i++) if (i != va_lid) comp[k++] = i;
+
+    s_dynarray ring = dynarray_initialize(sizeof(s_ncell *), 16);
+    if (!ring.items) return NULL;
+    ncells_incident_face((s_scplx *)dt, start, 0, comp, &ring);
+
+    s_ncell *found = NULL;
+    for (unsigned i = 0; i < ring.N; i++) {
+        s_ncell *nc; dynarray_get_value(&ring, i, &nc);
+        bool has_vb = false, has_vc = false;
         for (int j = 0; j < 4; j++) {
-            if (nc->vertex_id[j] == va) ha = true;
-            if (nc->vertex_id[j] == vb) hb = true;
-            if (nc->vertex_id[j] == vc) hc = true;
+            if (nc->vertex_id[j] == vb) has_vb = true;
+            if (nc->vertex_id[j] == vc) has_vc = true;
         }
-        if (ha && hb && hc) return nc;
+        if (has_vb && has_vc) { found = nc; break; }
     }
-    return NULL;
+    dynarray_free(&ring);
+    return found;
 }
 
 static size_t face_triple_hash(const void *key)
@@ -450,15 +594,36 @@ static bool tet_in_R(const s_scplx *dt, const s_ncell *nc,
  * Constrained faces are excluded from boundary and not crossed during BFS.
  * Returns 1 on success, 0 on allocation failure. */
 static int find_region_R_boundary(s_scplx *dt,
+                                   int va,
                                    s_point pa, s_point pb, s_point pc,
                                    s_hash_table *constrained,
                                    s_dynarray *boundary,
                                    s_dynarray *in_R)
 {
-    /* Find any starting tet that straddles the constraint plane */
+    /* Find any starting tet that straddles the constraint plane.
+     * Ring-walk from point2tet[va] first; fall back to head scan if needed. */
     s_ncell *seed = NULL;
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
-        if (tet_in_R(dt, nc, pa, pb, pc)) { seed = nc; break; }
+    if (dt->point2tet[va]) {
+        s_ncell *start = dt->point2tet[va];
+        int va_lid = -1;
+        for (int k = 0; k < 4; k++)
+            if (start->vertex_id[k] == va) { va_lid = k; break; }
+        int comp[3]; for (int i = 0, k = 0; i < 4; i++) if (i != va_lid) comp[k++] = i;
+
+        s_dynarray ring = dynarray_initialize(sizeof(s_ncell *), 16);
+        if (ring.items) {
+            ncells_incident_face(dt, start, 0, comp, &ring);
+            for (unsigned i = 0; i < ring.N && !seed; i++) {
+                s_ncell *nc; dynarray_get_value(&ring, i, &nc);
+                if (tet_in_R(dt, nc, pa, pb, pc)) seed = nc;
+            }
+            dynarray_free(&ring);
+        }
+    }
+    if (!seed) {
+        for (s_ncell *nc = dt->head; nc; nc = nc->next) {
+            if (tet_in_R(dt, nc, pa, pb, pc)) { seed = nc; break; }
+        }
     }
     if (!seed) return 1;  /* face already in DT */
 
@@ -512,7 +677,20 @@ static int find_boundary_face_s(const s_scplx *dt,
                                  int fa, int fb, int fc,
                                  s_ncell **out_s, int *out_opp_lid)
 {
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
+    if (!dt->point2tet[fa]) return 0;
+    s_ncell *start = dt->point2tet[fa];
+    int fa_lid = -1;
+    for (int k = 0; k < 4; k++)
+        if (start->vertex_id[k] == fa) { fa_lid = k; break; }
+    int comp[3]; for (int i = 0, k = 0; i < 4; i++) if (i != fa_lid) comp[k++] = i;
+
+    s_dynarray ring = dynarray_initialize(sizeof(s_ncell *), 16);
+    if (!ring.items) return 0;
+    ncells_incident_face((s_scplx *)dt, start, 0, comp, &ring);
+
+    int result = 0;
+    for (unsigned i = 0; i < ring.N; i++) {
+        s_ncell *nc; dynarray_get_value(&ring, i, &nc);
         bool ha = false, hb = false, hc = false;
         int opp = -1;
         for (int j = 0; j < 4; j++) {
@@ -525,11 +703,11 @@ static int find_boundary_face_s(const s_scplx *dt,
         if (!ha || !hb || !hc || opp < 0) continue;
 
         s_ncell *nb = nc->opposite[opp];
-        if (!nb) return 0;
+        if (!nb) break;
 
         bool nc_in_R = tet_in_R(dt, nc, pa, pb, pc);
         bool nb_in_R = tet_in_R(dt, nb, pa, pb, pc);
-        if (nc_in_R == nb_in_R) return 0;  /* no longer an R-boundary face */
+        if (nc_in_R == nb_in_R) break;  /* no longer an R-boundary face */
 
         if (!nc_in_R) {
             *out_s = nc; *out_opp_lid = opp;
@@ -539,12 +717,14 @@ static int find_boundary_face_s(const s_scplx *dt,
                 int v = nb->vertex_id[j];
                 if (v != fa && v != fb && v != fc) { nb_opp = j; break; }
             }
-            if (nb_opp < 0) return 0;
+            if (nb_opp < 0) break;
             *out_s = nb; *out_opp_lid = nb_opp;
         }
-        return 1;
+        result = 1;
+        break;
     }
-    return 0;
+    dynarray_free(&ring);
+    return result;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -571,7 +751,7 @@ static int flipinsertfacet(s_scplx *dt, int va, int vb, int vc,
     in_R     = dynarray_initialize(sizeof(s_ncell *), 64);
     if (!boundary.items || !in_R.items) goto cleanup;
 
-    if (!find_region_R_boundary(dt, pa, pb, pc, constrained, &boundary, &in_R))
+    if (!find_region_R_boundary(dt, va, pa, pb, pc, constrained, &boundary, &in_R))
         goto cleanup;
 
     unsigned diag_n_R = in_R.N, diag_n_bnd = boundary.N;
@@ -660,6 +840,7 @@ cleanup:
 
 
 
+
 /* -----------------------------------------------------------------------
  * Public entry point
  * ----------------------------------------------------------------------- */
@@ -686,7 +867,7 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
         s_dt_builder b = dt_builder_begin(&working.points, NULL, TOL, NULL, NULL);
         if (!b._stack) { free_trimesh(&working); return (s_scplx){0}; }
 
-        if (!ensure_ridge_protected(&b, &working, TOL)) {
+        if (!ensure_ridge_protected(&b, &working, EPS_DEG, TOL)) {
             s_scplx tmp = dt_builder_end(&b, false, NULL, NULL, 0);
             free_complex(&tmp); free_trimesh(&working); return (s_scplx){0};
         }
@@ -697,7 +878,7 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
 
         /* Sync working.points with the full compacted DT point set (which includes
          * any ridge Steiner points added by ensure_ridge_protected to the builder).
-         * Without this, the next face-Steiner centroid gets an ID that collides with
+         * Without this, the next face-split Steiner gets an ID that collides with
          * the ridge Steiner IDs already in working.faces. */
         {
             s_point *p = malloc((size_t)dt.points.N * sizeof(s_point));
@@ -708,7 +889,7 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
             working.points.N = dt.points.N;
         }
 
-        /* ---- Phase B: insert boundary faces; collect any that need Steiner ---- */
+        /* ---- Phase B: insert boundary faces; stop at first failure ---- */
         fprintf(stderr, "[CDT] iter %d: Phase B: inserting %d boundary faces ...\n",
                 iter, working.Nf); fflush(stderr);
 
@@ -719,15 +900,12 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
             free_complex(&dt); free_trimesh(&working); return (s_scplx){0};
         }
 
-        /* Process faces; stop at the first failure (running more flips on a partially
-         * constrained DT corrupts it into degenerate configurations). */
         int failed_va = -1, failed_vb = -1, failed_vc = -1;
 
         for (int fi = 0; fi < working.Nf; fi++) {
             if (fi % 500 == 0) { fprintf(stderr, "[CDT]   face %d / %d\n", fi, working.Nf); fflush(stderr); }
             int va = working.faces[fi*3], vb = working.faces[fi*3+1], vc = working.faces[fi*3+2];
             s_point pa = dt.points.p[va], pb = dt.points.p[vb], pc = dt.points.p[vc];
-
             if (!flipinsertfacet(&dt, va, vb, vc, &constrained, pa, pb, pc)) {
                 failed_va = va; failed_vb = vb; failed_vc = vc;
                 break;
@@ -736,64 +914,63 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
 
         hash_free(&constrained);
 
-        if (failed_va < 0) {
-            break;  /* All faces inserted — done with Phase B */
-        }
+        if (failed_va < 0) break; /* All faces inserted — done with Phase B */
 
-        fprintf(stderr, "[CDT] iter %d: face (%d,%d,%d) needs Steiner; restarting ...\n",
-                iter, failed_va, failed_vb, failed_vc); fflush(stderr);
-
-        /* Discard current DT; rebuild Phase A with Steiner centroid added. */
-        free_complex(&dt);
-        dt = (s_scplx){0};
-
-        /* Add centroid to working.points and split face → 3 sub-faces. */
+        /* Steiner at the centroid of the failing face, 3-way split.
+         *
+         * The centroid C = (va+vb+vc)/3 is equidistant from all three face vertices.
+         * This equidistance means the rebuilt Phase-A DT naturally connects C to va,
+         * vb, and vc, so the three new ridge connections (va,C),(vb,C),(vc,C) ARE DT
+         * edges after the rebuild and ensure_ridge_protected does not cascade.
+         * Alternative Steiners (crossing-edge intersection, edge midpoint) are
+         * asymmetrically positioned so their connection to the opposite vertex may
+         * not be a DT edge, triggering exponential cascade. */
         {
             int va = failed_va, vb = failed_vb, vc = failed_vc;
-
-            /* Find the face in working (by vertex triple — vertices never renumber). */
-            int fi_found = -1;
-            for (int fi = 0; fi < working.Nf; fi++) {
-                if (working.faces[fi*3]==va && working.faces[fi*3+1]==vb && working.faces[fi*3+2]==vc) {
-                    fi_found = fi; break;
-                }
-            }
-            if (fi_found < 0) {
-                /* Face not found — shouldn't happen */
-                free_trimesh(&working); return (s_scplx){0};
-            }
-
-            /* Add centroid to working.points. */
             s_point pa = working.points.p[va], pb = working.points.p[vb], pc = working.points.p[vc];
-            s_point centroid = {
+
+            s_point steiner = {
                 .x = (pa.x + pb.x + pc.x) * (1.0/3.0),
                 .y = (pa.y + pb.y + pc.y) * (1.0/3.0),
                 .z = (pa.z + pb.z + pc.z) * (1.0/3.0),
             };
+
+            fprintf(stderr, "[CDT] iter %d: face (%d,%d,%d) Steiner at centroid"
+                    " (%.4f,%.4f,%.4f); restarting ...\n",
+                    iter, va, vb, vc, steiner.x, steiner.y, steiner.z);
+            fflush(stderr);
+
+            free_complex(&dt); dt = (s_scplx){0};
+
+            /* Find the face slot (match by vertex triple). */
+            int fi_found = -1;
+            for (int fi = 0; fi < working.Nf; fi++) {
+                if (working.faces[fi*3]==va && working.faces[fi*3+1]==vb &&
+                    working.faces[fi*3+2]==vc) { fi_found = fi; break; }
+            }
+            if (fi_found < 0) { free_trimesh(&working); return (s_scplx){0}; }
+
             int new_id = working.points.N;
-            s_point *new_pts = realloc(working.points.p, (size_t)(new_id + 1) * sizeof(s_point));
+            s_point *new_pts = realloc(working.points.p, (size_t)(new_id+1) * sizeof(s_point));
             if (!new_pts) { free_trimesh(&working); return (s_scplx){0}; }
             working.points.p = new_pts;
-            working.points.p[new_id] = centroid;
+            working.points.p[new_id] = steiner;
             working.points.N = new_id + 1;
 
-            /* Split face fi_found → 3 sub-faces.
-             * Reuse slot fi_found for sub-face 0; append the other two. */
+            /* Split face fi_found → 3 sub-faces (reuse slot, append two). */
             int new_Nf = working.Nf + 2;
-            int *nf = realloc(working.faces, (size_t)new_Nf * 3 * sizeof(int));
-            s_point *nn = realloc(working.fnormals, (size_t)new_Nf * sizeof(s_point));
+            int     *nf = realloc(working.faces,    (size_t)new_Nf * 3 * sizeof(int));
+            s_point *nn = realloc(working.fnormals, (size_t)new_Nf     * sizeof(s_point));
             if (!nf || !nn) { free_trimesh(&working); return (s_scplx){0}; }
             working.faces = nf; working.fnormals = nn;
 
             s_point fn = working.fnormals[fi_found];
-            working.faces[fi_found*3]     = va;  working.faces[fi_found*3+1]     = vb;
-            working.faces[fi_found*3+2]   = new_id; working.fnormals[fi_found]   = fn;
-
-            working.faces[working.Nf*3]   = vb;  working.faces[working.Nf*3+1]   = vc;
-            working.faces[working.Nf*3+2] = new_id; working.fnormals[working.Nf] = fn;
-
-            working.faces[(working.Nf+1)*3]   = vc;  working.faces[(working.Nf+1)*3+1] = va;
-            working.faces[(working.Nf+1)*3+2] = new_id; working.fnormals[working.Nf+1] = fn;
+            working.faces[fi_found*3]         = va;  working.faces[fi_found*3+1]         = vb;
+            working.faces[fi_found*3+2]       = new_id; working.fnormals[fi_found]       = fn;
+            working.faces[working.Nf*3]       = vb;  working.faces[working.Nf*3+1]       = vc;
+            working.faces[working.Nf*3+2]     = new_id; working.fnormals[working.Nf]     = fn;
+            working.faces[(working.Nf+1)*3]   = vc;  working.faces[(working.Nf+1)*3+1]   = va;
+            working.faces[(working.Nf+1)*3+2] = new_id; working.fnormals[working.Nf+1]   = fn;
 
             free(working.adjacency); working.adjacency = NULL;
             working.Nf = new_Nf;
