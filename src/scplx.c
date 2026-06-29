@@ -301,6 +301,7 @@ s_ncell *next_ncell_ridge_cycle(const s_ncell *ncell, int v_localid_main, int v_
                                 int *new_v_localid_main, int *new_v_localid_2)
 {
     s_ncell *next = ncell->opposite[v_localid_main];
+    if (!next) return NULL;
     *new_v_localid_main = id_where_equal_int(next->vertex_id, 4, ncell->vertex_id[v_localid_2]);
     for (int ii=0; ii<4; ii++) {
         if (next->opposite[ii] == ncell) {

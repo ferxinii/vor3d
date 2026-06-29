@@ -5,6 +5,7 @@
 #include "hash.h"
 #include "gtests.h"
 #include "points.h"
+#include "voronoi_predicates.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -399,50 +400,90 @@ static void mark_constrained_face(s_hash_table *ht, int va, int vb, int vc)
     hash_insert(ht, key, &val);
 }
 
-/* --- Kinetic CDT helpers (Steps 1 & 2) --------------------------------- */
 
-static double det3(double a0, double a1, double a2,
-                   double b0, double b1, double b2,
-                   double c0, double c1, double c2)
-{
-    return a0*(b1*c2 - b2*c1) - a1*(b0*c2 - b2*c0) + a2*(b0*c1 - b1*c0);
-}
-
-static double det4(const double m[4][4])
-{
-    return  m[0][0]*det3(m[1][1],m[1][2],m[1][3], m[2][1],m[2][2],m[2][3], m[3][1],m[3][2],m[3][3])
-           -m[0][1]*det3(m[1][0],m[1][2],m[1][3], m[2][0],m[2][2],m[2][3], m[3][0],m[3][2],m[3][3])
-           +m[0][2]*det3(m[1][0],m[1][1],m[1][3], m[2][0],m[2][1],m[2][3], m[3][0],m[3][1],m[3][3])
-           -m[0][3]*det3(m[1][0],m[1][1],m[1][2], m[2][0],m[2][1],m[2][2], m[3][0],m[3][1],m[3][2]);
-}
 
 /* Signed 4x4 in-sphere determinant.
  * Rows are (v-q, |v|^2-|q|^2) for v in {a,b,c,p}; q is the test point.
  * Positive result means q is inside the circumsphere of a,b,c,p (not locally Delaunay). */
-static double insphere_det_float(s_point a, s_point b, s_point c,
-                                  s_point p, s_point q)
+
+
+/* --- SoS predicates ------------------------------------------------------- */
+
+/* Wraps test_insphere with SoS perturbation.
+ * When test_insphere returns 0, iterates through the 5 vertices in ascending
+ * global index order.  For the vertex at row r in {a(0),b(1),c(2),L(3),Rv(4)},
+ * the SoS sign is (-1)^r * orient3d(4 remaining points in row order). */
+static int insphere_sos(s_point a, s_point b, s_point c, s_point L, s_point Rv,
+                        int ia, int ib, int ic, int iL, int iRv)
 {
-    double qq = q.x*q.x + q.y*q.y + q.z*q.z;
-    s_point verts[4] = {a, b, c, p};
-    double m[4][4];
-    for (int i = 0; i < 4; i++) {
-        m[i][0] = verts[i].x - q.x;
-        m[i][1] = verts[i].y - q.y;
-        m[i][2] = verts[i].z - q.z;
-        m[i][3] = (verts[i].x*verts[i].x + verts[i].y*verts[i].y + verts[i].z*verts[i].z) - qq;
+    int s = test_insphere((s_point[4]){a, b, c, L}, Rv);
+    if (s != 0) return s;
+
+    typedef struct { int idx; int row; } ie;
+    ie order[5] = {{ia,0},{ib,1},{ic,2},{iL,3},{iRv,4}};
+    for (int i = 1; i < 5; i++) {
+        ie tmp = order[i]; int j = i - 1;
+        while (j >= 0 && order[j].idx > tmp.idx) { order[j+1] = order[j]; j--; }
+        order[j+1] = tmp;
     }
-    return det4(m);
+
+    s_point pts[5] = {a, b, c, L, Rv};
+    for (int k = 0; k < 5; k++) {
+        int row = order[k].row;
+        s_point rem[4]; int ri = 0;
+        for (int r = 0; r < 5; r++) if (r != row) rem[ri++] = pts[r];
+        int o = test_orientation((s_point[3]){rem[0], rem[1], rem[2]}, rem[3]);
+        if (o != 0) return (row % 2 == 0 ? 1 : -1) * o;
+    }
+    return 0; /* all five points coincident — degenerate input */
 }
 
-/* Returns tau* >= 0 at which face g loses local regularity under kinetic weight w(v)=tau*d(v).
- * s is the tet NOT in R (all d(v) <= 0); s->opposite[opp_lid] is the tet IN R.
- * Returns -1.0 if the face never loses regularity. */
-static double certify(const s_scplx *dt,
-                      const s_ncell *s, int opp_lid,
-                      s_point h_normal, s_point h_point)
+/* Wraps cdt_dprime with SoS perturbation.
+ * D' has rows for {a(0),b(1),c(2),L(3)} with Rv as the reference; Rv has no
+ * row of its own.  When cdt_dprime returns 0, iterates {a,b,c,L} in ascending
+ * global index order and evaluates the cofactor of the dot-product column:
+ *   (-1)^(row+3) * orient3d(remaining 3 rows, Rv). */
+static int dprime_sos(s_point a, s_point b, s_point c, s_point L, s_point Rv,
+                      int ia, int ib, int ic, int iL,
+                      s_point pa, s_point pb, s_point pc)
+{
+    int s = cdt_dprime(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z,
+                       L.x, L.y, L.z, Rv.x, Rv.y, Rv.z,
+                       pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z);
+    if (s != 0) return s;
+
+    typedef struct { int idx; int row; } ie;
+    ie order[4] = {{ia,0},{ib,1},{ic,2},{iL,3}};
+    for (int i = 1; i < 4; i++) {
+        ie tmp = order[i]; int j = i - 1;
+        while (j >= 0 && order[j].idx > tmp.idx) { order[j+1] = order[j]; j--; }
+        order[j+1] = tmp;
+    }
+
+    s_point pts[4] = {a, b, c, L};
+    for (int k = 0; k < 4; k++) {
+        int row = order[k].row;
+        s_point rem[3]; int ri = 0;
+        for (int r = 0; r < 4; r++) if (r != row) rem[ri++] = pts[r];
+        int o = test_orientation((s_point[3]){rem[0], rem[1], rem[2]}, Rv);
+        /* (-1)^(row+3) = (-1)^(row+1): alternates -,+,-,+ starting at row 0 */
+        if (o != 0) return (row % 2 == 0 ? -1 : 1) * o;
+    }
+    return 0; /* all five points coplanar — degenerate input */
+}
+
+#define CERTIFY_NO_EVENT (-1)
+#define CERTIFY_EVENT      0
+
+/* Returns CERTIFY_EVENT if face loses regularity at τ >= 0 and fills *out_L_id,
+ * *out_Rv_id.  Returns CERTIFY_NO_EVENT otherwise. */
+static int certify(const s_scplx *dt,
+                   const s_ncell *s, int opp_lid,
+                   s_point pa, s_point pb, s_point pc,
+                   int *out_L_id, int *out_Rv_id)
 {
     s_ncell *t = s->opposite[opp_lid];
-    if (!t) return -1.0;
+    if (!t) return CERTIFY_NO_EVENT;
 
     int L_id = s->vertex_id[opp_lid];
     s_point L = dt->points.p[L_id];
@@ -464,63 +505,144 @@ static double certify(const s_scplx *dt,
             Rv_id = vid; break;
         }
     }
-    if (Rv_id < 0) return -1.0;
+    if (Rv_id < 0) return CERTIFY_NO_EVENT;
+
     s_point Rv = dt->points.p[Rv_id];
 
-    double d_a  = dot_prod(subtract_points(a,  h_point), h_normal);
-    double d_b  = dot_prod(subtract_points(b,  h_point), h_normal);
-    double d_c  = dot_prod(subtract_points(c,  h_point), h_normal);
-    double d_L  = dot_prod(subtract_points(L,  h_point), h_normal);
-    double d_Rv = dot_prod(subtract_points(Rv, h_point), h_normal);
+    int s_D0     = insphere_sos(a, b, c, L, Rv,
+                                face_ids[0], face_ids[1], face_ids[2], L_id, Rv_id);
+    int s_Dprime = dprime_sos(a, b, c, L, Rv,
+                              face_ids[0], face_ids[1], face_ids[2], L_id,
+                              pa, pb, pc);
 
-    int sign_D0 = test_insphere((s_point[4]){a, b, c, L}, Rv);
-    if (sign_D0 == 0) return 0.0;  /* Rv exactly on circumsphere: flip immediately */
+    if (s_D0 == 0 || s_Dprime == 0) return CERTIFY_NO_EVENT;
 
-    double D0 = insphere_det_float(a, b, c, L, Rv);
-    /* Float insphere can have wrong sign when points are far from origin (cancellation
-     * in |v|^2 - |q|^2). Correct with the robust sign; tau ratio stays valid. */
-    if (D0 != 0.0 && (sign_D0 > 0) != (D0 > 0.0)) D0 = -D0;
+    if (-s_D0 * s_Dprime < 0) return CERTIFY_NO_EVENT;  /* τ < 0 */
 
-    /* D': same first-3-col geometry but 4th col = d(Rv) - d(v) for each row */
-    double m[4][4];
-    s_point pts[4] = {a, b, c, L};
-    double dv[4]   = {d_a, d_b, d_c, d_L};
-    for (int i = 0; i < 4; i++) {
-        m[i][0] = pts[i].x - Rv.x;
-        m[i][1] = pts[i].y - Rv.y;
-        m[i][2] = pts[i].z - Rv.z;
-        m[i][3] = d_Rv - dv[i];
-    }
-    double Dprime = det4(m);
-
-    if (Dprime == 0.0) return -1.0;
-    double tau = -D0 / Dprime;
-    return (tau >= 0.0) ? tau : -1.0;
+    *out_L_id  = L_id;
+    *out_Rv_id = Rv_id;
+    return CERTIFY_EVENT;
 }
 
 /* --- Min-heap on tau (Step 3) ------------------------------------------- */
 
 typedef struct {
-    double   tau;
     int      va, vb, vc;  /* sorted face triple */
+    int      L_id;        /* opposite vertex in non-R tet s */
+    int      Rv_id;       /* opposite vertex in R tet t */
     s_ncell *s;           /* tet NOT in R at push time; re-verified on pop */
     int      opp_lid;
 } heap_entry;
 
-typedef struct { s_dynarray data; } s_heap;
+typedef struct {
+    s_dynarray     data;
+    const s_scplx *dt;
+    s_point        pa, pb, pc;
+} s_heap;
 
-static s_heap heap_init(void)
+static s_heap heap_init(const s_scplx *dt, s_point pa, s_point pb, s_point pc)
 {
-    return (s_heap){ .data = dynarray_initialize(sizeof(heap_entry), 32) };
+    return (s_heap){ .data = dynarray_initialize(sizeof(heap_entry), 32),
+                     .dt = dt, .pa = pa, .pb = pb, .pc = pc };
+}
+
+/* Returns true if event A has a smaller flip time than event B.
+ * τ_A < τ_B  ⟺  sign(D′_A)·sign(D′_B)·sign(D0_B·D′_A − D0_A·D′_B) < 0 */
+/* SoS wrapper for sign(D0_B·D'_A − D0_A·D'_B).
+ * When the unweighted predicate returns 0, iterates all vertex IDs from both
+ * events in ascending order, perturbing one weight at a time until nonzero. */
+static int sign_cross_dprime_sos(
+    s_point aA, s_point bA, s_point cA, s_point LA, s_point RvA,
+    int iaA, int ibA, int icA, int iLA, int iRvA,
+    s_point aB, s_point bB, s_point cB, s_point LB, s_point RvB,
+    int iaB, int ibB, int icB, int iLB, int iRvB,
+    s_point pa, s_point pb, s_point pc)
+{
+    int s = cdt_sign_cross_dprime(
+        aA.x, aA.y, aA.z, bA.x, bA.y, bA.z, cA.x, cA.y, cA.z,
+        LA.x, LA.y, LA.z, RvA.x, RvA.y, RvA.z,
+        aB.x, aB.y, aB.z, bB.x, bB.y, bB.z, cB.x, cB.y, cB.z,
+        LB.x, LB.y, LB.z, RvB.x, RvB.y, RvB.z,
+        pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z);
+    if (s != 0) return s;
+
+    /* collect, sort and deduplicate all vertex IDs from both events */
+    int ids[10] = { iaA, ibA, icA, iLA, iRvA, iaB, ibB, icB, iLB, iRvB };
+    for (int i = 1; i < 10; i++) {
+        int tmp = ids[i], j = i - 1;
+        while (j >= 0 && ids[j] > tmp) { ids[j+1] = ids[j]; j--; }
+        ids[j+1] = tmp;
+    }
+    int unique[10]; int n = 0;
+    for (int i = 0; i < 10; i++)
+        if (n == 0 || unique[n-1] != ids[i]) unique[n++] = ids[i];
+
+    const int idsA[5] = { iaA, ibA, icA, iLA, iRvA };
+    const int idsB[5] = { iaB, ibB, icB, iLB, iRvB };
+
+    for (int k = 0; k < n; k++) {
+        int v = unique[k];
+        double kA[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+        double kB[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+        for (int i = 0; i < 5; i++) {
+            if (idsA[i] == v) kA[i] = 1.0;
+            if (idsB[i] == v) kB[i] = 1.0;
+        }
+        int sv = cdt_sign_cross_dprime_weighted(
+            aA.x, aA.y, aA.z, bA.x, bA.y, bA.z, cA.x, cA.y, cA.z,
+            LA.x, LA.y, LA.z, RvA.x, RvA.y, RvA.z,
+            aB.x, aB.y, aB.z, bB.x, bB.y, bB.z, cB.x, cB.y, cB.z,
+            LB.x, LB.y, LB.z, RvB.x, RvB.y, RvB.z,
+            pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z,
+            kA, kB);
+        if (sv != 0) return sv;
+    }
+    return 0; /* fully degenerate — shouldn't happen in practice */
+}
+
+static bool tau_lt(const heap_entry *A, const heap_entry *B,
+                   const s_scplx *dt, s_point pa, s_point pb, s_point pc)
+{
+    s_point aA  = dt->points.p[A->va],  bA  = dt->points.p[A->vb],
+            cA  = dt->points.p[A->vc],  LA  = dt->points.p[A->L_id],
+            RvA = dt->points.p[A->Rv_id];
+    s_point aB  = dt->points.p[B->va],  bB  = dt->points.p[B->vb],
+            cB  = dt->points.p[B->vc],  LB  = dt->points.p[B->L_id],
+            RvB = dt->points.p[B->Rv_id];
+
+    int raw_dpA = cdt_dprime(aA.x, aA.y, aA.z, bA.x, bA.y, bA.z, cA.x, cA.y, cA.z,
+                             LA.x, LA.y, LA.z, RvA.x, RvA.y, RvA.z,
+                             pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z);
+    int raw_dpB = cdt_dprime(aB.x, aB.y, aB.z, bB.x, bB.y, bB.z, cB.x, cB.y, cB.z,
+                             LB.x, LB.y, LB.z, RvB.x, RvB.y, RvB.z,
+                             pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z);
+
+    /* D'=0 means τ=∞: those events go last */
+    if (raw_dpA == 0 && raw_dpB != 0) return false;
+    if (raw_dpA != 0 && raw_dpB == 0) return true;
+    if (raw_dpA == 0 && raw_dpB == 0) {
+        if (A->Rv_id != B->Rv_id) return A->Rv_id < B->Rv_id;
+        if (A->L_id  != B->L_id)  return A->L_id  < B->L_id;
+        return false;
+    }
+
+    int sDpA = dprime_sos(aA, bA, cA, LA, RvA, A->va, A->vb, A->vc, A->L_id, pa, pb, pc);
+    int sDpB = dprime_sos(aB, bB, cB, LB, RvB, B->va, B->vb, B->vc, B->L_id, pa, pb, pc);
+    int sP   = sign_cross_dprime_sos(
+        aA, bA, cA, LA, RvA, A->va, A->vb, A->vc, A->L_id, A->Rv_id,
+        aB, bB, cB, LB, RvB, B->va, B->vb, B->vc, B->L_id, B->Rv_id,
+        pa, pb, pc);
+
+    return sDpA * sDpB * sP < 0;
 }
 
 static void heap_free(s_heap *h) { dynarray_free(&h->data); }
 static int  heap_empty(const s_heap *h) { return h->data.N == 0; }
 
-static int heap_push(s_heap *h, double tau, int va, int vb, int vc,
-                     s_ncell *s, int opp_lid)
+static int heap_push(s_heap *h, int va, int vb, int vc,
+                     int L_id, int Rv_id, s_ncell *s, int opp_lid)
 {
-    heap_entry e = { tau, va, vb, vc, s, opp_lid };
+    heap_entry e = { va, vb, vc, L_id, Rv_id, s, opp_lid };
     if (!dynarray_push(&h->data, &e)) return 0;
 
     unsigned i = h->data.N - 1;
@@ -528,7 +650,7 @@ static int heap_push(s_heap *h, double tau, int va, int vb, int vc,
         unsigned parent = (i - 1) / 2;
         heap_entry *ei = dynarray_get_ptr(&h->data, i);
         heap_entry *ep = dynarray_get_ptr(&h->data, parent);
-        if (ep->tau <= ei->tau) break;
+        if (!tau_lt(ei, ep, h->dt, h->pa, h->pb, h->pc)) break;
         heap_entry tmp = *ei; *ei = *ep; *ep = tmp;
         i = parent;
     }
@@ -550,18 +672,19 @@ static heap_entry heap_pop_min(s_heap *h)
         unsigned i = 0;
         for (;;) {
             unsigned l = 2*i + 1, r = 2*i + 2, sm = i;
-            heap_entry *es = dynarray_get_ptr(&h->data, sm);
             if (l < h->data.N) {
                 heap_entry *el = dynarray_get_ptr(&h->data, l);
-                if (el->tau < es->tau) { sm = l; es = el; }
+                heap_entry *es = dynarray_get_ptr(&h->data, sm);
+                if (tau_lt(el, es, h->dt, h->pa, h->pb, h->pc)) sm = l;
             }
             if (r < h->data.N) {
                 heap_entry *er = dynarray_get_ptr(&h->data, r);
-                if (er->tau < es->tau) sm = r;
+                heap_entry *es = dynarray_get_ptr(&h->data, sm);
+                if (tau_lt(er, es, h->dt, h->pa, h->pb, h->pc)) sm = r;
             }
             if (sm == i) break;
             heap_entry *ei = dynarray_get_ptr(&h->data, i);
-            es = dynarray_get_ptr(&h->data, sm);
+            heap_entry *es = dynarray_get_ptr(&h->data, sm);
             heap_entry tmp = *ei; *ei = *es; *es = tmp;
             i = sm;
         }
@@ -576,14 +699,11 @@ static heap_entry heap_pop_min(s_heap *h)
 static bool tet_in_R(const s_scplx *dt, const s_ncell *nc,
                      s_point pa, s_point pb, s_point pc)
 {
-    bool above = false, below = false;
-    for (int j = 0; j < 4; j++) {
-        s_point q = dt->points.p[nc->vertex_id[j]];
-        int side = test_orientation((s_point[3]){pa, pb, pc}, q);
-        if (side > 0) above = true;
-        if (side < 0) below = true;
-    }
-    return above && below;
+    s_point tri[3] = {pa, pb, pc};
+    s_point tet[4];
+    for (int j = 0; j < 4; j++) tet[j] = dt->points.p[nc->vertex_id[j]];
+    return test_triangle_tetrahedron_intersect(tri, tet, 0.0)
+           == INTERSECT_NONDEGENERATE;
 }
 
 /* --- find_region_R_boundary (Step 4) ------------------------------------ */
@@ -738,10 +858,6 @@ static int flipinsertfacet(s_scplx *dt, int va, int vb, int vc,
         return 1;
     }
 
-    s_point h_normal = normalize_vec(
-        cross_prod(subtract_points(pb, pa), subtract_points(pc, pa)), 1e-12);
-    s_point h_point  = pa;
-
     int ret = 0;
     s_dynarray boundary = {0};
     s_dynarray in_R     = {0};
@@ -756,7 +872,7 @@ static int flipinsertfacet(s_scplx *dt, int va, int vb, int vc,
 
     unsigned diag_n_R = in_R.N, diag_n_bnd = boundary.N;
 
-    Q = heap_init();
+    Q = heap_init(dt, pa, pb, pc);
     if (!Q.data.items) goto cleanup;
 
     int diag_pushed = 0;
@@ -765,8 +881,9 @@ static int flipinsertfacet(s_scplx *dt, int va, int vb, int vc,
         s_ncell *s; int opp_lid;
         if (!find_boundary_face_s(dt, pa, pb, pc, fids[0], fids[1], fids[2], &s, &opp_lid))
             continue;
-        double tau = certify(dt, s, opp_lid, h_normal, h_point);
-        if (tau >= 0.0) { heap_push(&Q, tau, fids[0], fids[1], fids[2], s, opp_lid); diag_pushed++; }
+        int L_id = -1, Rv_id = -1;
+        if (certify(dt, s, opp_lid, pa, pb, pc, &L_id, &Rv_id) == CERTIFY_EVENT)
+            { heap_push(&Q, fids[0], fids[1], fids[2], L_id, Rv_id, s, opp_lid); diag_pushed++; }
     }
     dynarray_free(&boundary);
     dynarray_free(&in_R);
@@ -807,9 +924,9 @@ static int flipinsertfacet(s_scplx *dt, int va, int vb, int vc,
                 }
                 if (nb_opp < 0) continue;
 
-                double tau = certify(dt, nb, nb_opp, h_normal, h_point);
-                if (tau >= 0.0)
-                    heap_push(&Q, tau, fids[0], fids[1], fids[2], nb, nb_opp);
+                int L_id = -1, Rv_id = -1;
+                if (certify(dt, nb, nb_opp, pa, pb, pc, &L_id, &Rv_id) == CERTIFY_EVENT)
+                    heap_push(&Q, fids[0], fids[1], fids[2], L_id, Rv_id, nb, nb_opp);
             }
         }
     }
@@ -818,17 +935,19 @@ static int flipinsertfacet(s_scplx *dt, int va, int vb, int vc,
         mark_constrained_face(constrained, va, vb, vc);
         ret = 1;
     } else {
-        s_point cross = cross_prod(subtract_points(pb, pa), subtract_points(pc, pa));
-        double cross_mag = sqrt(cross.x*cross.x + cross.y*cross.y + cross.z*cross.z);
-        fprintf(stderr,
-            "flipinsertfacet: heap exhausted for face (%d,%d,%d)\n"
-            "  pa=(%.3f,%.3f,%.3f) pb=(%.3f,%.3f,%.3f) pc=(%.3f,%.3f,%.3f)\n"
-            "  |cross|=%.4e  h_normal=(%.4e,%.4e,%.4e)\n"
-            "  in_R=%u  boundary=%u  pushed=%d  flipped=%d  not_flipped=%d  stale=%d  constrained_skip=%d\n",
-            va, vb, vc,
-            pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z,
-            cross_mag, h_normal.x, h_normal.y, h_normal.z,
-            diag_n_R, diag_n_bnd, diag_pushed, diag_flipped, diag_notflipped, diag_stale, diag_constr);
+        (void)diag_n_R; (void)diag_n_bnd; (void)diag_pushed; (void)diag_flipped; (void)diag_notflipped; 
+        (void)diag_stale; (void)diag_constr;
+        // s_point cross = cross_prod(subtract_points(pb, pa), subtract_points(pc, pa));
+        // double cross_mag = sqrt(cross.x*cross.x + cross.y*cross.y + cross.z*cross.z);
+        // fprintf(stderr,
+            // "flipinsertfacet: heap exhausted for face (%d,%d,%d)\n"
+            // "  pa=(%.3f,%.3f,%.3f) pb=(%.3f,%.3f,%.3f) pc=(%.3f,%.3f,%.3f)\n"
+            // "  |cross|=%.4e\n"
+            // "  in_R=%u  boundary=%u  pushed=%d  flipped=%d  not_flipped=%d  stale=%d  constrained_skip=%d\n",
+            // va, vb, vc,
+            // pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z,
+            // cross_mag,
+            // diag_n_R, diag_n_bnd, diag_pushed, diag_flipped, diag_notflipped, diag_stale, diag_constr);
     }
 
 cleanup:
@@ -846,24 +965,22 @@ cleanup:
  * ----------------------------------------------------------------------- */
 
 #define POINT_IN_TRIMESH_MAX_RETRIES 10
-#define CDT_MAX_ITERATIONS 20
-
 s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
                                          double EPS_DEG, double TOL)
 {
     if (!trimesh_is_valid(mesh)) return (s_scplx){0};
 
-    /* Mutable working copy: ridge protection and face Steiner splits accumulate here. */
     s_trimesh working = copy_trimesh(mesh);
     if (!trimesh_is_valid(&working)) return (s_scplx){0};
 
     s_scplx dt = {0};
 
+#define CDT_MAX_ITERATIONS 64
     for (int iter = 0; iter < CDT_MAX_ITERATIONS; iter++) {
+        /* ---- Phase A: build DT and ensure all boundary edges are present ---- */
         fprintf(stderr, "[CDT] iter %d: Phase A: DT + ridge protection (%d verts, %d faces) ...\n",
                 iter, working.points.N, working.Nf); fflush(stderr);
 
-        /* ---- Phase A: build DT and ensure all boundary edges are present ---- */
         s_dt_builder b = dt_builder_begin(&working.points, NULL, TOL, NULL, NULL);
         if (!b._stack) { free_trimesh(&working); return (s_scplx){0}; }
 
@@ -872,14 +989,10 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
             free_complex(&tmp); free_trimesh(&working); return (s_scplx){0};
         }
 
-        /* Strip sentinels; compaction shifts indices by -4, matching working.faces. */
         dt = dt_builder_end(&b, false, NULL, NULL, 0);
         if (!dt.head) { free_trimesh(&working); return (s_scplx){0}; }
 
-        /* Sync working.points with the full compacted DT point set (which includes
-         * any ridge Steiner points added by ensure_ridge_protected to the builder).
-         * Without this, the next face-split Steiner gets an ID that collides with
-         * the ridge Steiner IDs already in working.faces. */
+        /* Sync working.points with the compacted DT point set (includes ridge Steiners). */
         {
             s_point *p = malloc((size_t)dt.points.N * sizeof(s_point));
             if (!p) { free_complex(&dt); free_trimesh(&working); return (s_scplx){0}; }
@@ -889,75 +1002,92 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
             working.points.N = dt.points.N;
         }
 
-        /* ---- Phase B: insert boundary faces; stop at first failure ---- */
+        /* ---- Phase B: FIFO queue of faces ------------------------------------ */
         fprintf(stderr, "[CDT] iter %d: Phase B: inserting %d boundary faces ...\n",
                 iter, working.Nf); fflush(stderr);
 
         s_hash_table constrained;
         if (!hash_init(&constrained, sizeof(int[3]), sizeof(int),
-                       (size_t)(working.Nf * 2 + 1), (size_t)working.Nf,
+                       (size_t)(working.Nf * 4 + 1), (size_t)(working.Nf * 2),
                        face_triple_hash, face_triple_eq, NULL)) {
             free_complex(&dt); free_trimesh(&working); return (s_scplx){0};
         }
 
-        int failed_va = -1, failed_vb = -1, failed_vc = -1;
+        s_dynarray face_queue = dynarray_initialize(sizeof(int[3]), (size_t)working.Nf + 64);
+        if (!face_queue.items) {
+            hash_free(&constrained); free_complex(&dt); free_trimesh(&working); return (s_scplx){0};
+        }
 
+        /* Pre-mark faces already present in the DT (from previous iterations). */
         for (int fi = 0; fi < working.Nf; fi++) {
-            if (fi % 500 == 0) { fprintf(stderr, "[CDT]   face %d / %d\n", fi, working.Nf); fflush(stderr); }
             int va = working.faces[fi*3], vb = working.faces[fi*3+1], vc = working.faces[fi*3+2];
-            s_point pa = dt.points.p[va], pb = dt.points.p[vb], pc = dt.points.p[vc];
-            if (!flipinsertfacet(&dt, va, vb, vc, &constrained, pa, pb, pc)) {
-                failed_va = va; failed_vb = vb; failed_vc = vc;
-                break;
+            if (face_in_dt(&dt, va, vb, vc)) {
+                mark_constrained_face(&constrained, va, vb, vc);
+            } else {
+                int triple[3] = {va, vb, vc};
+                if (!dynarray_push(&face_queue, triple)) {
+                    dynarray_free(&face_queue); hash_free(&constrained);
+                    free_complex(&dt); free_trimesh(&working); return (s_scplx){0};
+                }
             }
         }
 
+        int failed_va = -1, failed_vb = -1, failed_vc = -1;
+        size_t front = 0;
+
+        while (front < face_queue.N) {
+            int triple[3];
+            memcpy(triple, dynarray_get_ptr(&face_queue, front++), sizeof(triple));
+            int va = triple[0], vb = triple[1], vc = triple[2];
+
+            if (is_constrained_face(&constrained, va, vb, vc)) continue;
+
+            if ((front - 1) % 500 == 0)
+                fprintf(stderr, "[CDT]   face %u / %u\n",
+                        (unsigned)(front - 1), (unsigned)face_queue.N);
+
+            s_point pa = dt.points.p[va], pb = dt.points.p[vb], pc = dt.points.p[vc];
+
+            if (flipinsertfacet(&dt, va, vb, vc, &constrained, pa, pb, pc)) continue;
+
+            failed_va = va; failed_vb = vb; failed_vc = vc;
+            break;
+        }
+
+        dynarray_free(&face_queue);
         hash_free(&constrained);
 
-        if (failed_va < 0) break; /* All faces inserted — done with Phase B */
+        if (failed_va < 0) break; /* All faces inserted — done */
 
-        /* Steiner at the centroid of the failing face, 3-way split.
-         *
-         * The centroid C = (va+vb+vc)/3 is equidistant from all three face vertices.
-         * This equidistance means the rebuilt Phase-A DT naturally connects C to va,
-         * vb, and vc, so the three new ridge connections (va,C),(vb,C),(vc,C) ARE DT
-         * edges after the rebuild and ensure_ridge_protected does not cascade.
-         * Alternative Steiners (crossing-edge intersection, edge midpoint) are
-         * asymmetrically positioned so their connection to the opposite vertex may
-         * not be a DT edge, triggering exponential cascade. */
+        fprintf(stderr, "[CDT] iter %d: face (%d,%d,%d) needs Steiner; restarting ...\n",
+                iter, failed_va, failed_vb, failed_vc); fflush(stderr);
+
+        /* Discard DT; add centroid Steiner to working and split the failed face → 3. */
+        free_complex(&dt);
+        dt = (s_scplx){0};
+
         {
             int va = failed_va, vb = failed_vb, vc = failed_vc;
-            s_point pa = working.points.p[va], pb = working.points.p[vb], pc = working.points.p[vc];
 
-            s_point steiner = {
-                .x = (pa.x + pb.x + pc.x) * (1.0/3.0),
-                .y = (pa.y + pb.y + pc.y) * (1.0/3.0),
-                .z = (pa.z + pb.z + pc.z) * (1.0/3.0),
-            };
-
-            fprintf(stderr, "[CDT] iter %d: face (%d,%d,%d) Steiner at centroid"
-                    " (%.4f,%.4f,%.4f); restarting ...\n",
-                    iter, va, vb, vc, steiner.x, steiner.y, steiner.z);
-            fflush(stderr);
-
-            free_complex(&dt); dt = (s_scplx){0};
-
-            /* Find the face slot (match by vertex triple). */
             int fi_found = -1;
             for (int fi = 0; fi < working.Nf; fi++) {
-                if (working.faces[fi*3]==va && working.faces[fi*3+1]==vb &&
-                    working.faces[fi*3+2]==vc) { fi_found = fi; break; }
+                if (working.faces[fi*3]==va && working.faces[fi*3+1]==vb && working.faces[fi*3+2]==vc) {
+                    fi_found = fi; break;
+                }
             }
             if (fi_found < 0) { free_trimesh(&working); return (s_scplx){0}; }
 
+            s_point pa = working.points.p[va], pb = working.points.p[vb], pc = working.points.p[vc];
+            s_point centroid = { .x = (pa.x+pb.x+pc.x)*(1.0/3.0),
+                                 .y = (pa.y+pb.y+pc.y)*(1.0/3.0),
+                                 .z = (pa.z+pb.z+pc.z)*(1.0/3.0) };
             int new_id = working.points.N;
             s_point *new_pts = realloc(working.points.p, (size_t)(new_id+1) * sizeof(s_point));
             if (!new_pts) { free_trimesh(&working); return (s_scplx){0}; }
             working.points.p = new_pts;
-            working.points.p[new_id] = steiner;
+            working.points.p[new_id] = centroid;
             working.points.N = new_id + 1;
 
-            /* Split face fi_found → 3 sub-faces (reuse slot, append two). */
             int new_Nf = working.Nf + 2;
             int     *nf = realloc(working.faces,    (size_t)new_Nf * 3 * sizeof(int));
             s_point *nn = realloc(working.fnormals, (size_t)new_Nf     * sizeof(s_point));
@@ -965,17 +1095,15 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
             working.faces = nf; working.fnormals = nn;
 
             s_point fn = working.fnormals[fi_found];
-            working.faces[fi_found*3]         = va;  working.faces[fi_found*3+1]         = vb;
-            working.faces[fi_found*3+2]       = new_id; working.fnormals[fi_found]       = fn;
-            working.faces[working.Nf*3]       = vb;  working.faces[working.Nf*3+1]       = vc;
-            working.faces[working.Nf*3+2]     = new_id; working.fnormals[working.Nf]     = fn;
-            working.faces[(working.Nf+1)*3]   = vc;  working.faces[(working.Nf+1)*3+1]   = va;
-            working.faces[(working.Nf+1)*3+2] = new_id; working.fnormals[working.Nf+1]   = fn;
-
+            working.faces[fi_found*3]       = va;     working.faces[fi_found*3+1]       = vb;
+            working.faces[fi_found*3+2]     = new_id; working.fnormals[fi_found]        = fn;
+            working.faces[working.Nf*3]     = vb;     working.faces[working.Nf*3+1]     = vc;
+            working.faces[working.Nf*3+2]   = new_id; working.fnormals[working.Nf]      = fn;
+            working.faces[(working.Nf+1)*3]   = vc;   working.faces[(working.Nf+1)*3+1] = va;
+            working.faces[(working.Nf+1)*3+2] = new_id; working.fnormals[working.Nf+1]  = fn;
             free(working.adjacency); working.adjacency = NULL;
             working.Nf = new_Nf;
         }
-        /* Continue outer loop → rebuild Phase A with extended working mesh */
     }
 
     free_trimesh(&working);

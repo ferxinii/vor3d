@@ -5,7 +5,6 @@
 #include "scplx.h"
 #include "points.h"
 #include "gtests.h"
-#include "hash.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -500,8 +499,8 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
     int o0 = test_orientation((s_point[3]){point_p, face_points[0], face_points[1]}, point_d);
     int o1 = test_orientation((s_point[3]){point_p, face_points[1], face_points[2]}, point_d);
     int o2 = test_orientation((s_point[3]){point_p, face_points[2], face_points[0]}, point_d);
-    assert((o0 == 0) + (o1 == 0) + (o2 == 0) == 1 ||
-           (o0 == 0) + (o1 == 0) + (o2 == 0) == 2);
+    /* Expected: 1 or 2 edges coplanar with pd (ridge through edge or vertex). */
+    assert((o0==0)+(o1==0)+(o2==0) >= 1 && (o0==0)+(o1==0)+(o2==0) <= 2);
 
     int AUX_ridge_id_2[2];  int k=0;
     if (o0 == 0) { AUX_ridge_id_2[k++] = id_where_equal_int(ncell->vertex_id, 4, face_vid[2]); }
@@ -973,8 +972,7 @@ static bool point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point 
     else return false;
 }
 
-static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored,
-                             s_hash_table *constrained)
+static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored)
 {   /* -1: ERROR, 0: not inserted, 1: inserted */
     s_point point = scplx->points.p[point_id];
     s_ncell *container_ncell = in_ncell_walk(scplx, point);
@@ -987,37 +985,14 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
 
     if (!flip14(scplx, container_ncell, point_id, stack)) return -1;
 
-    /* Bowyer-Watson flip loop.  Each entry on the stack is a cell containing
-     * point_id.  We check only opposite[local_p] -- the single face of that
-     * cell that is opposite point_id (an outer boundary face of the star of p).
-     * The invariant is: interior faces of the star (shared between two cells
-     * that both contain p) are always locally Delaunay after flip14/flip23/flip32.
-     * flip44 breaks this invariant and must therefore check its own interior
-     * faces explicitly before returning (see the comment there). */
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
-        /* The flip23 interior guard can push tets that don't contain point_id;
-         * skip them here rather than crashing in id_where_equal_int. */
         if (!inarray(current->vertex_id, 4, point_id)) continue;
         int opp_cell_id = id_where_equal_int(current->vertex_id, 4, point_id);
         if (!current->opposite[opp_cell_id]) continue;
 
-        /* Constrained-aware BW: do not expand the cavity across a constrained face.
-         * This keeps previously-inserted CDT faces in the triangulation after a
-         * Steiner insertion, so Phase B never needs to restart from scratch. */
-        if (constrained) {
-            int fids[3];
-            extract_ids_face(current, 2, &opp_cell_id, fids);
-            if (fids[0] > fids[1]) { int t = fids[0]; fids[0] = fids[1]; fids[1] = t; }
-            if (fids[1] > fids[2]) { int t = fids[1]; fids[1] = fids[2]; fids[2] = t; }
-            if (fids[0] > fids[1]) { int t = fids[0]; fids[0] = fids[1]; fids[1] = t; }
-            if (hash_get(constrained, fids)) continue;
-        }
-
-        /* Zero-volume CASE_P_IN_EDGE tets have insphere=0 → NONSTRICT treats them as
-         * locally Delaunay and skips them.  Force a flip so the collinear-edge cascade
-         * completes.  Must come before the d==p guard: flip_tetrahedra handles d==p via
-         * ring-of-3 flip32 in its CASE_P_IN_EDGE branch. */
+        /* Zero-volume tets (point on a DT edge) have insphere=0 so NONSTRICT skips them.
+         * Force a flip to let the collinear-edge cascade complete. */
         {
             s_point face_pts[3];
             extract_vertices_face(scplx, current, 2, &opp_cell_id, face_pts);
@@ -1030,6 +1005,7 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
             if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored, NULL, NULL) == -1) return -1;
         }
     }
+
     return 1;
 }
 
@@ -1048,30 +1024,7 @@ int scplx_insert_point(s_scplx *dt, s_point p, double TOL)
     s_dstack stack = stack_create();
     if (!stack.entry) { free(ignored); dt->points.N--; return -1; }
 
-    int res = insert_one_point(dt, new_id, &stack, TOL, ignored, NULL);
-    stack_free(&stack);
-    free(ignored);
-
-    if (res <= 0) { dt->points.N--; return -1; }
-    return new_id;
-}
-
-int scplx_insert_point_cdt(s_scplx *dt, s_point p, double TOL, s_hash_table *constrained)
-{
-    int new_id = dt->points.N;
-    s_point *tmp = realloc(dt->points.p, (size_t)(new_id + 1) * sizeof(s_point));
-    if (!tmp) return -1;
-    dt->points.p = tmp;
-    dt->points.p[new_id] = p;
-    dt->points.N = new_id + 1;
-
-    bool *ignored = calloc((size_t)(new_id + 1), sizeof(bool));
-    if (!ignored) { dt->points.N--; return -1; }
-
-    s_dstack stack = stack_create();
-    if (!stack.entry) { free(ignored); dt->points.N--; return -1; }
-
-    int res = insert_one_point(dt, new_id, &stack, TOL, ignored, constrained);
+    int res = insert_one_point(dt, new_id, &stack, TOL, ignored);
     stack_free(&stack);
     free(ignored);
 
@@ -1178,7 +1131,7 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
     }
 
     for (int ii = 4; ii < b.dt.points.N; ii++) {
-        if (insert_one_point(&b.dt, ii, stack, TOL_dup, ignored, NULL) == -1) {
+        if (insert_one_point(&b.dt, ii, stack, TOL_dup, ignored) == -1) {
             free(ignored); stack_free(stack); free(stack);
             free_complex(&b.dt);
             return (s_dt_builder){0};
@@ -1284,7 +1237,7 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
 
     s_dstack *stack = (s_dstack *)b->_stack;
     for (int i = N_old; i < N_new; i++)
-        if (insert_one_point(&b->dt, i, stack, TOL_dup, b->_ignored, NULL) == -1)
+        if (insert_one_point(&b->dt, i, stack, TOL_dup, b->_ignored) == -1)
             return false;
 
     return true;
