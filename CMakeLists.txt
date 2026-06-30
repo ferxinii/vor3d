@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(vor3d LANGUAGES C)
+project(vor3d LANGUAGES C CXX)
 
 if (NOT TARGET geometry)
     add_subdirectory(external/geometry)
@@ -9,11 +9,16 @@ if (NOT TARGET gnuplotC)
     add_subdirectory(external/gnuplotC)
 endif()
 
+if (NOT TARGET implicit_predicates)
+    add_subdirectory(external/implicit_predicates)
+endif()
+
 add_library(vor3d STATIC
     src/vor3d.c
     src/bpoly.c
-    src/delaunay.c
-    src/delaunay_constrained.c
+    src/dt.c
+    src/cdt.c
+    src/cdt_predicates.cpp
     src/scplx.c
     src/acplx.c
     src/vdiagram.c
@@ -27,10 +32,11 @@ target_include_directories(vor3d
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(vor3d 
+target_link_libraries(vor3d
     PRIVATE
         gnuplotC
         voronoi_predicates
+        implicit_predicates
     PUBLIC
         geometry  # Users need to know about s_point
 )
