@@ -4,7 +4,7 @@
  * block of memory, and if more space is needed, it doubles its size. If
  * items are removed, the space is kept as is, in case the arr grows again.
  *
- * Copyright (c) 2026 Fernando Muñoz
+ * Copyright (c) 2026 Fernando Munoz
  * MIT License. See bottom of file.
  */
 
@@ -29,6 +29,7 @@ typedef struct dynarray {
 static inline s_dynarray dynarray_initialize(size_t item_size, size_t Nmax);  /* (s_dynarray){0} if ERROR */
 static inline void dynarray_free(s_dynarray *arr);
 static inline void dynarray_memset0(s_dynarray *arr);  /* Sets allocated memory to 0. */
+static inline void dynarray_clear(s_dynarray *arr);    /* Resets N to 0, keeps allocation. */
 static inline int dynarray_ensure_capacity(s_dynarray *arr, size_t need);  
 static inline int dynarray_push(s_dynarray *arr, const void *elem);  
 static inline int dynarray_change_entry(s_dynarray *arr, unsigned id, const void *elem);  
@@ -63,6 +64,8 @@ static inline void dynarray_memset0(s_dynarray *arr)
 {
     memset(arr->items, 0, arr->item_size * arr->Nmax);
 }
+
+static inline void dynarray_clear(s_dynarray *arr) { arr->N = 0; }
 
 static inline int dynarray_ensure_capacity(s_dynarray *arr, size_t need) 
 {   
@@ -105,6 +108,12 @@ static inline void *dynarray_get_ptr(s_dynarray *arr, size_t id)
 	return (uint8_t*)arr->items + id * arr->item_size;
 }
 
+static inline const void *dynarray_get_ptr_c(const s_dynarray *arr, size_t id)
+{
+	if (!arr || id >= arr->N) return NULL;
+	return (const uint8_t*)arr->items + id * arr->item_size;
+}
+
 static inline int dynarray_get_value(const s_dynarray *arr, size_t id, void *out)
 {
 	if (!arr || !out || id >= arr->N) return 0;
@@ -128,7 +137,7 @@ static inline int dynarray_pop(s_dynarray *arr, void *out_elem)
 
 /* MIT License.
  *
- * Copyright (c) 2026 Fernando Muñoz.
+ * Copyright (c) 2026 Fernando Munoz.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal

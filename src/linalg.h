@@ -1,7 +1,7 @@
 /* 
  * Header-only library to solve systems of equations.
  *
- * Copyright (c) 2026 Fernando Muñoz
+ * Copyright (c) 2026 Fernando Munoz
  * MIT License. See bottom of file.
  */
 
@@ -135,7 +135,7 @@ static inline int solve_NxN_ppivot(int N, const double *A, const double *b, doub
 
 /* MIT License.
  *
- * Copyright (c) 2026 Fernando Muñoz.
+ * Copyright (c) 2026 Fernando Munoz.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal

@@ -101,11 +101,22 @@ static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud, int *out_kept
 /*
  * Single attempt: builds the diagram once and reports success/failure via
  * vdiagram_is_valid on the result -- no retries, no TOL/EPS_DEG escalation.
+ *
+ * out_dt (nullable): if non-NULL, ownership of the finalized seed DT (the one
+ * voronoi_from_delaunay_3d was built from -- real seeds at vertex ids 0..Nreal-1,
+ * matching vd.vcells[].seed_id) is transferred to *out_dt instead of being freed
+ * here; the caller must free_complex() it. Used by Stage C (ncvx.c) to get the
+ * Delaunay dual for cell adjacency.
  */
 static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
                              f_seed_generator f_seeds, seed_userdata ud, int (*randint)(void*, int),
-                             void *rctx, s_dynarray *buff_points, int *out_kept_idx)
+                             void *rctx, s_dynarray *buff_points, int *out_kept_idx,
+                             s_scplx *out_dt)
 {
+    /* Zeroed so every early-return path below (before the DT is even built)
+     * leaves *out_dt safe to free_complex() unconditionally in the caller. */
+    if (out_dt) *out_dt = (s_scplx){0};
+
     s_points seeds = f_seeds(bp, ud, out_kept_idx);
     int Nreal = seeds.N;
 
@@ -152,7 +163,10 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
     s_scplx dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
                                 out_kept_idx ? ud.generator.seeds.N : 0);
     s_vdiagram vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_DEG, ud.TOL);
-    free_complex(&dt);
+    /* Ownership transfers to *out_dt (caller frees it) regardless of whether vd
+     * below turns out valid -- simpler contract than conditioning it on success. */
+    if (out_dt) *out_dt = dt;
+    else free_complex(&dt);
     free_points(&seeds);
 
     if (vd.seeds.N == 0) {
@@ -190,7 +204,22 @@ s_vdiagram vor3d_in_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_
     seed_userdata ud = {.generator.seeds = copy_points(seeds),
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
     return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud,
-                      randint, rctx, buff_points, out_kept_idx);
+                      randint, rctx, buff_points, out_kept_idx, NULL);
+}
+
+
+/* Same as vor3d_in_bp, but also hands back the seed DT ownership in *out_dt
+ * (caller must free_complex() it) instead of freeing it internally. Used by
+ * Stage C (ncvx.c) to get the Delaunay dual for cell adjacency. */
+s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
+                          double EPS_DEG, double TOL, int (*randint)(void*, int),
+                          void *rctx, s_dynarray *buff_points, int *out_kept_idx,
+                          s_scplx *out_dt)
+{
+    seed_userdata ud = {.generator.seeds = copy_points(seeds),
+                        .EPS_DEG = EPS_DEG, .TOL = TOL};
+    return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud,
+                      randint, rctx, buff_points, out_kept_idx, out_dt);
 }
 
 
@@ -216,7 +245,7 @@ s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_par
                                            .randint = randint, .randd01 = randd01, .rctx = rctx },
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
     return vor3d_core(bp, vol_max_rel_diff, &PDS_generator, ud,
-                      randint, rctx, buff_points, NULL);
+                      randint, rctx, buff_points, NULL, NULL);
 }
 
 

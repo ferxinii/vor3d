@@ -11,6 +11,11 @@ typedef struct simplical_complex {  // May in stack
     struct ncell *head;  // Linked list of ncells
     int mark_stamp;
     struct ncell **point2tet;  // [v] = one tet containing vertex v; NULL if unused
+    int exact_ids;  // 0 = coordinate predicates (default); 1 = cdt_predicates by vertex id.
+                    // Set only for CDT builds (see dt_predseam.h); must be zero for weighted.
+    const int *l2g_ids;  // exact mode only: translate this scplx's local vertex id ->
+                         // cdt_predicates registry id.  NULL = identity (the global CDT DT).
+                         // Non-NULL for Phase B local cavity DTs (their ids are local).
 } s_scplx;
 
 
@@ -20,6 +25,8 @@ typedef struct ncell {  // Must live in heap
     struct ncell *next;  // Linked list of cells
     struct ncell *prev;
     int mark_token;  // Used to mark particular ncells: mark_token == mark_stamp
+    int mark_token2; // Private traversal mark for ncells_incident_face, so its
+                     // flood-fill never clobbers a caller's mark_token dedup.
     bool mask_alpha;  // if it belongs to the alpha complex (for a given alpha)
     bool in_stack;
 } s_ncell;
@@ -37,6 +44,7 @@ void print_scomplex(const s_scplx *scplx);
 int test_point_in_ncell(const s_scplx *scplx, const s_ncell *ncell, s_point query);
 s_ncell *bruteforce_find_ncell_containing(const s_scplx *scplx, s_point p);
 s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p);
+s_ncell *in_ncell_walk_id(const s_scplx *scplx, int point_id);  /* walk by registered point id (seam-routed) */
 void plot_dt_3d_differentviews(const s_scplx *scplx, char *f_name, s_point ranges[2]);
 
 

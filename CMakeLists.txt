@@ -10,7 +10,7 @@ if (NOT TARGET gnuplotC)
 endif()
 
 if (NOT TARGET implicit_predicates)
-    add_subdirectory(external/implicit_predicates)
+    add_subdirectory(external/implicit_predicates)  # used by cdt_predicates.cpp (CDT)
 endif()
 
 add_library(vor3d STATIC
@@ -36,7 +36,7 @@ target_link_libraries(vor3d
     PRIVATE
         gnuplotC
         voronoi_predicates
-        implicit_predicates
+        implicit_predicates  # used by cdt_predicates.cpp (CDT)
     PUBLIC
         geometry  # Users need to know about s_point
 )

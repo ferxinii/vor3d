@@ -37,12 +37,9 @@ typedef struct vdiagram {
 
 /* ---- Non-convex domain and diagram ---- */
 
-typedef struct ncvx_tet s_ncvx_tet;  /* opaque: full definition in ncvx.c */
-
 typedef struct ncvx_domain {
     s_trimesh   surface;        /* boundary mesh (owns memory) */
-    s_ncvx_tet *tets;           /* interior tetrahedra (owns memory) */
-    int         N_tets;
+    s_scplx     cdt;            /* CDT of the interior (interior tets; owns memory) */
     double      domain_volume;  /* sum of interior tet volumes */
     s_bpoly     bpoly;          /* convex hull of surface.points; used for mirroring */
     void       *spatial_index;  /* NULL in MVP */

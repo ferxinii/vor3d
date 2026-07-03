@@ -49,6 +49,7 @@ typedef struct {
     s_point _bbox_max;          /* accumulated bbox max of all real points inserted so far */
     s_point _sentinel_center;   /* centroid of the four sentinel vertices (fixed after begin) */
     double  _sentinel_inradius; /* current inscribed-sphere radius of the big tetrahedron */
+    int    *_l2g_ids;  /* owned local->global id map for exact-local builds; NULL otherwise */
 } s_dt_builder;
 
 /* Phase 1: build DT of seeds, keep big tetra in place.
@@ -59,9 +60,30 @@ typedef struct {
 s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, double TOL_dup,
                                const s_point *bb_min_hint, const s_point *bb_max_hint);
 
+/* Exact-id build (CDT): all builder predicates run on the cdt_predicates
+ * registry (registry index == scplx point index), no weights.  Requires
+ * cdt_predicates_init() to have been called; clears and repopulates the
+ * registry for the seeds.  Add Steiners with dt_builder_extend_lnc. */
+s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
+                                    const s_point *bb_min_hint, const s_point *bb_max_hint);
+
+/* Exact-id build of a LOCAL cavity DT (Phase B): predicates run on the SAME
+ * cdt_predicates registry as the global CDT DT, without clearing it.  seeds are
+ * the cavity vertex coords; l2g_real[i] is the registry id of seed i.  The 4
+ * local big-tetra sentinels are registered into scratch registry slots
+ * [scratch_base .. scratch_base+3] (reserve them past the global point count).
+ * Vertex ids stay local (sentinels 0..3, seeds 4+i); the seam translates. */
+s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
+                                          const int *l2g_real, int n, int scratch_base);
+
 /* Phase 2: insert additional points (e.g. mirrors) into the existing DT.
  * Returns false on error. */
 bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_dup);
+
+/* Insert one implicit Steiner s*V[v1] + (1-s)*V[v2] (cdt_point_set_lnc
+ * convention) into an exact-id builder; registers the exact LNC and stores the
+ * rounded double in points.p.  Returns false on error. */
+bool dt_builder_extend_lnc(s_dt_builder *b, int v1, int v2, double s, double TOL_dup);
 
 /* Phase 3: remove big tetra cells, compact points, free builder state.
  * If out_Nreal != NULL, sets *out_Nreal = count of surviving original seeds.
@@ -103,17 +125,6 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
 /* Insert a single point into an existing (sentinel-stripped) DT via Bowyer-Watson.
  * Returns the new point index on success, -1 on failure or near-duplicate. */
 int scplx_insert_point(s_scplx *dt, s_point p, double TOL);
-
-
-
-/* Force a bistellar flip on the face shared between ncell and
- * ncell->opposite[opp_cell_id], bypassing the Delaunay criterion.
- * Returns 1 if flipped, 0 if not flippable, -1 on error.
- * If out_new is non-NULL it receives up to 4 pointers to the new/modified tets;
- * out_n_new receives their count (2 for flip32, 3 for flip23, 4 for flip44).
- * Both may be NULL. */
-int dt_flip_face(s_scplx *dt, s_ncell *ncell, int opp_cell_id,
-                 s_ncell **out_new, int *out_n_new);
 
 
 #endif

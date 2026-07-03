@@ -19,11 +19,11 @@ void cdt_point_set_explicit(int id, double x, double y, double z);
  * v1 and v2 must already be registered as explicit points. */
 void cdt_point_set_lnc(int id, int v1, int v2, double t);
 
-/* orient3D — returns -1, 0, or +1.
+/* orient3D -- returns -1, 0, or +1.
  * Arguments are DT point indices; any may be explicit or LNC. */
 int cdt_orient3d(int a, int b, int c, int d);
 
-/* inSphere — returns -1 (inside), 0 (on), +1 (outside).
+/* inSphere -- returns -1 (inside), 0 (on), +1 (outside).
  * Arguments are DT point indices; any may be explicit or LNC. */
 int cdt_insphere(int a, int b, int c, int d, int e);
 
@@ -51,6 +51,13 @@ int cdt_inner_segs_cross(int a, int b, int p, int q);
 /* TRUE if point p is strictly inside (not on boundary of) triangle <a,b,c>.
  * Points are assumed coplanar; tries all three axis projections. */
 int cdt_point_in_inner_tri(int p, int a, int b, int c);
+
+/* Point p vs triangle <a,b,c>: -1 OUTSIDE, 0 on BOUNDARY, +1 strictly INSIDE.
+ * Mirrors test_point_in_triangle_3D(.,0,0) (OUT if not coplanar). */
+int cdt_point_in_triangle(int p, int a, int b, int c);
+
+/* TRUE if the CLOSED segments <s1,s2> and <p,q> cross (coplanar inputs). */
+int cdt_segments_cross(int s1, int s2, int p, int q);
 
 /* Get approximate float coordinates of any registered point (explicit or LNC).
  * For DT insertion of Steiner points. Returns 0 if id is out of range. */

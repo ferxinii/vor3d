@@ -21,6 +21,16 @@ s_vdiagram vor3d_in_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_
                        double EPS_DEG, double TOL, int (*randint)(void*, int),
                        void *rctx, s_dynarray *buff_points, int *out_kept_idx);
 
+// Same as vor3d_in_bp, but also transfers ownership of the seed DT to *out_dt
+// (caller must free_complex() it) instead of freeing it internally. Real seeds
+// occupy DT vertex ids 0..vd.seeds.N-1, matching vd.vcells[].seed_id -- so
+// vertex_neighbors() on this DT gives the Voronoi cell adjacency (Delaunay dual).
+// Internal use by Stage C (ncvx.c); not needed by ordinary callers.
+s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
+                          double EPS_DEG, double TOL, int (*randint)(void*, int),
+                          void *rctx, s_dynarray *buff_points, int *out_kept_idx,
+                          s_scplx *out_dt);
+
 s_vdiagram vor3d_in_convh(const s_points *seeds, const s_convh *convh, double vol_max_rel_diff,
                            double EPS_DEG, double TOL, int (*randint)(void*, int),
                            void *rctx, s_dynarray *buff_points, int *out_kept_idx);

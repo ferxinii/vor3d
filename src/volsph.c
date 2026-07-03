@@ -233,7 +233,7 @@ static bool has_triple_intersection(double rA, double rB, double rC,
     double q[3][2] = {{0, 0}, {Bx, 0}, {Cx, Cy}};
     double w[3]    = {rA*rA, rB*rB, rC*rC};
 
-    /* 2x2 system — same as face_orthosphere_r2 but in explicit 2D coords */
+    /* 2x2 system -- same as face_orthosphere_r2 but in explicit 2D coords */
     double A[2][2], b[2];
     for (int i = 1; i <= 2; i++) {
         A[i-1][0] = 2.0 * q[i][0];   /* q[0] = (0,0) so terms drop out */

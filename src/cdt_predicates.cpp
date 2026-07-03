@@ -44,11 +44,22 @@ void cdt_point_set_explicit(int id, double x, double y, double z)
 void cdt_point_set_lnc(int id, int v1, int v2, double t)
 {
     /* paper: t*V[v1] + (1-t)*V[v2]
-     * library: (1-t_lib)*P + t_lib*Q  →  P=V[v1], Q=V[v2], t_lib = 1.0-t */
+     * library: (1-t_lib)*P + t_lib*Q  ->  P=V[v1], Q=V[v2], t_lib = 1.0-t */
     ensure_capacity(id);
     if (g_lnc[id]) delete g_lnc[id];
     g_lnc[id] = new implicitPoint3D_LNC(g_explicit[v1], g_explicit[v2], 1.0 - t);
     g_pts[id] = g_lnc[id];
+
+    /* Also store this point's rounded coords as an explicit entry.  The library
+     * LNC combines two EXPLICIT points, so a nested Steiner -- one placed on a
+     * sub-segment whose endpoint is a prior Steiner -- must reference that
+     * Steiner through g_explicit.  Compute with the SAME t*V[v1]+(1-t)*V[v2]
+     * formula the builder uses for M (points.p), so g_explicit[id] == M exactly
+     * and nested LNCs stay consistent with the rounded geometry.  (g_pts[id]
+     * remains the exact LNC for direct use of this point.) */
+    g_explicit[id].set(t*g_explicit[v1].X() + (1.0-t)*g_explicit[v2].X(),
+                       t*g_explicit[v1].Y() + (1.0-t)*g_explicit[v2].Y(),
+                       t*g_explicit[v1].Z() + (1.0-t)*g_explicit[v2].Z());
 }
 
 int cdt_orient3d(int a, int b, int c, int d)
@@ -87,7 +98,7 @@ int cdt_perturbed_insphere(int i1, int i2, int i3, int i4, int i5)
             return ((skip ^ n) & 1) ? -o : o;
         }
     }
-    return 0; /* all five coincident — degenerate input */
+    return 0; /* all five coincident -- degenerate input */
 }
 
 int cdt_point_in_tet(int p, int t0, int t1, int t2, int t3)
@@ -129,6 +140,23 @@ int cdt_point_in_inner_tri(int p, int a, int b, int c)
 {
     return genericPoint::pointInInnerTriangle(
         *g_pts[p], *g_pts[a], *g_pts[b], *g_pts[c]) ? 1 : 0;
+}
+
+int cdt_point_in_triangle(int p, int a, int b, int c)
+{
+    /* OUT if not coplanar with the triangle plane. */
+    if (genericPoint::orient3D(*g_pts[a], *g_pts[b], *g_pts[c], *g_pts[p]) != 0) return -1;
+    /* Coplanar: pointInTriangle returns in-or-on plus the three edge signs. */
+    int o1, o2, o3;
+    bool on = genericPoint::pointInTriangle(*g_pts[p], *g_pts[a], *g_pts[b], *g_pts[c], o1, o2, o3);
+    if (!on) return -1;
+    return (o1 == 0 || o2 == 0 || o3 == 0) ? 0 : 1;
+}
+
+int cdt_segments_cross(int s1, int s2, int p, int q)
+{
+    return genericPoint::segmentsCross(
+        *g_pts[s1], *g_pts[s2], *g_pts[p], *g_pts[q]) ? 1 : 0;
 }
 
 int cdt_get_approx_coords(int id, double *x, double *y, double *z)

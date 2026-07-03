@@ -213,7 +213,7 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
             return false;
     }
 
-    /* Step 1: initial candidate = T0 ∩ T1 (a triangle vertex). */
+    /* Step 1: initial candidate = T0 ^ T1 (a triangle vertex). */
     s_cid A = T0, B = T1;
 
     /* Fisher-Yates shuffle. */
@@ -224,7 +224,7 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
         int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
     }
 
-    /* gate: seed 123 (x≈0.833) on the x=1 face (all verts have x=1) */
+    /* gate: seed 123 (x~0.833) on the x=1 face (all verts have x=1) */
     for (int oi = 0; oi < N; oi++) {
         int i = order[oi];
         if (i == id) continue;
@@ -271,7 +271,7 @@ static bool lp_should_mirror(const s_point face[3], const s_points *seeds,
                 return false;
         }
 
-        /* Step 4: new candidate is C_i ∩ lo. */
+        /* Step 4: new candidate is C_i ^ lo. */
         A = ci;
         B = lo;
     }
@@ -288,7 +288,7 @@ int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
      * LP with fewer constraints has a larger feasible region, so we may generate
      * extra mirrors (false positives) but never miss a needed one (no false negatives).
      *
-     * Loop order: seed-outer, face-inner — neighbors are collected once per seed and
+     * Loop order: seed-outer, face-inner -- neighbors are collected once per seed and
      * reused across all faces, rather than recomputed for every (face, seed) pair. */
     out_points->N = 0;
 

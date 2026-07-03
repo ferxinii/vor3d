@@ -2,6 +2,7 @@
 #include "scplx.h"
 #include "points.h"
 #include "gtests.h"
+#include "dt_predseam.h"  /* Phase 1: id-based predicate seam (walk-by-id) */
 #include "gnuplotc.h"
 #include "dynarray.h"
 #include <stdlib.h>
@@ -357,9 +358,9 @@ static int new_mark_stamp(s_scplx *scplx)
 static int mark_ncells_incident_face_STEP(int mark_stamp, s_ncell *ncell, int dim_face, const int v_localid[3-dim_face], s_dynarray *out_ncell_ptrs)
 {
     for (int ii=0; ii<4; ii++) if (inarray(v_localid, 3-dim_face, ii)) {
-        s_ncell *adjacent_ncell = ncell->opposite[ii];  
-        if (adjacent_ncell && adjacent_ncell->mark_token != mark_stamp) {
-            adjacent_ncell->mark_token = mark_stamp;
+        s_ncell *adjacent_ncell = ncell->opposite[ii];
+        if (adjacent_ncell && adjacent_ncell->mark_token2 != mark_stamp) {
+            adjacent_ncell->mark_token2 = mark_stamp;
             if (!dynarray_push(out_ncell_ptrs, &adjacent_ncell)) return 0;
             
             int new_v_localid[3-dim_face];
@@ -380,7 +381,7 @@ int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face, const int
     }
 
     int mark_stamp = new_mark_stamp(scplx);
-    ncell->mark_token = mark_stamp;
+    ncell->mark_token2 = mark_stamp;
 
     out_ncell_ptrs->N = 0;
     if (!dynarray_push(out_ncell_ptrs, &ncell)) return 0;
@@ -476,7 +477,14 @@ static void random_order_04(int out[4])
     }
 }
 
-s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
+/* Shared point-location walk.  If query_id >= 0 the query is the registered
+ * point points.p[query_id] and its orientation against each face is computed
+ * through the predicate seam BY ID (exact-mode capable; used by
+ * insert_one_point).  If query_id < 0 the query is the arbitrary coordinate p
+ * and uses coordinate orientation (Voronoi callers, always exact_ids==0).  The
+ * two are bit-identical when scplx->exact_ids == 0.  The o1 (opposite-vertex)
+ * test is always a vertex, so it always goes through the seam by id. */
+static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id)
 {
     // return bruteforce_find_ncell_containing(scplx, p);
 
@@ -506,26 +514,38 @@ s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
     int order[4]; random_order_04(order);
     for (int kk=0; kk<4; kk++) {  /* Visit faces in random order to prevent loops ? */
         int ii = order[kk];
-        s_point opposite_vertex = scplx->points.p[current->vertex_id[ii]];
 
         s_ncell *next = current->opposite[ii];
         if (!next) continue;
 
+        int fids[3]; extract_ids_face(current, 2, &ii, fids);
         extract_vertices_face(scplx, current, 2, &ii, facet_vertices);
 
-        int o1 = test_orientation(facet_vertices, opposite_vertex);
-        int o2 = test_orientation(facet_vertices, p);
-        
+        int o1 = dtp_orient(scplx, fids[0], fids[1], fids[2], current->vertex_id[ii]);
+        int o2 = (query_id >= 0)
+                     ? dtp_orient(scplx, fids[0], fids[1], fids[2], query_id)
+                     : test_orientation(facet_vertices, p);
+
         if (o1 == 0) {  /* Tetrahedron is degenerate */
             if (next != prev) {  /* We come from a different adjacent one, so walk towards */
                 prev = current;
                 current = next;
                 goto STEP;
-            } 
-            else continue; 
+            }
+            else continue;
         }
 
-        if (o2 == 0) {  /* Query is coplanar with face */
+        if (o2 == 0) {  /* Query is coplanar with this face's plane */
+            if (scplx->exact_ids && query_id >= 0) {
+                /* Exact walk (reference-style, CDT insertExistingVertex): if the
+                 * query lies IN this face it is on the tet boundary -> found;
+                 * otherwise it is coplanar-but-outside, so it is strictly beyond
+                 * some OTHER face -- do NOT step here (no coordinate centroid
+                 * tie-break, which drifts/loops), let another face step. */
+                if (dtp_point_in_triangle(scplx, query_id, fids[0], fids[1], fids[2]) >= 0)
+                    return current;
+                continue;
+            }
             e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
             if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
             if (next != prev) {
@@ -537,7 +557,7 @@ s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
                     current = next;
                     goto STEP;
                 }
-            } 
+            }
             continue;
         } else if (o1 != o2) {  // Regular step
             prev = current;
@@ -545,8 +565,18 @@ s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
             goto STEP;
         }
     }
-    
-    return current; 
+
+    return current;
+}
+
+s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
+{
+    return in_ncell_walk_impl(scplx, p, -1);
+}
+
+s_ncell *in_ncell_walk_id(const s_scplx *scplx, int point_id)
+{
+    return in_ncell_walk_impl(scplx, scplx->points.p[point_id], point_id);
 }
 
 

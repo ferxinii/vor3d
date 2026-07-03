@@ -71,16 +71,16 @@ target_compile_options(example_lobe
 
 # ------ SETUP INPUT / OUTPUT -------
 # Create symlink for the lobes directory
+# Both example_lungs and example_lobe live in the same build dir and want the
+# same `lobes` symlink; `cmake -E create_symlink` errors if it exists and the
+# two POST_BUILD steps race under -j.  `ln -sfn` is idempotent and atomic, so
+# neither the existing-link nor the race can fail the build.
 add_custom_command(TARGET example_lungs POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-        ${CMAKE_CURRENT_SOURCE_DIR}/lobes
-        $<TARGET_FILE_DIR:example_lungs>/lobes
+    COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_lungs>/lobes'"
     COMMENT "Linking lobes directory into build"
 )
 add_custom_command(TARGET example_lobe POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-        ${CMAKE_CURRENT_SOURCE_DIR}/lobes
-        $<TARGET_FILE_DIR:example_lobe>/lobes
+    COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_lobe>/lobes'"
     COMMENT "Linking lobes directory into build"
 )
 # Create empty output directories

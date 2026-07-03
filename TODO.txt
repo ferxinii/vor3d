@@ -15,4 +15,4 @@
 
 [ ] Mark ncells: Implement a more efficient approach. (visit_id? so no need to reset to 0s), also return a list of ncells so I dont have to run over all ncells each time?
 
-[ ] clip_convhull_halfspace (called in clip_vcell_to_domain): currently rebuilds the full convex hull after each half-space cut (4 cuts per candidate tet). Look into a more efficient clipping algorithm (e.g. Sutherland-Hodgman adapted for 3D polyhedra, or direct half-space intersection on the face/edge representation) to avoid repeated convex hull recomputation.
+[ ] ncvx.c Tier-B clip: the seed-vertex incident-cell star is walked twice per seed -- once in build_cell_adjacency (to build the neighbour CSR) and again in collect_voronoi_duals (to get the incident DT tets/triangles for the (a)/(c) Voronoi duals). Merge into a single pass: have build_cell_adjacency emit the Voronoi-dual lists (vertex triples / edge pairs) alongside the adjacency, so vertex_neighbors is called once per seed.

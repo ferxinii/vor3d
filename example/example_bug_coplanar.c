@@ -92,6 +92,24 @@ static void write_bpoly_vtk(const s_bpoly *bp, const char *path)
     printf("Wrote %d triangles to %s\n", Nf, path);
 }
 
+/* Dump all DT points -- the real seeds and the mirrors added to bound the
+ * boundary cells -- to a CSV with a header, for review. */
+static void write_seeds_csv(const s_points *seeds, const s_dynarray *mirrors, const char *path)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) { fprintf(stderr, "write_seeds_csv: cannot open %s\n", path); return; }
+    fprintf(f, "type,x,y,z\n");
+    for (int i = 0; i < seeds->N; i++)
+        fprintf(f, "seed,%.17g,%.17g,%.17g\n",
+                seeds->p[i].coords[0], seeds->p[i].coords[1], seeds->p[i].coords[2]);
+    const s_point *m = (const s_point *)mirrors->items;
+    for (unsigned i = 0; i < mirrors->N; i++)
+        fprintf(f, "mirror,%.17g,%.17g,%.17g\n",
+                m[i].coords[0], m[i].coords[1], m[i].coords[2]);
+    fclose(f);
+    printf("Wrote %d seeds + %u mirrors to %s\n", seeds->N, mirrors->N, path);
+}
+
 int main(void)
 {
     /* 8 cube corners — 4 on z=0, 4 on z=1 (two perfectly coplanar layers) */
@@ -148,6 +166,7 @@ int main(void)
 
     s_vdiagram vd = vor3d_in_bp(&points, &bp, 1e-3, 1e-12, 1e-12,
                                     randint_fn, &rctx, &buff, NULL);
+    write_seeds_csv(&points, &buff, "seeds_and_mirrors.csv");
     dynarray_free(&buff);
 
     if (!vdiagram_is_valid(&vd)) {
