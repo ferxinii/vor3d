@@ -28,6 +28,7 @@ add_executable(example_nonconvex example_nonconvex.c)
 add_executable(example_bug_coplanar example_bug_coplanar.c)
 add_executable(example_lobe example_lobe.c)
 add_executable(example_medax example_medax.c)
+add_executable(example_ashape example_ashape.c)
 # add_executable(example_volsph example_volsph.c)
 
 target_link_libraries(example_basic 
@@ -46,6 +47,9 @@ target_link_libraries(example_lobe
         PUBLIC vor3d OpenMP::OpenMP_C
 )
 target_link_libraries(example_medax
+        PUBLIC vor3d m OpenMP::OpenMP_C
+)
+target_link_libraries(example_ashape
         PUBLIC vor3d m OpenMP::OpenMP_C
 )
 # target_link_libraries(example_volsph
@@ -69,6 +73,10 @@ target_compile_options(example_lobe
         -Wall -Werror -Wextra -O3
 )
 target_compile_options(example_medax
+    PRIVATE
+        -Wall -Werror -Wextra -O3
+)
+target_compile_options(example_ashape
     PRIVATE
         -Wall -Werror -Wextra -O3
 )

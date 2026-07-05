@@ -21,6 +21,7 @@ add_library(vor3d STATIC
     src/cdt_predicates.cpp
     src/scplx.c
     src/acplx.c
+    src/ashape.c
     src/vdiagram.c
     src/mirroring.c
     src/ncvx.c
