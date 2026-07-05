@@ -120,6 +120,18 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_d
 s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
                                         double EPS_DEG, double TOL);
 
+/* Like tetrahedralize_interior_trimesh, but returns the FULL tetrahedralization
+ * of the convex hull of the mesh vertices (interior + exterior "pocket" tets;
+ * only the ghost/sentinel tets are removed). Every returned tet carries
+ * nc->interior = true iff it lies inside the trimesh. Because the complex is
+ * convex, point location terminates for any query: a point inside the hull
+ * lands in a tet (read its .interior flag); a point outside the hull is blocked
+ * at a hull boundary face (opposite == NULL) and is therefore outside the mesh.
+ * Intended as a robust, exact inside/outside oracle.
+ * Returns an empty s_scplx ({0}) on error. */
+s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh,
+                                       double EPS_DEG, double TOL);
+
 
 
 /* Insert a single point into an existing (sentinel-stripped) DT via Bowyer-Watson.

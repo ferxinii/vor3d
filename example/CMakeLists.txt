@@ -27,6 +27,7 @@ add_executable(example_lungs example_lungs.c)
 add_executable(example_nonconvex example_nonconvex.c)
 add_executable(example_bug_coplanar example_bug_coplanar.c)
 add_executable(example_lobe example_lobe.c)
+add_executable(example_medax example_medax.c)
 # add_executable(example_volsph example_volsph.c)
 
 target_link_libraries(example_basic 
@@ -43,6 +44,9 @@ target_link_libraries(example_bug_coplanar
 )
 target_link_libraries(example_lobe
         PUBLIC vor3d OpenMP::OpenMP_C
+)
+target_link_libraries(example_medax
+        PUBLIC vor3d m OpenMP::OpenMP_C
 )
 # target_link_libraries(example_volsph
 #         PUBLIC vor3d 
@@ -64,6 +68,10 @@ target_compile_options(example_lobe
     PRIVATE
         -Wall -Werror -Wextra -O3
 )
+target_compile_options(example_medax
+    PRIVATE
+        -Wall -Werror -Wextra -O3
+)
 # target_compile_options(example_volsph
 #     PRIVATE
 #         -Wall -Werror -Wextra -O3
@@ -81,6 +89,10 @@ add_custom_command(TARGET example_lungs POST_BUILD
 )
 add_custom_command(TARGET example_lobe POST_BUILD
     COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_lobe>/lobes'"
+    COMMENT "Linking lobes directory into build"
+)
+add_custom_command(TARGET example_medax POST_BUILD
+    COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_medax>/lobes'"
     COMMENT "Linking lobes directory into build"
 )
 # Create empty output directories

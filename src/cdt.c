@@ -1736,7 +1736,24 @@ static int gift_wrap_face(s_scplx *dt,
  * Step 7 -- Ghost-Vertex Flood-Fill for Interior/Exterior (S.4.5)
  * ----------------------------------------------------------------------- */
 
-static void classify_interior_exterior(s_scplx *dt, s_hash_table *constrained, s_cdt_scratch *sc)
+static inline int ncell_has_sentinel(const s_ncell *nc)
+{
+    for (int j = 0; j < 4; j++) if (nc->vertex_id[j] < 4) return 1;
+    return 0;
+}
+
+/* Tets removed by classify's Phase 4:
+ *   keep_exterior=false: every externally-labelled tet (ghosts + pockets).
+ *   keep_exterior=true : only ghost/sentinel tets, so the surviving complex is
+ *                        the full convex-hull tetrahedralization (pockets kept,
+ *                        flagged interior=false). */
+static inline int ncell_is_deleted(const s_ncell *nc, bool keep_exterior, int ext_stamp)
+{
+    return keep_exterior ? ncell_has_sentinel(nc) : (nc->mark_token == ext_stamp);
+}
+
+static void classify_interior_exterior(s_scplx *dt, s_hash_table *constrained,
+                                       s_cdt_scratch *sc, bool keep_exterior)
 {
     int ext_stamp = ++dt->mark_stamp;
     int int_stamp = ++dt->mark_stamp;
@@ -1780,19 +1797,21 @@ static void classify_interior_exterior(s_scplx *dt, s_hash_table *constrained, s
         }
     }
 
-    /* Phase 4: delete all external tets. */
+    /* Phase 4: record the interior flag on every tet, then delete tets per the
+     * keep_exterior policy (ghosts only, or ghosts + pockets). */
     s_ncell *nc = dt->head;
     while (nc) {
         s_ncell *next = nc->next;
-        if (nc->mark_token == ext_stamp) {
-            /* Null out opposite pointers in internal neighbors. */
+        nc->interior = (nc->mark_token == int_stamp);
+        if (ncell_is_deleted(nc, keep_exterior, ext_stamp)) {
+            /* Null out opposite pointers in surviving neighbors. */
             for (int fi = 0; fi < 4; fi++) {
                 s_ncell *nb = nc->opposite[fi];
-                if (!nb || nb->mark_token == ext_stamp) continue;
+                if (!nb || ncell_is_deleted(nb, keep_exterior, ext_stamp)) continue;
                 for (int k = 0; k < 4; k++)
                     if (nb->opposite[k] == nc) { nb->opposite[k] = NULL; break; }
             }
-            /* Fix point2tet. */
+            /* Fix point2tet: repoint to any surviving incident neighbor. */
             for (int j = 0; j < 4; j++) {
                 int v = nc->vertex_id[j];
                 if (v < 4) { dt->point2tet[v] = NULL; continue; }
@@ -1800,7 +1819,7 @@ static void classify_interior_exterior(s_scplx *dt, s_hash_table *constrained, s
                 s_ncell *rep = NULL;
                 for (int fi = 0; fi < 4 && !rep; fi++) {
                     s_ncell *nb = nc->opposite[fi];
-                    if (nb && nb->mark_token == int_stamp) rep = nb;
+                    if (nb && !ncell_is_deleted(nb, keep_exterior, ext_stamp)) rep = nb;
                 }
                 dt->point2tet[v] = rep;
             }
@@ -1858,10 +1877,12 @@ static int split_trimesh_face_centroid(s_trimesh *mesh, int fi)
 }
 
 static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
-                            s_cdt_scratch *sc, int *fail_fi);
+                            s_cdt_scratch *sc, int *fail_fi, bool keep_exterior);
 
-s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
-                                         double EPS_DEG, double TOL)
+/* Shared body for both public entries. keep_exterior selects the classify
+ * policy (see classify_interior_exterior / ncell_is_deleted). */
+static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
+                         bool keep_exterior)
 {
     if (!trimesh_is_valid(mesh)) return (s_scplx){0};
 
@@ -1898,7 +1919,7 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
     const int MAX_ROUNDS = 8;
     for (int round = 0; round < MAX_ROUNDS; round++) {
         int fail_fi = -1;
-        result = cdt_attempt(&working, EPS_DEG, TOL, &sc, &fail_fi);
+        result = cdt_attempt(&working, EPS_DEG, TOL, &sc, &fail_fi, keep_exterior);
         if (result.head) break;
         if (fail_fi < 0) break;   /* failure not tied to a specific face */
         fprintf(stderr,
@@ -1920,13 +1941,25 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
     return result;
 }
 
+s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
+                                         double EPS_DEG, double TOL)
+{
+    return cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/false);
+}
+
+s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh,
+                                       double EPS_DEG, double TOL)
+{
+    return cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/true);
+}
+
 /* One full CDT attempt (Phases A-C) on the given working mesh.  On failure
  * returns an empty complex; if the failure is pinned to one constraint face,
  * *fail_fi is set to its index in working->faces (else left at -1).
  * The working mesh is mutated (Phase A edge splits, point sync) but remains a
  * valid refinement of the same surface, so the caller can retry with it. */
 static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
-                            s_cdt_scratch *sc, int *fail_fi)
+                            s_cdt_scratch *sc, int *fail_fi, bool keep_exterior)
 {
     /* Phase A: DT + segment recovery, in exact-id mode -- ONE exact geometry
      * end-to-end.  The builder and Phase B (blocker test, cavity expansion,
@@ -2110,7 +2143,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
 #undef PHASE_B_ABORT
 
     /* Phase C: interior/exterior classification (Step 7) */
-    classify_interior_exterior(&dt, &constrained, sc);
+    classify_interior_exterior(&dt, &constrained, sc, keep_exterior);
 
     hash_free(&constrained);
     cdt_predicates_clear();

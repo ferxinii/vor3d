@@ -24,6 +24,7 @@ add_library(vor3d STATIC
     src/vdiagram.c
     src/mirroring.c
     src/ncvx.c
+    src/medax.c
     # src/volsph.c
 )
 

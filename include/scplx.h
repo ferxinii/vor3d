@@ -29,6 +29,8 @@ typedef struct ncell {  // Must live in heap
                      // flood-fill never clobbers a caller's mark_token dedup.
     bool mask_alpha;  // if it belongs to the alpha complex (for a given alpha)
     bool in_stack;
+    bool interior;   // CDT domain classification: true = tet inside the trimesh.
+                     // Set only by tetrahedralize_domain_flagged (keep_exterior).
 } s_ncell;
 
 
