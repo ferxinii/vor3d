@@ -996,19 +996,45 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
     if (!seeds || seeds->N <= 0 || !ncvx_domain_is_valid(domain))
         return (s_ncvx_vdiagram){0};
 
-    /* Lean seed Delaunay: real seeds only -- no mirrors, no convex-VD extraction.
-     * All Voronoi combinatorics for the clip (adjacency + duals) come from this
-     * DT; the boundary cells are (correctly) unbounded and clipped by the tets. */
+    /* Seed Delaunay of the real seeds plus 8 FAR auxiliary points (a box many
+     * times the domain size). They guarantee a non-degenerate 3D DT even for 1-3
+     * (or coplanar) real seeds -- without which dt_builder_end leaves no real
+     * tetrahedra and the diagram is empty. Being far outside every real seed's
+     * circumsphere, they never flip a real Delaunay tet, so the all-real dual
+     * enumeration the clip relies on is exactly the true real Voronoi structure
+     * (unlike mirrors, which sit just outside the hull and corrupt it). Aux ids
+     * (>= Nreal) are dropped by build_cell_adjacency; their far bisectors never
+     * reach the domain, and the tet clip bounds every cell. */
     if (out_kept_idx)
         for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = i;
 
-    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL,
-                                            &domain->bpoly.min, &domain->bpoly.max);
+    s_point mn = domain->bpoly.min, mx = domain->bpoly.max;
+    s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
+    double  hx = 0.5*(mx.x-mn.x), hy = 0.5*(mx.y-mn.y), hz = 0.5*(mx.z-mn.z);
+    double  h  = hx > hy ? (hx > hz ? hx : hz) : (hy > hz ? hy : hz);
+    if (h <= 0) h = 1.0;
+    const double FAR = 1000.0;                 /* far enough to clear any real circumsphere */
+    s_point aux[8];
+    for (int k = 0; k < 8; k++)
+        aux[k] = (s_point){ .x = c.x + ((k&1)?FAR:-FAR)*h,
+                            .y = c.y + ((k&2)?FAR:-FAR)*h,
+                            .z = c.z + ((k&4)?FAR:-FAR)*h };
+    s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
+    s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
+
+    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max);
     if (!builder._stack) {
         if (out_kept_idx) for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = -1;
         return (s_ncvx_vdiagram){0};
     }
-    int Nreal = seeds->N;
+    s_points aux_pts = { .N = 8, .p = aux };
+    if (!dt_builder_extend(&builder, &aux_pts, TOL)) {
+        s_scplx tmp = dt_builder_end(&builder, false, NULL, NULL, 0);
+        free_complex(&tmp);
+        if (out_kept_idx) for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = -1;
+        return (s_ncvx_vdiagram){0};
+    }
+    int Nreal = seeds->N;                       /* first seeds->N inserted points are real */
     s_scplx seed_dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
                                      out_kept_idx ? seeds->N : 0);
     if (!seed_dt.head || Nreal <= 0) { free_complex(&seed_dt); return (s_ncvx_vdiagram){0}; }
