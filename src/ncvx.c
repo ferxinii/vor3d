@@ -638,11 +638,24 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             if (keep) {
                 int fv[3]; lp3_face_idx(f, fv);
                 s_point A = tet[fv[0]], Q = tet[fv[1]], R = tet[fv[2]];
+                /* Exact degeneracy screen: lp3_D_TSS == sign det[n_T; t1-s; t2-s],
+                 * which is 0 iff the Voronoi edge (perpendicular to triangle
+                 * {s,t1,t2}) is parallel to the tet face -- then the crossing does
+                 * not exist and the float solve would return garbage the feasibility
+                 * test still accepts. This robust (indirect) sign is consistent
+                 * across the three cells sharing the edge, so it can't leave one
+                 * cell's piece overlapping another's. */
+                if (lp3_D_TSS(A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z,
+                              s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) == 0)
+                    continue;
                 s_point nf = cross_prod(subtract_points(Q,A), subtract_points(R,A));
                 double df = dot_prod(nf, A);
                 double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
                 double rhs[3] = { d1, d2, df }, x[3];
-                if (solve_3x3_ppivot(M, rhs, x, 1e-300)) {
+                /* EPS_DEG pivot tolerance: numerical backstop. solve_3x3_ppivot
+                 * returns the failing column (<3) with x unwritten on a bad pivot,
+                 * so success is == 3 (all three pivots usable), not merely non-zero. */
+                if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
                     s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
                     s_vlabel lb = { vkey_EF(seed_id, j1, j2,
                                             tet_vids[fv[0]], tet_vids[fv[1]], tet_vids[fv[2]]),
