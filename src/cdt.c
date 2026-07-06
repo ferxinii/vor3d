@@ -1938,6 +1938,12 @@ static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
 
     cdt_scratch_free(&sc);
     free_trimesh(&working);
+
+    /* The build ran in exact_ids mode against the cdt_predicates registry, which
+     * is cleared once construction finishes. Reset the returned complex to
+     * coordinate predicates so it is safe to walk / point-locate afterwards
+     * (dtp_orient in exact mode would dereference the freed registry). */
+    result.exact_ids = 0;
     return result;
 }
 

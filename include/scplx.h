@@ -45,6 +45,10 @@ void print_scomplex(const s_scplx *scplx);
 
 int test_point_in_ncell(const s_scplx *scplx, const s_ncell *ncell, s_point query);
 s_ncell *bruteforce_find_ncell_containing(const s_scplx *scplx, s_point p);
+/* Locate the ncell containing the query by straight-line walk. Returns NULL when
+ * the walk needs to step across a boundary (opposite==NULL) face -- i.e. the
+ * query is outside the complex; this is exact for a convex complex (the only
+ * kind on which walking is sound). */
 s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p);
 s_ncell *in_ncell_walk_id(const s_scplx *scplx, int point_id);  /* walk by registered point id (seam-routed) */
 void plot_dt_3d_differentviews(const s_scplx *scplx, char *f_name, s_point ranges[2]);

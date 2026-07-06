@@ -515,8 +515,7 @@ static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id
     for (int kk=0; kk<4; kk++) {  /* Visit faces in random order to prevent loops ? */
         int ii = order[kk];
 
-        s_ncell *next = current->opposite[ii];
-        if (!next) continue;
+        s_ncell *next = current->opposite[ii];  /* NULL == boundary (hull) face */
 
         int fids[3]; extract_ids_face(current, 2, &ii, fids);
         extract_vertices_face(scplx, current, 2, &ii, facet_vertices);
@@ -527,7 +526,7 @@ static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id
                      : test_orientation(facet_vertices, p);
 
         if (o1 == 0) {  /* Tetrahedron is degenerate */
-            if (next != prev) {  /* We come from a different adjacent one, so walk towards */
+            if (next && next != prev) {  /* come from a different adjacent one -> walk towards */
                 prev = current;
                 current = next;
                 goto STEP;
@@ -548,7 +547,7 @@ static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id
             }
             e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
             if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
-            if (next != prev) {
+            if (next && next != prev) {
                 // TIE-BREAKING: move to the neighbor whose centroid is closer to p.
                 double d_curr = distance_squared(ncell_centroid(scplx, current), p);
                 double d_next = distance_squared(ncell_centroid(scplx, next), p);
@@ -559,7 +558,10 @@ static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id
                 }
             }
             continue;
-        } else if (o1 != o2) {  // Regular step
+        } else if (o1 != o2) {  // Query strictly beyond this face -> step across it
+            if (!next) return NULL;   /* beyond a boundary face -> outside the domain
+                                       * (exact only for a convex complex; walking is
+                                       * only sound there anyway) */
             prev = current;
             current = next;
             goto STEP;

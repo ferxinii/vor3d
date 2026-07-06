@@ -58,10 +58,14 @@ typedef struct ncvx_vdiagram {
 /*
  * Build a domain from a trimesh.
  * Tetrahedralizes the interior and computes the convex hull for mirroring.
+ * keep_exterior=0 stores only interior tets (lean); keep_exterior=1 stores the
+ * full convex-hull complex (interior + exterior pockets flagged via
+ * nc->interior). The Voronoi builder treats both identically; keep_exterior=1
+ * additionally enables walk-based point location on domain.cdt.
  * Returns a zero-initialised s_ncvx_domain on error.
  */
 s_ncvx_domain ncvx_domain_from_trimesh(const s_trimesh *mesh,
-                                        double EPS_DEG, double TOL);
+                                        double EPS_DEG, double TOL, int keep_exterior);
 int  ncvx_domain_is_valid(const s_ncvx_domain *d);
 void free_ncvx_domain(s_ncvx_domain *d);
 void free_ncvx_vdiagram(s_ncvx_vdiagram *vd);

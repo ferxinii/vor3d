@@ -50,21 +50,26 @@ void free_ncvx_vdiagram(s_ncvx_vdiagram *vd)
 /* ---------------------------------------------------------------------- */
 
 s_ncvx_domain ncvx_domain_from_trimesh(const s_trimesh *mesh,
-                                        double EPS_DEG, double TOL)
+                                        double EPS_DEG, double TOL, int keep_exterior)
 {
     if (!trimesh_is_valid(mesh))
         return (s_ncvx_domain){0};
 
-    /* Build CDT of the trimesh interior; returns only interior tetrahedra.
-     * The scplx is kept as the domain (traversed by the clip); not extracted. */
-    s_scplx dt = tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
+    /* Build the CDT of the interior. keep_exterior=0 returns only interior tets;
+     * keep_exterior=1 returns the full convex-hull complex (interior + exterior
+     * pockets flagged via nc->interior), which the clip treats identically and
+     * which also supports walk-based point location. The scplx is kept as the
+     * domain (traversed by the clip); not extracted. */
+    s_scplx dt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
+                               : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
     if (!dt.head) {
-        fprintf(stderr, "ncvx_domain_from_trimesh: tetrahedralize_interior_trimesh failed\n");
+        fprintf(stderr, "ncvx_domain_from_trimesh: tetrahedralization failed\n");
         return (s_ncvx_domain){0};
     }
 
     double volume_sum = 0.0;
     for (s_ncell *nc = dt.head; nc; nc = nc->next) {
+        if (!nc->interior) continue;              /* skip exterior pockets, if kept */
         s_point v[4];
         extract_vertices_ncell(&dt, nc, v);
         volume_sum += fabs(signed_volume_tetra(v));
@@ -717,11 +722,20 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     return r;
 }
 
+/* A face f of interior tet nc is on the domain boundary iff it faces outside the
+ * domain: either no tet lies across it (interior-only CDT) or the tet across it
+ * is an exterior pocket (flagged CDT). Makes the clip accept either CDT form. */
+static inline int face_is_domain_boundary(const s_ncell *nc, int f)
+{
+    return !nc->opposite[f] || !nc->opposite[f]->interior;
+}
+
 /* Inverse (tet-outer) clip of the whole domain. For each interior CDT tet, find
  * the Voronoi cells that carve it (seed-DT point location of the tet centroid +
  * vertices, then a flood fill over Voronoi adjacency, keeping neighbours of any
  * cell whose clip is non-empty) and clip each, scattering the pieces into
  * per-cell accumulators. Fills vcells[0..N-1]. No AABBs, no candidate lists.
+ * The domain CDT may be interior-only or flagged (exterior pockets are skipped).
  * Returns 1 on success, 0 on allocation error. */
 static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                        s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
@@ -773,8 +787,9 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
     /* Phase A: flood each boundary tet (one with a surface face) and flag every
      * reachable interior-so-far cell that may touch a boundary face. */
     for (s_ncell *nc = domain->cdt.head; nc; nc = nc->next) {
+        if (!nc->interior) continue;              /* skip exterior pockets (flagged CDT) */
         int has_bf = 0;
-        for (int f = 0; f < 4; f++) if (!nc->opposite[f]) { has_bf = 1; break; }
+        for (int f = 0; f < 4; f++) if (face_is_domain_boundary(nc, f)) { has_bf = 1; break; }
         if (!has_bf) continue;
         tet_stamp++;
         s_point tv[4];
@@ -793,7 +808,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                 continue;
             if (!cellkind[i]) {
                 for (int f = 0; f < 4; f++) {
-                    if (nc->opposite[f]) continue;        /* interior face */
+                    if (!face_is_domain_boundary(nc, f)) continue;   /* interior face */
                     int fv[3]; lp3_face_idx(f, fv);
                     s_point tri[3] = { tv[fv[0]], tv[fv[1]], tv[fv[2]] };
                     if (lp3_cell_maybe_hits_tri(tri, real_seeds->p[i], real_seeds, nbr, NB)) {
@@ -820,6 +835,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
     /* Phase B: main clip. Interior cells are skipped (emitted whole below) but
      * still expanded through, so the flood stays connected. */
     for (s_ncell *nc = domain->cdt.head; nc; nc = nc->next) {
+        if (!nc->interior) continue;              /* skip exterior pockets (flagged CDT) */
         tet_stamp++;
         tetcheck_idx++;
         double tet_acc = 0.0;
@@ -1056,7 +1072,7 @@ s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
                                    s_dynarray *buff_points, int *out_kept_idx,
                                    int want_surface)
 {
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL);
+    s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL, 0);
     if (!ncvx_domain_is_valid(&domain)) return (s_ncvx_vdiagram){0};
     s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, &domain, vol_max_rel_diff,
                                            EPS_DEG, TOL, randint, rctx,

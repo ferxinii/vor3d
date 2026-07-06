@@ -375,7 +375,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
                             fail, total);
 
     /* 3. Domain preparation */
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL);
+    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
     fprintf(stderr, "DEBUG: ncvx_domain_from_trimesh returned, valid=%d\n",
             ncvx_domain_is_valid(&domain));
     if (!ncvx_domain_is_valid(&domain)) {

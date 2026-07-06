@@ -132,7 +132,7 @@ static s_ncvx_domain build_domain(const char *obj_path, double *mesh_volume_out)
            mesh.points.N, mesh.Nf, mesh_volume);
 
     clock_t t0 = clock();
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL);
+    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
     clock_t t1 = clock();
     free_trimesh(&mesh);
     if (!ncvx_domain_is_valid(&domain)) {
