@@ -49,16 +49,23 @@ s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_par
 // vor3d_in_ncvx_domain takes a pre-built s_ncvx_domain -- use this when calling
 // repeatedly against the same domain to amortize the CDT construction cost.
 // vor3d_in_trimesh is the one-shot convenience wrapper.
+//
+// The convex-hull pieces (vcell.pieces / N_pieces) and per-cell volume are
+// always produced. If want_surface != 0, the cell boundary trimesh(es)
+// (vcell.surface / N_surface, one per connected component) are also built;
+// otherwise they are left NULL/0.
 s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const s_ncvx_domain *domain,
                                  double vol_max_rel_diff,
                                  double EPS_DEG, double TOL,
                                  int (*randint)(void*, int), void *rctx,
-                                 s_dynarray *buff_points, int *out_kept_idx);
+                                 s_dynarray *buff_points, int *out_kept_idx,
+                                 int want_surface);
 
 s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const s_trimesh *mesh,
                                   double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
                                   int (*randint)(void*, int), void *rctx,
-                                  s_dynarray *buff_points, int *out_kept_idx);
+                                  s_dynarray *buff_points, int *out_kept_idx,
+                                  int want_surface);
 
 #endif

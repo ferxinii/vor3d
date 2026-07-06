@@ -20,10 +20,14 @@ typedef struct bounding_polyhedron {
 /* A Voronoi cell is represented as an array of convex pieces.
  * For convex domains N_pieces is always 1; for non-convex domains N_pieces >= 1. */
 typedef struct vcell {
-    int      seed_id;
-    s_convh *pieces;
-    int      N_pieces;
-    double   volume;
+    int        seed_id;
+    s_convh   *pieces;
+    int        N_pieces;
+    double     volume;
+    s_trimesh *surface;     /* array of the cell's boundary meshes, one per connected
+                               component (a non-convex cell straddling a domain fold can
+                               pinch into >1 lobe). NULL/0 if extraction failed. */
+    int        N_surface;   /* number of surface components */
 } s_vcell;
 
 void free_vcell(s_vcell *c);

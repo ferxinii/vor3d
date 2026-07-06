@@ -19,6 +19,8 @@ void free_vcell(s_vcell *c)
 {
     for (int i = 0; i < c->N_pieces; i++) free_convhull(&c->pieces[i]);
     free(c->pieces);
+    for (int i = 0; i < c->N_surface; i++) free_trimesh(&c->surface[i]);
+    free(c->surface);
     memset(c, 0, sizeof(s_vcell));
 }
 
@@ -145,6 +147,8 @@ int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_rea
         memcpy(&vd.vcells[ii].seed_id,  p, sizeof(int));    p += sizeof(int);
         memcpy(&vd.vcells[ii].volume,   p, sizeof(double)); p += sizeof(double);
         memcpy(&vd.vcells[ii].N_pieces, p, sizeof(int));    p += sizeof(int);
+        vd.vcells[ii].surface = NULL;          /* not serialized (yet); see plan */
+        vd.vcells[ii].N_surface = 0;
 
         vd.vcells[ii].pieces = malloc(sizeof(s_convh) * vd.vcells[ii].N_pieces);
         if (!vd.vcells[ii].pieces) goto error;
