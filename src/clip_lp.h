@@ -67,6 +67,20 @@ static inline void lp3_tet_face_orient(const s_point tet[4], int sigma_f[4])
     }
 }
 
+/* ---- exact concyclicity (cocircular 4 points) -------------------------- */
+
+/* Do a,b,c,d lie on a common circle?  Concyclic = coplanar AND on a common
+ * circle.  Gates the coplanarity precondition of incircle3d (valid only for
+ * coplanar input): first an exact orient3d, then incircle3d.  a,b,c must be a
+ * real triangle; a collinear triple has no circumcircle (incircle3d returns its
+ * sentinel 2) and this reports 0.  Exact -- returns 1 iff concyclic, else 0. */
+static inline int points_concyclic(s_point a, s_point b, s_point c, s_point d)
+{
+    if (test_orientation((s_point[]){ a, b, c }, d) != 0) return 0;   /* not coplanar */
+    return incircle3d(a.x, a.y, a.z, b.x, b.y, b.z,
+                      c.x, c.y, c.z, d.x, d.y, d.z) == 0;
+}
+
 /* ---- helpers to pull the S/T pieces out of a constraint triple ---------- */
 
 /* Split (a,b,c) into the tet-face ids (T) and seed cids (S). */

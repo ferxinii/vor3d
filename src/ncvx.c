@@ -411,12 +411,93 @@ static int lp_cmp_lambda(s_point A, s_point B, s_point s, s_point tj, s_point tk
 /* Surface extraction helpers (see SURFACE_EXTRACTION_PLAN.md)             */
 /* ---------------------------------------------------------------------- */
 
+/* Canonical identity of the Voronoi vertex dual to DT tet {s,j1,j2,j3} of cell
+ * s, robust to cosphericity.  The equidistant cluster is found EXACTLY:
+ *   E = {s,j1,j2,j3} + every neighbour of s on the circumsphere (insphere == 0).
+ * The key names the 4 smallest members of E -- a pure name, never used to
+ * re-derive geometry -- so every construction of this point (any dual quad of
+ * the cluster, or a Voronoi-edge/face crossing that lands on it) produces the
+ * SAME key in every tet and piece of the cell.  bis gets ALL partners E\{s},
+ * making bisector-plane membership complete. */
+static s_vlabel canonical_vv_label(int s, int j1, int j2, int j3,
+                                   const s_points *seeds, const int *nbr, int NB)
+{
+    s_point sph[4] = { seeds->p[s], seeds->p[j1], seeds->p[j2], seeds->p[j3] };
+    int32_t E[SV_NBIS + 1];
+    int ne = 0;
+    E[ne++] = s; E[ne++] = j1; E[ne++] = j2; E[ne++] = j3;
+    for (int k = 0; k < NB; k++) {
+        int u = nbr[k];
+        if (u == j1 || u == j2 || u == j3) continue;
+        if (test_insphere(sph, seeds->p[u]) != 0) continue;
+        if (ne <= SV_NBIS) E[ne++] = u;
+        else fprintf(stderr, "canonical_vv_label: cospherical cluster >%d (dropped %d)\n",
+                     SV_NBIS + 1, u);
+    }
+    for (int i = 1; i < ne; i++) {                        /* sort E ascending */
+        int32_t x = E[i]; int j = i - 1;
+        while (j >= 0 && E[j] > x) { E[j+1] = E[j]; j--; }
+        E[j+1] = x;
+    }
+    s_vlabel lb = vlabel_make3(vkey_VV(E[0], E[1], E[2], E[3]), 0, -1, -1, -1);
+    for (int i = 0; i < ne; i++) if (E[i] != s) vlabel_add_bis(&lb, E[i]);
+    return lb;
+}
+
+/* Canonical cocircular cluster of the Voronoi edge dual to DT triangle
+ * {cell_seed, j1, j2}: the neighbour seeds lying on that triangle's circumcircle
+ * (found EXACTLY with points_concyclic).  A cocircular seed subset is split by
+ * the simplicial DT into several triangles whose dual Voronoi edges are all
+ * COLLINEAR (same perpendicular axis of the shared circle), so their crossings
+ * of a common face/edge coincide exactly but would otherwise carry different EF
+ * (or EE) seed-triples.  Naming the crossing by the cluster's two smallest
+ * members -- identical for every triangle of the cluster, since every triangle
+ * has the same circumcircle -- makes those crossings weld under one key with no
+ * coordinate tolerance.  Fills out[] with the cluster neighbours (excluding
+ * cell_seed) sorted ascending, returns the count (>=2).  The caller keys on
+ * {cell_seed, out[0], out[1]} and takes out[0..count) as bisector partners.
+ * When there is no concyclic partner the cluster is just {j1,j2}, so the key is
+ * bit-for-bit the plain EF/EE key -- non-degenerate cells are untouched. */
+static int canonical_edge_cluster(int cell_seed, int j1, int j2,
+                                  const s_points *seeds, const int *nbr, int NB,
+                                  int32_t out[SV_NBIS])
+{
+    s_point a = seeds->p[cell_seed], b = seeds->p[j1], c = seeds->p[j2];
+    int n = 0;
+    out[n++] = j1; out[n++] = j2;
+    for (int k = 0; k < NB; k++) {
+        int u = nbr[k];
+        if (u == j1 || u == j2) continue;
+        if (!points_concyclic(a, b, c, seeds->p[u])) continue;
+        if (n < SV_NBIS) out[n++] = u;
+        else fprintf(stderr, "canonical_edge_cluster: cocircular cluster >%d (dropped %d)\n",
+                     SV_NBIS, u);
+    }
+    for (int i = 1; i < n; i++) {                         /* sort ascending */
+        int32_t x = out[i]; int j = i - 1;
+        while (j >= 0 && out[j] > x) { out[j+1] = out[j]; j--; }
+        out[j+1] = x;
+    }
+    return n;
+}
+
 /* Scatter per-candidate labels (aligned index-for-index with the hull's input
- * point array) onto the hull's output vertices via pmap. Two inputs deduped to
- * one output vertex are merged. Returns malloc'd array of length out_N (caller
+ * point array) onto the hull's output vertices via pmap.  pmap marks EVERY
+ * unused input -1, including a duplicate of a kept hull vertex (degenerate
+ * seed sets produce many coincident candidates: e.g. a grid-cube corner is the
+ * circumcentre of every dual tet of the cospherical cluster).  Their plane
+ * evidence must not be lost, so a dropped input is merged into the label of
+ * the hull vertex the hull collapsed it onto: its nearest output vertex, if
+ * that lies within the hull's own working tolerance (bit-identical duplicates
+ * match at distance 0; sub-EPS micro-features -- a Voronoi vertex a few ulps
+ * off a CDT face plus its incident crossings -- match at ~1e-14).  A dropped
+ * strictly-interior point sits far (>= EPS) from every hull vertex and is
+ * left alone.  This only recovers merges the hull already made; it introduces
+ * no new geometric decision.  Returns malloc'd array of length out_N (caller
  * frees), or NULL on allocation failure. */
 static s_vlabel *scatter_labels(const s_dynarray *cand, const int *pmap,
-                                int in_N, int out_N)
+                                const s_points *in_pts, const s_points *out_pts,
+                                int in_N, int out_N, double EPS_DEG)
 {
     size_t nn = (size_t)(out_N > 0 ? out_N : 1);
     s_vlabel *labels = calloc(nn, sizeof(s_vlabel));
@@ -428,6 +509,19 @@ static s_vlabel *scatter_labels(const s_dynarray *cand, const int *pmap,
         const s_vlabel *src = (const s_vlabel *)dynarray_get_ptr_c(cand, (size_t)ii);
         if (!set[v]) { labels[v] = *src; set[v] = 1; }
         else vlabel_merge(&labels[v], src);
+    }
+    for (int ii = 0; ii < in_N; ii++) {                  /* dropped duplicates */
+        if (pmap[ii] >= 0) continue;
+        s_point q = in_pts->p[ii];
+        int best = -1; double bestd = EPS_DEG * EPS_DEG;
+        for (int v = 0; v < out_N; v++) {
+            double d = norm_squared(subtract_points(q, out_pts->p[v]));
+            if (d < bestd) { bestd = d; best = v; }
+        }
+        if (best < 0) continue;
+        const s_vlabel *src = (const s_vlabel *)dynarray_get_ptr_c(cand, (size_t)ii);
+        if (!set[best]) { labels[best] = *src; set[best] = 1; }
+        else vlabel_merge(&labels[best], src);
     }
     free(set);
     return labels;
@@ -464,9 +558,9 @@ static int piece_to_surface(const s_convh *piece, const s_vlabel *labels,
             plane = pkey_bis(seed_id, t);
         }
         s_surf_tri tri = { plane, {
-            { L0->key, piece->points.p[v0] },
-            { L1->key, piece->points.p[v1] },
-            { L2->key, piece->points.p[v2] },
+            { *L0, piece->points.p[v0] },
+            { *L1, piece->points.p[v1] },
+            { *L2, piece->points.p[v2] },
         } };
         if (!dynarray_push(acc, &tri)) return 0;
     }
@@ -526,7 +620,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             }
         }
         if (keep) {
-            s_vlabel lb = { vkey_TV(tet_vids[j]), (uint8_t)(0xF ^ (1 << j)), {-1, -1, -1} };
+            s_vlabel lb = vlabel_make3(vkey_TV(tet_vids[j]), (uint8_t)(0xF ^ (1 << j)), -1, -1, -1);
             if (!dynarray_push(&pts, &tet[j]) || !dynarray_push(&cand, &lb)) goto err;
         }
     }
@@ -545,9 +639,10 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             /* exact signs of gX = |X-s|^2 - |X-t|^2 (>0 == X outside this bisector) */
             int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z);
             int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
-            if (sA < 0 && sB < 0) continue;              /* edge fully inside this bisector */
-            if (sA > 0 && sB > 0) { empty = 1; continue; }  /* edge fully outside -> no (d) here */
-            if (sA == 0 || sB == 0) continue;            /* endpoint on bisector: no interior crossing */
+            if (sA <= 0 && sB <= 0) continue;            /* edge inside (boundary counts as in) */
+            if (sA >= 0 && sB >= 0) { empty = 1; continue; }  /* interior fully outside: also the
+                 * endpoint-ON-bisector case (sX==0, other end out) -- the interior is infeasible,
+                 * so the constraint must EMPTY the edge, not be skipped */
             /* strict straddle -> crossing in (0,1); slope>0 (g decreasing) => LO bound */
             int slope = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
             if (slope > 0) {
@@ -566,8 +661,8 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             double gA = lp_bisval(A, s, t), gB = lp_bisval(B, s, t);
             double lam = gA / (gA - gB);
             s_point Pt = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y), .z = A.z + lam*(B.z-A.z) };
-            s_vlabel lb = { vkey_VB(tet_vids[e[0]], tet_vids[e[1]], seed_id, nbr[kk]),
-                            (uint8_t)((1 << f) | (1 << g)), { nbr[kk], -1, -1 } };
+            s_vlabel lb = vlabel_make3(vkey_VB(tet_vids[e[0]], tet_vids[e[1]], seed_id, nbr[kk]),
+                                       (uint8_t)((1 << f) | (1 << g)), nbr[kk], -1, -1);
             if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
         }
     }
@@ -603,7 +698,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             s_point tetc[4] = { s, seeds->p[j1], seeds->p[j2], seeds->p[j3] };
             s_point Pt;
             if (circumcentre_tetrahedron(tetc, EPS_DEG, &Pt)) {
-                s_vlabel lb = { vkey_VV(seed_id, j1, j2, j3), 0, { j1, j2, j3 } };
+                s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, nbr, NB);
                 if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
             }
         }
@@ -623,17 +718,23 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         for (int f = 0; f < 4; f++) {
             s_cid3 a = FC[f], b = { CT_SEED, j1 }, c = { CT_SEED, j2 };
             int keep = 1;
+            int zf[3], nzf = 0;      /* other faces the crossing lies exactly ON */
             for (int g = 0; g < 4 && keep; g++) {
                 if (g == f) continue;
-                if (lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[g]) < 0) keep = 0;
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[g]);
+                if (fe < 0) keep = 0;
+                else if (fe == 0) zf[nzf++] = g;
             }
             /* On the real Voronoi edge iff on s's side of its (<=2) capping
              * bisectors (the adjacent DT tets' apexes) -- duality replaces the
              * O(N) all-bisector filter with O(1). */
+            int zcap = -1;           /* cap the crossing coincides with exactly */
             for (int ci2 = 0; ci2 < 2 && keep; ci2++) {
                 if (cap[ci2] < 0) continue;
                 s_cid3 q = { CT_SEED, cap[ci2] };
-                if (lp3_feasible(tet, sigma_f, s, seeds, a, b, c, q) < 0) keep = 0;
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, q);
+                if (fe < 0) keep = 0;
+                else if (fe == 0) zcap = cap[ci2];
             }
             if (keep) {
                 int fv[3]; lp3_face_idx(f, fv);
@@ -657,9 +758,50 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                  * so success is == 3 (all three pivots usable), not merely non-zero. */
                 if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
                     s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
-                    s_vlabel lb = { vkey_EF(seed_id, j1, j2,
-                                            tet_vids[fv[0]], tet_vids[fv[1]], tet_vids[fv[2]]),
-                                    (uint8_t)(1 << f), { j1, j2, -1 } };
+                    /* Canonical re-keying of exactly-degenerate crossings, so
+                     * every construction of the same point in every tet/piece
+                     * welds under one key (see SURFACE_ROBUSTNESS_PLAN.md):
+                     *   zcap  == 0 -> the crossing IS the Voronoi vertex dual
+                     *                 to {s,j1,j2,zcap} (possibly cospherical);
+                     *   nzf >= 2   -> it sits ON the tet vertex common to f,
+                     *                 zf[0], zf[1] (same point as category b);
+                     *   nzf == 1   -> it sits ON the CDT edge shared by f and
+                     *                 zf[0] (face-based EF keys would differ
+                     *                 between the faces around that edge). */
+                    s_vlabel lb;
+                    uint8_t fm = (uint8_t)(1 << f);
+                    for (int zi = 0; zi < nzf; zi++) fm |= (uint8_t)(1 << zf[zi]);
+                    if (zcap >= 0) {
+                        lb = canonical_vv_label(seed_id, j1, j2, zcap, seeds, nbr, NB);
+                        lb.fmask = fm;
+                        /* keep the face form as an alternate so PK_FACE
+                         * membership of this face is still recognised */
+                        vlabel_add_alt(&lb, vkey_EF(seed_id, j1, j2,
+                                       tet_vids[fv[0]], tet_vids[fv[1]], tet_vids[fv[2]]));
+                    } else if (nzf >= 2) {
+                        int vloc = 6 - f - zf[0] - zf[1];   /* vertex on all 3 faces */
+                        lb = vlabel_make3(vkey_TV(tet_vids[vloc]),
+                                          (uint8_t)(0xF ^ (1 << vloc)), j1, j2, -1);
+                    } else if (nzf == 1) {
+                        /* on a CDT edge: EE, seed-triple canonicalised over the
+                         * cocircular cluster (collinear dual edges coincide). */
+                        int e2[2]; lp3_shared_edge(f, zf[0], e2);
+                        int32_t cl[SV_NBIS];
+                        int ncl = canonical_edge_cluster(seed_id, j1, j2, seeds, nbr, NB, cl);
+                        lb = vlabel_make3(vkey_EE(seed_id, cl[0], cl[1],
+                                                  tet_vids[e2[0]], tet_vids[e2[1]]),
+                                          fm, -1, -1, -1);
+                        for (int i = 0; i < ncl; i++) vlabel_add_bis(&lb, cl[i]);
+                    } else {
+                        /* generic face crossing: EF, seed-triple canonicalised
+                         * over the cocircular cluster. */
+                        int32_t cl[SV_NBIS];
+                        int ncl = canonical_edge_cluster(seed_id, j1, j2, seeds, nbr, NB, cl);
+                        lb = vlabel_make3(vkey_EF(seed_id, cl[0], cl[1],
+                                                  tet_vids[fv[0]], tet_vids[fv[1]], tet_vids[fv[2]]),
+                                          fm, -1, -1, -1);
+                        for (int i = 0; i < ncl; i++) vlabel_add_bis(&lb, cl[i]);
+                    }
                     if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
                 }
             }
@@ -672,7 +814,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         if (out_labels && !pmap) goto err;
         int r = convhull_from_points_mapped(&P, EPS_DEG, out, pmap);
         if (r == 1 && out_labels) {
-            s_vlabel *labels = scatter_labels(&cand, pmap, (int)pts.N, out->points.N);
+            s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N, EPS_DEG);
             if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN; goto err; }
             *out_labels = labels;
         }
@@ -696,6 +838,7 @@ err:
  * entirely inside the domain, so it is not carved by any tet. Returns 1 (built
  * into *out, volume in *vol_out), 0 (degenerate/empty), -1 (allocation error). */
 static int emit_interior_cell(int seed_id, const s_points *seeds,
+                              const int *nbr, int NB,
                               const int *vor_vtx, int n_vtx, double EPS_DEG,
                               s_convh *out, double *vol_out, s_vlabel **out_labels)
 {
@@ -711,8 +854,8 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
         s_point Pt;
         if (circumcentre_tetrahedron(tetc, EPS_DEG, &Pt)) {
             /* interior cell: all faces are Voronoi walls, so every vertex is a
-             * VV point on the three bisectors {s,j1},{s,j2},{s,j3}. */
-            s_vlabel lb = { vkey_VV(seed_id, j1, j2, j3), 0, { j1, j2, j3 } };
+             * VV point on the bisectors of its (possibly cospherical) cluster. */
+            s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, nbr, NB);
             if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) {
                 dynarray_free(&pts); dynarray_free(&cand); return -1;
             }
@@ -723,7 +866,7 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     if (out_labels && !pmap) { dynarray_free(&pts); dynarray_free(&cand); return -1; }
     int r = convhull_from_points_mapped(&P, EPS_DEG, out, pmap);
     if (r == 1 && out_labels) {
-        s_vlabel *labels = scatter_labels(&cand, pmap, (int)pts.N, out->points.N);
+        s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N, EPS_DEG);
         if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN;
                        dynarray_free(&pts); dynarray_free(&cand); return -1; }
         *out_labels = labels;
@@ -936,7 +1079,10 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         int n_vtx = adj->vtx_off[i+1] - adj->vtx_off[i];
         const int *vv = adj->vtx + 3 * adj->vtx_off[i];
         s_convh hull; double hv; s_vlabel *labels = NULL;
-        int r = emit_interior_cell(i, real_seeds, vv, n_vtx, EPS_DEG, &hull, &hv,
+        int r = emit_interior_cell(i, real_seeds,
+                                   adj->neighbor + adj->offset[i],
+                                   adj->offset[i+1] - adj->offset[i],
+                                   vv, n_vtx, EPS_DEG, &hull, &hv,
                                    want_surface ? &labels : NULL);
         if (r == -1) goto err;
         if (r == 1) {
@@ -967,7 +1113,8 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
 
         if (want_surface) {   /* a pinched cell splits into >1 connected component */
             s_trimesh *sm = NULL; int sn = 0;
-            if (build_cell_surface(&surf[i], EPS_DEG, &sm, &sn) == 1) {
+            if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt.points,
+                                   EPS_DEG, &sm, &sn) == 1) {
                 vcells[i].surface   = sm;
                 vcells[i].N_surface = sn;
             }

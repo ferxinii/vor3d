@@ -23,11 +23,13 @@
 #include "dynarray.h"
 #include "hash.h"
 #include "UF.h"         /* Union-Find for connected-component splitting */
-#include "gtests.h"     /* exact orient2d (test_orientation_2d) for ear-clipping */
+#include "gtests.h"     /* exact orient2d + test_insphere */
+#include "voronoi_predicates.h"   /* exact lp3_* feasibility for edge ordering */
+#include "robust_predicates.h"    /* orient3d */
 
 /* ---- key type ---------------------------------------------------------- */
 
-typedef enum { VK_TV = 0, VK_VB, VK_VV, VK_EF } e_vkind;
+typedef enum { VK_TV = 0, VK_VB, VK_VV, VK_EF, VK_EE } e_vkind;
 
 /* Fixed-size POD, no padding (7 x int32 = 28 bytes): safe to memcmp / hash by
  * bytes.  Unused fields are -1.  Fields are canonicalised (sorted) so equal
@@ -39,17 +41,30 @@ typedef struct vkey {
 
 /* Per-hull-vertex label: identity key + plane membership (for face classify).
  * fmask bit i set => vertex lies on local tet face i (0..3).
- * bis[k] = partner seed id of a bisector {s, bis[k]} the vertex lies on (-1 unused). */
+ * bis[k] = partner seed id of a bisector {s, bis[k]} the vertex lies on (-1 unused).
+ *
+ * Degenerate (cospherical) seed sets make several candidate constructions land
+ * on the SAME point (e.g. a grid-cube corner is the circumcentre of every tet
+ * triangulating the cube: up to ~6 VV duals, possibly plus EF/VB crossings).
+ * When the hull dedupes them into one vertex the label must not lose plane
+ * evidence, so it keeps the UNION of bisector partners (SV_NBIS slots) and all
+ * distinct merged keys: `key` is the canonical (lexicographically smallest)
+ * one -- deterministic, so every piece welds the vertex identically -- and
+ * alt[0..nalt) are the others, consulted for complete plane membership. */
+#define SV_NBIS 12
+#define SV_NALT 8
 typedef struct vlabel {
-    s_vkey  key;
+    s_vkey  key;                 /* canonical identity (min over merged keys) */
     uint8_t fmask;
-    int32_t bis[3];
+    int8_t  nalt;
+    int32_t bis[SV_NBIS];
+    s_vkey  alt[SV_NALT];        /* other merged constructions of this point */
 } s_vlabel;
 
 /* One triangle corner emitted to a cell's surface accumulator. */
 typedef struct surf_vtx {
-    s_vkey  key;
-    s_point p;
+    s_vlabel lb;
+    s_point  p;
 } s_surf_vtx;
 
 /* Canonical id of the supporting plane of a piece face, using GLOBAL ids so the
@@ -125,6 +140,18 @@ static inline s_vkey vkey_EF(int s, int j1, int j2, int t0, int t1, int t2)
     return (s_vkey){ VK_EF, a, b, c, d, e, f };
 }
 
+/* (c') Voronoi-edge {s,j1,j2} ^ tet-EDGE {e0,e1} (all global): the crossing
+ * lies exactly ON a CDT edge (a face-feasibility test returned 0), so the
+ * face-based EF key would differ between the two faces sharing the edge.  A
+ * line ^ line crossing is unique, so this form is identical in every tet and
+ * face around that CDT edge. */
+static inline s_vkey vkey_EE(int s, int j1, int j2, int e0, int e1)
+{
+    int32_t a = s, b = j1, c = j2, d = e0, e = e1;
+    vk_sort3(&a, &b, &c); vk_sort2(&d, &e);
+    return (s_vkey){ VK_EE, a, b, c, d, e, -1 };
+}
+
 
 /* ---- hash.h callbacks -------------------------------------------------- */
 
@@ -143,43 +170,91 @@ static inline bool vkey_equals(const void *a, const void *b)
 
 /* ---- label merge (two candidates deduped to one hull vertex) ----------- */
 
+/* Total order on vkeys (lexicographic on the canonical index fields): picks the
+ * canonical key of a merged (degenerate) vertex, and is the symbolic tiebreak
+ * for the exact edge ordering.  Identical everywhere, so every piece/facet
+ * makes the same choice. */
+static inline int sv_vkey_cmp(s_vkey A, s_vkey B)
+{
+    if (A.tag != B.tag) return A.tag < B.tag ? -1 : 1;
+    if (A.a != B.a) return A.a < B.a ? -1 : 1;
+    if (A.b != B.b) return A.b < B.b ? -1 : 1;
+    if (A.c != B.c) return A.c < B.c ? -1 : 1;
+    if (A.d != B.d) return A.d < B.d ? -1 : 1;
+    if (A.e != B.e) return A.e < B.e ? -1 : 1;
+    if (A.f != B.f) return A.f < B.f ? -1 : 1;
+    return 0;
+}
+
+/* Label for a fresh candidate: canonical key `k`, tet-face mask, and up to
+ * three bisector partners (-1 = unused). Remaining slots are cleared. */
+static inline s_vlabel vlabel_make3(s_vkey k, uint8_t fmask, int t1, int t2, int t3)
+{
+    s_vlabel L;
+    L.key = k; L.fmask = fmask; L.nalt = 0;
+    L.bis[0] = t1; L.bis[1] = t2; L.bis[2] = t3;
+    for (int i = 3; i < SV_NBIS; i++) L.bis[i] = -1;
+    memset(L.alt, 0, sizeof(L.alt));
+    return L;
+}
+
 static inline void vlabel_add_bis(s_vlabel *dst, int t)
 {
     if (t < 0) return;
-    for (int k = 0; k < 3; k++) if (dst->bis[k] == t) return;   /* already present */
-    for (int k = 0; k < 3; k++) if (dst->bis[k] < 0) { dst->bis[k] = t; return; }
-    /* overflow (>3 distinct partners): ignore; classification only needs a
-     * common partner, which is preserved by the first slots. */
+    for (int k = 0; k < SV_NBIS; k++) if (dst->bis[k] == t) return;   /* already present */
+    for (int k = 0; k < SV_NBIS; k++) if (dst->bis[k] < 0) { dst->bis[k] = t; return; }
+    fprintf(stderr, "vlabel_add_bis: >%d bisector partners at one vertex (dropped %d)\n",
+            SV_NBIS, t);
 }
 
+static inline void vlabel_add_alt(s_vlabel *dst, s_vkey k)
+{
+    if (sv_vkey_cmp(k, dst->key) == 0) return;
+    for (int i = 0; i < dst->nalt; i++) if (sv_vkey_cmp(k, dst->alt[i]) == 0) return;
+    if (dst->nalt < SV_NALT) { dst->alt[dst->nalt++] = k; return; }
+    fprintf(stderr, "vlabel_add_alt: >%d coincident constructions at one vertex\n", SV_NALT);
+}
+
+/* Coincident candidates deduped to one hull vertex: union the plane evidence
+ * and keep the smallest key as the canonical identity (order-independent, so
+ * every piece containing the point picks the same one). */
 static inline void vlabel_merge(s_vlabel *dst, const s_vlabel *src)
 {
     dst->fmask |= src->fmask;
-    for (int k = 0; k < 3; k++) vlabel_add_bis(dst, src->bis[k]);
-    /* keys are combinatorial identities: equal points => equal keys, so `dst`'s
-     * key is kept as-is. */
+    for (int k = 0; k < SV_NBIS; k++) vlabel_add_bis(dst, src->bis[k]);
+    if (sv_vkey_cmp(src->key, dst->key) < 0) {
+        vlabel_add_alt(dst, dst->key);
+        dst->key = src->key;
+    } else {
+        vlabel_add_alt(dst, src->key);
+    }
+    for (int i = 0; i < src->nalt; i++) vlabel_add_alt(dst, src->alt[i]);
 }
 
-/* Partner seed id present in all three vertices' bisector lists (-1 if none):
- * the three vertices of a hull face all lie on the bisector {s, that_partner}. */
+/* Smallest partner seed id present in all three vertices' bisector lists (-1 if
+ * none): the three vertices of a hull face all lie on the bisector
+ * {s, that_partner}. Smallest => deterministic across the pieces tiling a
+ * facet (a non-degenerate triangle determines its plane, so distinct common
+ * partners can only name the same plane; the tie must still break identically). */
 static inline int vlabel_common_bis(const s_vlabel *a, const s_vlabel *b,
                                     const s_vlabel *c)
 {
-    for (int i = 0; i < 3; i++) {
+    int best = -1;
+    for (int i = 0; i < SV_NBIS; i++) {
         int t = a->bis[i];
         if (t < 0) continue;
         int inb = 0, inc = 0;
-        for (int k = 0; k < 3; k++) {
+        for (int k = 0; k < SV_NBIS; k++) {
             if (b->bis[k] == t) inb = 1;
             if (c->bis[k] == t) inc = 1;
         }
-        if (inb && inc) return t;
+        if (inb && inc && (best < 0 || t < best)) best = t;
     }
-    return -1;
+    return best;
 }
 
 
-/* ---- per-cell assembly: boundary-of-union via per-plane edge XOR ---------
+/* ---- per-cell assembly: per-plane edge XOR + combinatorial subdivision -----
  *
  * Every piece face carries its supporting plane (s_pkey). For each plane we XOR
  * the DIRECTED edges of its triangles (an edge and its reverse cancel):
@@ -187,12 +262,16 @@ static inline int vlabel_common_bis(const s_vlabel *a, const s_vlabel *b,
  *   - an interior tet face is contributed by both adjacent tets with opposite
  *     orientation -> its whole boundary cancels -> the plane vanishes;
  *   - a boundary tet face or a bisector facet (possibly spanning several tet
- *     pieces, whose seam edges cancel) leaves its outer boundary loop.
- * The surviving directed edges per plane form closed loops (walked by vertex id,
- * purely combinatorial). Each loop is re-triangulated by exact ear-clipping.
- * Connectivity is entirely key/id-based -> no floating point can open a seam;
- * the ear-clip predicates are exact (orient2d on axis-dropped coordinates), so
- * the triangle *geometry* is correct too. */
+ *     pieces) leaves its outer boundary loop.
+ * Before XOR, every triangle edge is SUBDIVIDED at the vertices lying on it,
+ * detected COMBINATORIALLY: an edge (u,v) on facet P and neighbour plane Q has
+ * supporting line P^Q, and w lies on it iff on_plane(w,P) && on_plane(w,Q) (its
+ * vkey places it on both). Both facets sharing the line subdivide identically,
+ * so no T-junction can open a seam -- the identification is exact, never a
+ * coordinate test. (The position of w along the edge -- which sub-edges to emit
+ * -- currently uses a float axis order; SURFACE_EXACT_PLAN.md Phase B replaces it
+ * with the exact `ord` predicate composed from lp3_feasible_*.) The surviving
+ * edges per plane are walked into closed loops and ear-clipped (exact orient2d). */
 
 /* Axis-aligned projection to 2D: keep the two coordinates != drop, in an order
  * that preserves orientation for the +drop normal. Coordinates are exact (a
@@ -204,6 +283,34 @@ static inline s_point2d surf_proj2d(s_point p, int drop)
         case 1:  return (s_point2d){{{ p.z, p.x }}};
         default: return (s_point2d){{{ p.x, p.y }}};
     }
+}
+
+/* ---- exact clockwise angular order (for face tracing) --------------------
+ * Rank of direction V->X in a CLOCKWISE sweep starting just after direction
+ * V->U: right half-plane first (0), exactly opposite (1), left half-plane (2),
+ * exactly the incoming direction (U-turn) last (3).  Exact orient2d on the
+ * projected doubles; the collinear same/opposite split compares signs on the
+ * dominant axis of U-V (exact float compares). */
+static inline int sv_dir_rank(s_point2d V, s_point2d U, s_point2d X)
+{
+    int o = test_orientation_2d((s_point2d[]){ V, U }, X);
+    if (o < 0) return 0;
+    if (o > 0) return 2;
+    double du = U.x - V.x, dx = X.x - V.x;
+    if (fabs(U.y - V.y) > fabs(du)) { du = U.y - V.y; dx = X.y - V.y; }
+    return ((du > 0) == (dx > 0)) ? 3 : 1;
+}
+
+/* Does direction V->A come strictly before V->B in that clockwise sweep?
+ * Same-rank candidates order by a second exact orient2d; exactly-parallel
+ * same-direction candidates (post-subdivision leftovers) order closer-first. */
+static inline int sv_cw_before(s_point2d V, s_point2d U, s_point2d A, s_point2d B)
+{
+    int ra = sv_dir_rank(V, U, A), rb = sv_dir_rank(V, U, B);
+    if (ra != rb) return ra < rb;
+    int o = test_orientation_2d((s_point2d[]){ V, A }, B);
+    if (o != 0) return o < 0;
+    return (fabs(A.x - V.x) + fabs(A.y - V.y)) < (fabs(B.x - V.x) + fabs(B.y - V.y));
 }
 
 /* Ear-clip a simple loop (vertex ids into `coords`, length n) into `faces_out`
@@ -286,7 +393,8 @@ done:
 /* Undirected edge -> incident-triangle bucket, for splitting the assembled
  * surface into connected components at non-manifold (pinch) edges. */
 typedef struct e2tkey { int32_t lo, hi; } s_e2tkey;
-typedef struct e2tval { int32_t cnt, t0, t1; } s_e2tval;
+#define SV_EMAXT 12
+typedef struct e2tval { int32_t lo, hi, cnt; int32_t t[SV_EMAXT]; } s_e2tval;
 
 static inline size_t e2t_hash(const void *k)
 {
@@ -322,59 +430,437 @@ static inline int edgerec_cmp_plane(const void *A, const void *B)
     return memcmp(&a->plane, &b->plane, sizeof(s_pkey));
 }
 
+/* ---- combinatorial facet tracker helpers ------------------------------- */
+
+static inline size_t pkey_hash(const void *k)
+{
+    const unsigned char *p = (const unsigned char *)k;
+    size_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < sizeof(s_pkey); i++) { h ^= p[i]; h *= 1099511628211ULL; }
+    return h;
+}
+static inline bool pkey_equals(const void *a, const void *b)
+{
+    return memcmp(a, b, sizeof(s_pkey)) == 0;
+}
+
+static inline int vk_in3(int x, int a, int b, int c) { return x == a || x == b || x == c; }
+static inline int vk_in4(int x, int a, int b, int c, int d) { return x==a||x==b||x==c||x==d; }
+
+/* Does the surface vertex `vk` lie on facet plane P?  Purely combinatorial: the
+ * vkey encodes the constraint planes meeting at the vertex; match them against
+ * P's identity (seed pair for a bisector, CDT-vertex triple for a face). This
+ * membership is COMPLETE -- it catches a vertex sitting on a straight facet edge
+ * even when that facet's own triangulation skipped it (the T-junction case). */
+static inline int on_plane(s_vkey vk, s_pkey P)
+{
+    if (P.tag == PK_BIS) {                      /* bisector between seeds {P.a,P.b} */
+        switch (vk.tag) {
+            case VK_VB: return vk.c == P.a && vk.d == P.b;              /* its bisector {c,d} */
+            case VK_VV: return vk_in4(P.a, vk.a,vk.b,vk.c,vk.d)
+                            && vk_in4(P.b, vk.a,vk.b,vk.c,vk.d);        /* equidistant to both */
+            case VK_EF:
+            case VK_EE: return vk_in3(P.a, vk.a,vk.b,vk.c)
+                            && vk_in3(P.b, vk.a,vk.b,vk.c);             /* Voronoi-edge seeds */
+            default:    return 0;                                      /* VK_TV */
+        }
+    }
+    switch (vk.tag) {                           /* PK_FACE: boundary face {P.a,P.b,P.c} */
+        case VK_TV: return vk.a == P.a || vk.a == P.b || vk.a == P.c;  /* a face vertex */
+        case VK_VB: return vk_in3(vk.a, P.a,P.b,P.c)
+                        && vk_in3(vk.b, P.a,P.b,P.c);                   /* an edge of the face */
+        case VK_EF: return vk.d == P.a && vk.e == P.b && vk.f == P.c;  /* its face */
+        case VK_EE: return vk_in3(vk.d, P.a,P.b,P.c)
+                        && vk_in3(vk.e, P.a,P.b,P.c);                   /* on an edge of the face */
+        default:    return 0;                                         /* VK_VV */
+    }
+}
+
+/* Complete plane membership for a (possibly degenerate, merged) vertex: the
+ * canonical key alone under-reports for a coincident cluster, so also consult
+ * the alternate merged keys and, for a bisector plane of this cell, the
+ * unioned partner list. */
+static inline int lb_on_plane(const s_vlabel *L, s_pkey P, int cell_seed)
+{
+    if (on_plane(L->key, P)) return 1;
+    for (int i = 0; i < L->nalt; i++) if (on_plane(L->alt[i], P)) return 1;
+    if (P.tag == PK_BIS && (P.a == cell_seed || P.b == cell_seed)) {
+        int t = (P.a == cell_seed) ? P.b : P.a;
+        for (int k = 0; k < SV_NBIS; k++) if (L->bis[k] == t) return 1;
+    }
+    return 0;
+}
+
+/* ---- exact edge ordering (Phase B) ------------------------------------------
+ * ord_line(a,b, ...) returns sign(pos_a - pos_b) along the facet-edge line P^Q,
+ * = -sign(Delta_b) * feas(P,Q,R_a; R_b)  (lp3_predicates.tex Thm 8.1).  feas is
+ * an exact lp3_* predicate; the slope sign Delta_b = det[n_Rb; n_P; n_Q] is a
+ * plain float determinant (nonzero and well-separated for any real vertex, so its
+ * sign is reliable -- only feas needs exactness, to return 0 on coincidence). */
+
+static inline s_point sv_plane_nrm(s_pkey P, const s_points *sd, const s_points *cv)
+{
+    if (P.tag == PK_BIS) return subtract_points(sd->p[P.b], sd->p[P.a]);
+    return cross_prod(subtract_points(cv->p[P.b], cv->p[P.a]),
+                      subtract_points(cv->p[P.c], cv->p[P.a]));
+}
+static inline int sv_det3s(s_point a, s_point b, s_point c)
+{
+    double d = a.x*(b.y*c.z-b.z*c.y) - a.y*(b.x*c.z-b.z*c.x) + a.z*(b.x*c.y-b.y*c.x);
+    return (d > 0) - (d < 0);
+}
+/* the OTHER boundary face carrying CDT edge {e0,e1}, besides facet notF (-1 none). */
+static inline int sv_other_face(int e0, int e1, s_pkey notF, const s_pkey *fac, int nf)
+{
+    for (int f = 0; f < nf; f++) {
+        if (fac[f].tag != PK_FACE || pkey_equals(&fac[f], &notF)) continue;
+        if (vk_in3(e0, fac[f].a, fac[f].b, fac[f].c) && vk_in3(e1, fac[f].a, fac[f].b, fac[f].c))
+            return f;
+    }
+    return -1;
+}
+/* partner seeds of X other than the cell seed cs (into out[]); returns count. */
+static inline int sv_partners(s_vkey X, int cs, int out[3])
+{
+    int n = 0, sd[4], k = 0;
+    if (X.tag == VK_VV)      { sd[0]=X.a; sd[1]=X.b; sd[2]=X.c; sd[3]=X.d; k=4; }
+    else if (X.tag == VK_EF) { sd[0]=X.a; sd[1]=X.b; sd[2]=X.c; k=3; }
+    else if (X.tag == VK_VB) { sd[0]=X.c; sd[1]=X.d; k=2; }
+    for (int i = 0; i < k; i++) if (sd[i] != cs) out[n++] = sd[i];
+    return n;
+}
+
+/* Exact position sign along the line P^Q; MAY return 0 (coincident on the line).
+ * The 0 result is the exact coincidence certificate used by the merge (step 1.6). */
+static inline int ord_line_raw(s_vkey a, s_vkey b, s_point ca, s_point cb,
+                               s_pkey P, s_pkey Q, int cs,
+                               const s_points *sd, const s_points *cv,
+                               const s_pkey *facet, int nfac)
+{
+    s_point s  = sd->p[cs];
+    s_point nP = sv_plane_nrm(P, sd, cv), nQ = sv_plane_nrm(Q, sd, cv);
+    int feas = 2, db = 0;                        /* feas sentinel 2 = unhandled */
+
+    if (P.tag == PK_BIS && Q.tag == PK_BIS) {    /* L1: Voronoi edge; verts VV/EF */
+        int t1 = (P.a==cs)?P.b:P.a, t2 = (Q.a==cs)?Q.b:Q.a;
+        s_point T1 = sd->p[t1], T2 = sd->p[t2];
+        if (b.tag == VK_VV) {                    /* R_b = bisector B(cs,t3b) */
+            int pb[3], nb = sv_partners(b, cs, pb), t3b = -1;
+            for (int i=0;i<nb;i++) if (pb[i]!=t1 && pb[i]!=t2) t3b = pb[i];
+            if (t3b < 0) goto fallback;
+            db = sv_det3s(subtract_points(sd->p[t3b], s), nP, nQ);
+            s_point u = sd->p[t3b];
+            if (a.tag == VK_VV) {                /* SSS vs S = insphere */
+                int pa[3], na = sv_partners(a, cs, pa), t3a = -1;
+                for (int i=0;i<na;i++) if (pa[i]!=t1 && pa[i]!=t2) t3a = pa[i];
+                if (t3a < 0) goto fallback;
+                s_point sph[4] = { s, T1, T2, sd->p[t3a] };
+                feas = -test_insphere(sph, u);
+            } else if (a.tag == VK_EF) {         /* TSS vs S */
+                s_point A=cv->p[a.d], Qf=cv->p[a.e], R=cv->p[a.f];
+                feas = lp3_feasible_TSS_S(A.x,A.y,A.z, Qf.x,Qf.y,Qf.z, R.x,R.y,R.z,
+                                          s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                          u.x,u.y,u.z);
+            }
+        } else if (b.tag == VK_EF) {             /* R_b = b's face */
+            s_point A2=cv->p[b.d], Q2=cv->p[b.e], R2=cv->p[b.f];
+            db = sv_det3s(cross_prod(subtract_points(Q2,A2),subtract_points(R2,A2)), nP, nQ);
+            if (a.tag == VK_VV) {                /* SSS vs T */
+                int pa[3], na = sv_partners(a, cs, pa), t3a = -1;
+                for (int i=0;i<na;i++) if (pa[i]!=t1 && pa[i]!=t2) t3a = pa[i];
+                if (t3a < 0) goto fallback;
+                s_point U = sd->p[t3a];
+                feas = lp3_feasible_SSS_T(s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                          U.x,U.y,U.z, A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z);
+            } else if (a.tag == VK_EF) {         /* TSS vs T (general query face) */
+                s_point A1=cv->p[a.d], Q1=cv->p[a.e], R1=cv->p[a.f];
+                feas = lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z, Q1.x,Q1.y,Q1.z, R1.x,R1.y,R1.z,
+                                              A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z,
+                                              s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z);
+            }
+        }
+    }
+    else if (P.tag != Q.tag) {                   /* L2: bisector ^ face; verts EF/VB */
+        s_pkey BP = (P.tag==PK_BIS)?P:Q, FP = (P.tag==PK_FACE)?P:Q;
+        int t = (BP.a==cs)?BP.b:BP.a;
+        s_point T = sd->p[t];
+        if (b.tag == VK_EF) {                    /* R_b = other bisector B(cs,t') */
+            int pb[3], nb = sv_partners(b, cs, pb), tp = -1;
+            for (int i=0;i<nb;i++) if (pb[i]!=t) tp = pb[i];
+            if (tp < 0) goto fallback;
+            db = sv_det3s(subtract_points(sd->p[tp], s), nP, nQ);
+            s_point u = sd->p[tp];
+            if (a.tag == VK_EF) {                /* TSS vs S */
+                int pa[3]; sv_partners(a, cs, pa); int ta = (pa[0]!=t)?pa[0]:pa[1];
+                s_point A=cv->p[a.d],Qf=cv->p[a.e],R=cv->p[a.f], Ta=sd->p[ta];
+                feas = lp3_feasible_TSS_S(A.x,A.y,A.z,Qf.x,Qf.y,Qf.z,R.x,R.y,R.z,
+                                          s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z, u.x,u.y,u.z);
+            } else if (a.tag == VK_VB) {         /* TTS vs S */
+                s_point A=cv->p[a.a], B=cv->p[a.b];
+                feas = lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
+                                          T.x,T.y,T.z, u.x,u.y,u.z);
+            }
+        } else if (b.tag == VK_VB) {             /* R_b = other face F2 on b's edge */
+            int f2 = sv_other_face(b.a, b.b, FP, facet, nfac);
+            if (f2 < 0) goto fallback;
+            s_pkey F2 = facet[f2];
+            s_point A2=cv->p[F2.a],Q2=cv->p[F2.b],R2=cv->p[F2.c];
+            db = sv_det3s(cross_prod(subtract_points(Q2,A2),subtract_points(R2,A2)), nP, nQ);
+            if (a.tag == VK_EF) {                /* TSS vs T (gen) */
+                int pa[3]; sv_partners(a, cs, pa); int ta = (pa[0]!=t)?pa[0]:pa[1];
+                s_point A1=cv->p[a.d],Q1=cv->p[a.e],R1=cv->p[a.f], Ta=sd->p[ta];
+                feas = lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z,Q1.x,Q1.y,Q1.z,R1.x,R1.y,R1.z,
+                                              A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z,
+                                              s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z);
+            } else if (a.tag == VK_VB) {         /* TTS vs T */
+                s_point A=cv->p[a.a],B=cv->p[a.b];
+                feas = lp3_feasible_TTS_T(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z, T.x,T.y,T.z,
+                                          A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z);
+            }
+        }
+    }
+    else {                                       /* L3: tet edge (2 faces); verts VB */
+        if (b.tag == VK_VB && a.tag == VK_VB) {  /* R_b = bisector B(cs,tb); TTS vs S */
+            int pb[3]; sv_partners(b, cs, pb); int tb = pb[0];
+            int pa[3]; sv_partners(a, cs, pa); int ta = pa[0];
+            db = sv_det3s(subtract_points(sd->p[tb], s), nP, nQ);
+            s_point A=cv->p[a.a], B=cv->p[a.b], Ta=sd->p[ta], u=sd->p[tb];
+            feas = lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
+                                      Ta.x,Ta.y,Ta.z, u.x,u.y,u.z);
+        }
+    }
+
+    if (feas != 2 && db != 0) return -db * feas;   /* exact position order (may be 0) */
+
+fallback:                                          /* unhandled / degenerate slope */
+    {
+        s_point d = cross_prod(nP, nQ);
+        double v = dot_prod(d, subtract_points(ca, cb));
+        return (v>0)-(v<0);
+    }
+}
+
+/* Total order for sorting: exact position, then the symbolic-perturbation tiebreak
+ * (Phase C) for coincident vertices. */
+static inline int ord_line(s_vkey a, s_vkey b, s_point ca, s_point cb,
+                           s_pkey P, s_pkey Q, int cs,
+                           const s_points *sd, const s_points *cv,
+                           const s_pkey *facet, int nfac)
+{
+    int r = ord_line_raw(a, b, ca, cb, P, Q, cs, sd, cv, facet, nfac);
+    return r ? r : sv_vkey_cmp(a, b);
+}
+
 /* `tris` holds one s_surf_tri per piece face of the cell. Assembles the boundary
  * surface and splits it into connected components (a pinched cell yields >1).
  * On success fills *out_meshes (malloc'd array, caller frees each + the array)
  * and *out_n (>= 1). Returns 1 (built), 0 (empty / nothing valid), -1 (alloc). */
-static inline int build_cell_surface(const s_dynarray *tris, double EPS_DEG,
-                                     s_trimesh **out_meshes, int *out_n)
+static inline int build_cell_surface(const s_dynarray *tris, int cell_seed,
+                                     const s_points *seeds, const s_points *cverts,
+                                     double EPS_DEG, s_trimesh **out_meshes, int *out_n)
 {
     *out_meshes = NULL; *out_n = 0;
     size_t Ntri = tris->N;
     if (Ntri == 0) return 0;
 
-    /* 1. Weld corners by combinatorial key -> vertex ids + coords. */
-    s_hash_table vh;
-    if (!hash_init(&vh, sizeof(s_vkey), sizeof(int), 2 * 3 * Ntri + 1, 3 * Ntri,
+    /* 1. Weld corners into vertices.  Identity is COMBINATORIAL: two corners
+     *    name the same vertex iff their key sets (canonical key + alternates
+     *    accumulated by the piece-level merges) INTERSECT, computed as
+     *    connected components (union-find) over keys.  The plain same-key weld
+     *    is not enough: a piece hull collapses a sub-EPS micro-feature (e.g. a
+     *    Voronoi vertex a few ulps off a CDT face together with its incident
+     *    edge/face crossings) into one vertex, but different pieces may keep a
+     *    DIFFERENT surviving construction as the representative; the shared-key
+     *    union makes them one vertex here no matter which one survived. */
+    size_t maxk = 3 * Ntri * (size_t)(1 + SV_NALT);
+    s_hash_table vh;                                  /* key -> 1-based key id */
+    if (!hash_init(&vh, sizeof(s_vkey), sizeof(int), 2 * maxk + 1, maxk,
                    vkey_hash, vkey_equals, NULL)) return -1;
-    s_point *coords = (s_point *)malloc(sizeof(s_point) * 3 * Ntri);
-    int     *tid    = (int *)malloc(sizeof(int) * 3 * Ntri);   /* per-corner vertex id */
-    if (!coords || !tid) { free(coords); free(tid); hash_free(&vh); return -1; }
-    int Nv = 0, err = 0;
-    for (size_t t = 0; t < Ntri && !err; t++) {
+    s_point  *coords = (s_point *)malloc(sizeof(s_point) * 3 * Ntri);
+    s_vlabel *vlab   = (s_vlabel *)malloc(sizeof(s_vlabel) * 3 * Ntri);
+    int      *tid    = (int *)malloc(sizeof(int) * 3 * Ntri);   /* per-corner vertex id */
+    int      *kpar   = (int *)malloc(sizeof(int) * maxk);       /* key-id union-find */
+    int      *kvid   = (int *)malloc(sizeof(int) * maxk);       /* key-root -> vertex id */
+    if (!coords || !vlab || !tid || !kpar || !kvid) {
+        free(coords); free(vlab); free(tid); free(kpar); free(kvid); hash_free(&vh); return -1;
+    }
+    int Nv = 0, err = 0, nk = 0;
+    for (size_t t = 0; t < Ntri && !err; t++) {       /* pass 1: union keys per corner */
         const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(tris, t);
-        for (int k = 0; k < 3; k++) {
-            int *slot = (int *)hash_get_or_create(&vh, &tr->v[k].key);
-            if (!slot) { err = 1; break; }
-            if (*slot == 0) { *slot = Nv + 1; coords[Nv] = tr->v[k].p; Nv++; }
-            tid[3*t + k] = *slot - 1;
+        for (int k = 0; k < 3 && !err; k++) {
+            const s_vlabel *L = &tr->v[k].lb;
+            int r0 = -1;
+            for (int q = -1; q < (int)L->nalt && !err; q++) {
+                const s_vkey *kk = (q < 0) ? &L->key : &L->alt[q];
+                int *slot = (int *)hash_get_or_create(&vh, kk);
+                if (!slot) { err = 1; break; }
+                if (*slot == 0) { *slot = ++nk; kpar[nk - 1] = nk - 1; }
+                int r = *slot - 1;
+                while (kpar[r] != r) r = kpar[r];     /* find */
+                if (r0 < 0) r0 = r;
+                else if (r != r0) { if (r < r0) { kpar[r0] = r; r0 = r; } else kpar[r] = r0; }
+            }
+        }
+    }
+    for (int i = 0; i < nk; i++) kvid[i] = -1;
+    for (size_t t = 0; t < Ntri && !err; t++) {       /* pass 2: one vertex per key root */
+        const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(tris, t);
+        for (int k = 0; k < 3 && !err; k++) {
+            int *slot = (int *)hash_get_or_create(&vh, &tr->v[k].lb.key);
+            if (!slot || *slot == 0) { err = 1; break; }
+            int r = *slot - 1;
+            while (kpar[r] != r) r = kpar[r];
+            if (kvid[r] < 0) { kvid[r] = Nv; coords[Nv] = tr->v[k].p; vlab[Nv] = tr->v[k].lb; Nv++; }
+            else vlabel_merge(&vlab[kvid[r]], &tr->v[k].lb);
+            tid[3*t + k] = kvid[r];
         }
     }
     hash_free(&vh);
-    if (err) { free(coords); free(tid); return -1; }
+    free(kpar); free(kvid);
+    if (err || Nv == 0) { free(coords); free(vlab); free(tid); return err ? -1 : 0; }
 
-    /* 2. Per-plane directed-edge XOR. */
-    s_hash_table eh;
-    if (!hash_init(&eh, sizeof(s_edgekey), sizeof(s_edgerec), 2 * 3 * Ntri + 1,
-                   3 * Ntri, edgekey_hash, edgekey_equals, NULL)) {
-        free(coords); free(tid); return -1;
+    /* 1.5 TOLERANCE VERTEX MERGE.  The exact re-keying upstream (canonical_vv_label,
+     *    canonical_edge_cluster) already collapses every EXACT coincidence (cospherical
+     *    Voronoi vertices, cocircular Voronoi-edge crossings) by giving them one key, so
+     *    they welded in step 1.  What remains are GENUINE near-coincidences: distinct
+     *    constructions of the same cell vertex that no exact predicate can equate -- e.g.
+     *    a Voronoi edge exiting a convex domain through two NEAR-COPLANAR hull faces gives
+     *    two crossings ~1e-15 apart (different third plane -> exact-distinct), which are
+     *    really one vertex of the convex cell.  Left split they form a zero-area spur that
+     *    breaks the facet's ear-clip and spawns spurious zero-volume "double-wall" sheets.
+     *    Merge vertex groups within tau = tau_rel * bbox_diag.  Because the exact cases are
+     *    gone, the only pairs inside tau are these ~1e-15 near-misses (real features are
+     *    macro-apart), so any tau in a wide band gives the identical result -- validated by
+     *    the tau sweep.  Representative: smallest key (deterministic, order-independent);
+     *    labels are unioned so the merged vertex is on_plane for every member's facets.
+     *    SV_TAU_REL overrides tau_rel (0 disables the merge; the subdivision stays exact). */
+    int *rep = (int *)malloc(sizeof(int) * Nv);
+    if (!rep) { free(coords); free(vlab); free(tid); return -1; }
+    double tau2;
+    {
+        double tau_rel = 1e-9;
+        if (getenv("SV_TAU_REL")) tau_rel = atof(getenv("SV_TAU_REL"));
+        s_point lo = coords[0], hi = coords[0];
+        for (int i = 1; i < Nv; i++) {
+            if (coords[i].x < lo.x) lo.x = coords[i].x;  if (coords[i].x > hi.x) hi.x = coords[i].x;
+            if (coords[i].y < lo.y) lo.y = coords[i].y;  if (coords[i].y > hi.y) hi.y = coords[i].y;
+            if (coords[i].z < lo.z) lo.z = coords[i].z;  if (coords[i].z > hi.z) hi.z = coords[i].z;
+        }
+        tau2 = norm_squared(subtract_points(hi, lo)) * tau_rel * tau_rel;   /* (tau_rel*diag)^2 */
+        for (int i = 0; i < Nv; i++) rep[i] = i;
+        if (tau_rel <= 0) goto weld_done;                /* SV_TAU_REL=0 disables the merge */
+        for (int i = 0; i < Nv; i++) {                   /* tiny union-find */
+            for (int j = i + 1; j < Nv; j++) {
+                if (norm_squared(subtract_points(coords[i], coords[j])) >= tau2) continue;
+                int ri = i, rj = j;
+                while (rep[ri] != ri) ri = rep[ri];
+                while (rep[rj] != rj) rj = rep[rj];
+                if (ri != rj) rep[rj > ri ? rj : ri] = rj > ri ? ri : rj;
+            }
+        }
+        for (int i = 0; i < Nv; i++) {                   /* path-compress */
+            int r = i;
+            while (rep[r] != r) r = rep[r];
+            rep[i] = r;
+        }
+        for (int r = 0; r < Nv; r++) {                   /* canonical = min key in group */
+            if (rep[r] != r) continue;
+            int best = r;
+            for (int i = r + 1; i < Nv; i++)
+                if (rep[i] == r && sv_vkey_cmp(vlab[i].key, vlab[best].key) < 0) best = i;
+            for (int i = r; i < Nv; i++) {
+                if (rep[i] != r || i == best) continue;
+                vlabel_merge(&vlab[best], &vlab[i]);
+            }
+            if (best != r)
+                for (int i = 0; i < Nv; i++) if (rep[i] == r) rep[i] = best;
+        }
+        for (size_t c = 0; c < 3 * Ntri; c++) tid[c] = rep[tid[c]];
+weld_done: ;
     }
+
+    /* 2. Distinct facet planes (piece_to_surface already dropped internal walls,
+     *    so every plane here is a real boundary facet: bisector or domain face). */
+    s_pkey *facet = (s_pkey *)malloc(sizeof(s_pkey) * Ntri);
+    int nfac = 0;
+    if (!facet) { free(coords); free(vlab); free(tid); free(rep); return -1; }
+    {
+        s_hash_table fh;
+        if (!hash_init(&fh, sizeof(s_pkey), sizeof(int), 2*Ntri+1, Ntri,
+                       pkey_hash, pkey_equals, NULL)) { free(facet); free(coords); free(vlab); free(tid); free(rep); return -1; }
+        for (size_t t = 0; t < Ntri && !err; t++) {
+            const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(tris, t);
+            int *slot = (int *)hash_get_or_create(&fh, &tr->plane);
+            if (!slot) { err = 1; break; }
+            if (*slot == 0) { *slot = nfac + 1; facet[nfac++] = tr->plane; }
+        }
+        hash_free(&fh);
+        if (err) { free(facet); free(coords); free(vlab); free(tid); free(rep); return -1; }
+    }
+
+    /* 3. Per-plane directed-edge XOR, with each triangle edge SUBDIVIDED at the
+     *    line-vertices it passes through.  "w lies on segment (u,v)" is decided
+     *    on the welded coordinates within the SAME tau as the vertex merge (step
+     *    1.5): w is on the line iff dist(w, line uv) < tau, and strictly between
+     *    u,v by the dominant-axis coordinate.  Using the merge's tau (not an
+     *    exact collinearity test) is essential: near-line vertices left by the
+     *    near-hull degeneracy must be treated consistently by both facets sharing
+     *    the segment, or a T-junction crack opens.  The XOR supplies coverage:
+     *    interior diagonals cancel within a piece and gap edges never appear, so
+     *    non-convex facets are correct. */
+    s_hash_table eh;
+    if (!hash_init(&eh, sizeof(s_edgekey), sizeof(s_edgerec), 2*3*Ntri+1, 3*Ntri,
+                   edgekey_hash, edgekey_equals, NULL)) { free(facet); free(coords); free(vlab); free(tid); free(rep); return -1; }
+    int *chain = (int *)malloc(sizeof(int) * (Nv + 1));
+    if (!chain) { hash_free(&eh); free(facet); free(coords); free(vlab); free(tid); free(rep); return -1; }
     for (size_t t = 0; t < Ntri && !err; t++) {
         const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(tris, t);
+        s_pkey P = tr->plane;
         for (int k = 0; k < 3; k++) {
-            int u = tid[3*t + k], v = tid[3*t + (k+1)%3];
-            if (u == v) continue;                         /* degenerate edge */
-            s_edgekey key = { tr->plane, u < v ? u : v, u < v ? v : u };
-            s_edgerec *r = (s_edgerec *)hash_get_or_create(&eh, &key);
-            if (!r) { err = 1; break; }
-            r->plane = tr->plane; r->lo = key.lo; r->hi = key.hi;
-            r->net += (u < v) ? 1 : -1;
+            int u = tid[3*t+k], v = tid[3*t+(k+1)%3];
+            if (u == v) continue;
+            double dx = fabs(coords[v].x-coords[u].x), dy = fabs(coords[v].y-coords[u].y), dz = fabs(coords[v].z-coords[u].z);
+            int ax = (dx>=dy && dx>=dz) ? 0 : (dy>=dz ? 1 : 2);
+            double cu = ax==0?coords[u].x:ax==1?coords[u].y:coords[u].z;
+            double cv = ax==0?coords[v].x:ax==1?coords[v].y:coords[v].z;
+            int nc = 0;
+            s_point ev = subtract_points(coords[v], coords[u]);
+            double elen2 = norm_squared(ev);
+            for (int w = 0; w < Nv; w++) {
+                if (w == u || w == v || rep[w] != w) continue;
+                s_point cr = cross_prod(ev, subtract_points(coords[w], coords[u]));
+                if (norm_squared(cr) >= tau2 * elen2) continue;   /* near-collinear within tau */
+                double cw = ax==0?coords[w].x:ax==1?coords[w].y:coords[w].z;
+                if ((cu<cw && cw<cv) || (cv<cw && cw<cu)) chain[nc++] = w;   /* strictly between */
+            }
+            for (int i = 1; i < nc; i++) {               /* sort along u->v (exact for collinear pts) */
+                int wi = chain[i], j = i - 1;
+                double cwi = ax==0?coords[wi].x:ax==1?coords[wi].y:coords[wi].z;
+                while (j >= 0) {
+                    double cj = ax==0?coords[chain[j]].x:ax==1?coords[chain[j]].y:coords[chain[j]].z;
+                    if ((cu < cv) ? (cj <= cwi) : (cj >= cwi)) break;
+                    chain[j+1] = chain[j]; j--;
+                }
+                chain[j+1] = wi;
+            }
+            int prev = u;                                /* emit atomic sub-edges into the XOR */
+            for (int i = 0; i <= nc; i++) {
+                int curv = (i < nc) ? chain[i] : v;
+                if (prev != curv) {
+                    s_edgekey key = { P, prev<curv?prev:curv, prev<curv?curv:prev };
+                    s_edgerec *r = (s_edgerec *)hash_get_or_create(&eh, &key);
+                    if (!r) { err = 1; break; }
+                    r->plane = P; r->lo = key.lo; r->hi = key.hi;
+                    r->net += (prev < curv) ? 1 : -1;
+                }
+                prev = curv;
+            }
         }
     }
-    free(tid);
-    if (err) { hash_free(&eh); free(coords); return -1; }
+    free(chain); free(facet); free(tid); free(rep);
+    if (err) { hash_free(&eh); free(vlab); free(coords); return -1; }
 
-    /* 3. Collect surviving directed edges (net != 0), grouped by plane. */
+    /* 3b. Surviving directed edges (net != 0), grouped by plane. */
     size_t ne = eh.size;
     s_edgerec *edges = (s_edgerec *)malloc(sizeof(s_edgerec) * (ne ? ne : 1));
     if (!edges) { hash_free(&eh); free(coords); return -1; }
@@ -384,105 +870,97 @@ static inline int build_cell_surface(const s_dynarray *tris, double EPS_DEG,
     for (size_t i = 0; i < ne; i++) if (edges[i].net != 0) edges[nsurv++] = edges[i];
     qsort(edges, nsurv, sizeof(s_edgerec), edgerec_cmp_plane);
 
-    /* 4. Walk each plane's surviving edges into closed loops, stored as
-     *    concatenated vertex ids (lbuf) with per-loop offsets (loff). */
-    int  *lbuf = (int *)malloc(sizeof(int) * (nsurv ? nsurv : 1));
-    int  *loff = (int *)malloc(sizeof(int) * (nsurv + 2));
-    int  *lb2  = (int *)malloc(sizeof(int) * (nsurv ? nsurv : 1));   /* scratch for compaction */
-    int  *lo2  = (int *)malloc(sizeof(int) * (nsurv + 2));
-    char *used = (char *)calloc(nsurv ? nsurv : 1, 1);
-    if (!lbuf || !loff || !lb2 || !lo2 || !used) {
-        free(lbuf); free(loff); free(lb2); free(lo2); free(used);
-        free(edges); free(coords); return -1;
+    free(vlab);
+
+    /* 3c. Trace each plane's surviving directed edges into closed loops.
+     * Vertices can have degree > 2 (real pinches; micro-features merged by the
+     * weld), where a naive "first edge whose tail matches" walk pairs chains
+     * arbitrarily and produces open walks that must be discarded.  The next
+     * edge out of a vertex is instead chosen ANGULARLY: rotating CLOCKWISE (in
+     * the plane's 2D projection, exact orient2d) from the direction of
+     * arrival, take the first available outgoing edge.  In/out degrees are
+     * balanced at every vertex (the edges are a XOR of triangle boundaries)
+     * and the angular rule cannot cross chains, so every trace closes and
+     * every directed edge is consumed exactly once. */
+    size_t mtot = 0;
+    for (size_t i = 0; i < nsurv; i++) mtot += (size_t)(edges[i].net > 0 ? edges[i].net : -edges[i].net);
+    s_dynarray lbuf_da = dynarray_initialize(sizeof(int), 256);
+    s_dynarray loff_da = dynarray_initialize(sizeof(int), 64);
+    int  *deu   = (int *)malloc(sizeof(int) * (mtot ? mtot : 1));
+    int  *dev   = (int *)malloc(sizeof(int) * (mtot ? mtot : 1));
+    char *dused = (char *)calloc(mtot ? mtot : 1, 1);
+    int  *tmp   = (int *)malloc(sizeof(int) * (mtot + 1));
+    if (!lbuf_da.items || !loff_da.items || !deu || !dev || !dused || !tmp) {
+        dynarray_free(&lbuf_da); dynarray_free(&loff_da);
+        free(deu); free(dev); free(dused); free(tmp); free(edges); free(coords); return -1;
     }
-    int nloops = 0, lpos = 0; loff[0] = 0;
-    for (size_t b = 0; b < nsurv; ) {
+    int nloops = 0, zero = 0;
+    if (!dynarray_push(&loff_da, &zero)) err = 1;
+    size_t md = 0;
+    for (size_t b = 0; b < nsurv && !err; ) {
         size_t e = b + 1;
         while (e < nsurv && edgerec_cmp_plane(&edges[b], &edges[e]) == 0) e++;
-        /* block [b,e): edges of one plane. Directed u->v = (net>0)?(lo,hi):(hi,lo). */
-        for (size_t s = b; s < e; s++) {
-            if (used[s]) continue;
-            int start = lpos, bad = 0, guard = 0;
-            size_t cur = s;
-            do {
-                used[cur] = 1;
-                int u = edges[cur].net > 0 ? edges[cur].lo : edges[cur].hi;
-                int v = edges[cur].net > 0 ? edges[cur].hi : edges[cur].lo;
-                lbuf[lpos++] = u;
-                size_t nxt = e;                           /* next edge whose tail == v */
-                for (size_t q = b; q < e; q++) {
-                    if (used[q]) continue;
-                    int qu = edges[q].net > 0 ? edges[q].lo : edges[q].hi;
-                    if (qu == v) { nxt = q; break; }
+        size_t m0 = md;                                   /* this plane's directed edges */
+        for (size_t i = b; i < e; i++) {
+            int n = edges[i].net, cnt = n > 0 ? n : -n;
+            for (int k = 0; k < cnt; k++) {
+                deu[md] = n > 0 ? edges[i].lo : edges[i].hi;
+                dev[md] = n > 0 ? edges[i].hi : edges[i].lo;
+                md++;
+            }
+        }
+        s_point nrm = sv_plane_nrm(edges[b].plane, seeds, cverts);
+        int drop = coord_with_largest_component_3D(nrm);
+        for (size_t st = m0; st < md && !err; st++) {
+            if (dused[st]) continue;
+            int len = 0, closed = 0;
+            size_t cur = st;
+            int guard = 0, gmax = (int)(md - m0) + 2;
+            while (guard++ < gmax) {
+                dused[cur] = 1;
+                tmp[len++] = deu[cur];
+                int v = dev[cur];
+                s_point2d V = surf_proj2d(coords[v], drop);
+                s_point2d U = surf_proj2d(coords[deu[cur]], drop);
+                size_t best = SIZE_MAX;
+                for (size_t q = m0; q < md; q++) {
+                    if (deu[q] != v) continue;
+                    if (dused[q] && q != st) continue;    /* st re-eligible = closure */
+                    if (best == SIZE_MAX) { best = q; continue; }
+                    s_point2d A = surf_proj2d(coords[dev[q]], drop);
+                    s_point2d B = surf_proj2d(coords[dev[best]], drop);
+                    if (sv_cw_before(V, U, A, B)) best = q;
                 }
-                if (nxt == e) { if (v != lbuf[start]) bad = 1; break; }
-                cur = nxt;
-            } while (guard++ < (int)nsurv + 4);
-            if (bad || lpos - start < 3) { lpos = start; continue; }  /* drop bad/degenerate */
-            loff[++nloops] = lpos;
+                if (best == SIZE_MAX) {                   /* in/out imbalance: impossible */
+                    fprintf(stderr, "build_cell_surface: cell %d open trace (bug)\n", cell_seed);
+                    len = 0; closed = 0; break;
+                }
+                if (best == st) { closed = 1; break; }
+                cur = best;
+            }
+            if (!closed || len < 3) continue;             /* len<3: degenerate sliver */
+            for (int j = 0; j < len && !err; j++) if (!dynarray_push(&lbuf_da, &tmp[j])) err = 1;
+            int off = (int)lbuf_da.N;
+            if (!err && !dynarray_push(&loff_da, &off)) err = 1;
+            if (!err) nloops++;
         }
         b = e;
     }
-    free(used); free(edges);
+    free(deu); free(dev); free(dused); free(tmp); free(edges);
+    if (err) { dynarray_free(&lbuf_da); dynarray_free(&loff_da); free(coords); return -1; }
 
-    /* 5. Globally strip pure-artifact collinear vertices: a vertex collinear
-     *    exactly TWO distinct neighbours over the whole surface is a false
-     *    vertex -- a tet-subdivision point sitting on a straight cell edge
-     *    between those two neighbours (real cell corners have degree >= 3, where
-     *    >= 3 facets meet). Splicing it out merges its two edges into one; both
-     *    facets sharing the edge see the same degree-2 vertex and drop it
-     *    identically, so the edge stays matched. This is purely combinatorial --
-     *    no coordinates, no tolerance. Iterate to collapse chains. */
-    int  *nb0 = (int *)malloc(sizeof(int) * (Nv ? Nv : 1));
-    int  *nb1 = (int *)malloc(sizeof(int) * (Nv ? Nv : 1));
-    char *many = (char *)malloc(Nv ? Nv : 1);
-    char *rem  = (char *)malloc(Nv ? Nv : 1);
-    if (!nb0 || !nb1 || !many || !rem) {
-        free(nb0); free(nb1); free(many); free(rem);
-        free(lbuf); free(loff); free(lb2); free(lo2); free(coords); return -1;
-    }
-    for (int pass = 0; pass < Nv + 1; pass++) {
-        for (int i = 0; i < Nv; i++) { nb0[i] = nb1[i] = -1; many[i] = 0; }
-        for (int L = 0; L < nloops; L++) {
-            int off = loff[L], len = loff[L+1] - loff[L];
-            for (int i = 0; i < len; i++) {
-                int v = lbuf[off+i];
-                int adj[2] = { lbuf[off+(i-1+len)%len], lbuf[off+(i+1)%len] };
-                for (int k = 0; k < 2; k++) {
-                    int x = adj[k];
-                    if (nb0[v] == -1 || nb0[v] == x) nb0[v] = x;
-                    else if (nb1[v] == -1 || nb1[v] == x) nb1[v] = x;
-                    else many[v] = 1;
-                }
-            }
-        }
-        int nrem = 0;
-        for (int i = 0; i < Nv; i++) {
-            rem[i] = (!many[i] && nb0[i] != -1 && nb1[i] != -1);   /* exactly 2 neighbours */
-            if (rem[i]) nrem++;
-        }
-        if (nrem == 0) break;
-        int wpos = 0, wl = 0; lo2[0] = 0;               /* compact loops, dropping removed */
-        for (int L = 0; L < nloops; L++) {
-            int off = loff[L], len = loff[L+1] - loff[L], st = wpos;
-            for (int i = 0; i < len; i++) { int v = lbuf[off+i]; if (!rem[v]) lb2[wpos++] = v; }
-            if (wpos - st >= 3) lo2[++wl] = wpos; else wpos = st;
-        }
-        { int *tb = lbuf; lbuf = lb2; lb2 = tb; int *to = loff; loff = lo2; lo2 = to; }
-        nloops = wl;
-    }
-    free(nb0); free(nb1); free(many); free(rem);
+    int *lbuf = (int *)lbuf_da.items;
+    int *loff = (int *)loff_da.items;
 
-    /* 6. Triangulate each cleaned loop by exact ear-clipping. */
+    /* 4. Triangulate each loop by exact ear-clipping. */
     s_dynarray faces = dynarray_initialize(sizeof(int) * 3, 64);
-    if (!faces.items) { free(lbuf); free(loff); free(lb2); free(lo2); free(coords); return -1; }
+    if (!faces.items) { dynarray_free(&lbuf_da); dynarray_free(&loff_da); free(coords); return -1; }
     for (int L = 0; L < nloops; L++) {
         if (surf_earclip(coords, lbuf + loff[L], loff[L+1] - loff[L], &faces) < 0) {
-            dynarray_free(&faces);
-            free(lbuf); free(loff); free(lb2); free(lo2); free(coords); return -1;
+            dynarray_free(&faces); dynarray_free(&lbuf_da); dynarray_free(&loff_da); free(coords); return -1;
         }
     }
-    free(lbuf); free(loff); free(lb2); free(lo2);
+    dynarray_free(&lbuf_da); dynarray_free(&loff_da);
 
     int Nf = (int)faces.N;
     if (Nf == 0) { dynarray_free(&faces); free(coords); return 0; }
@@ -511,7 +989,8 @@ static inline int build_cell_surface(const s_dynarray *tris, double EPS_DEG,
         s_e2tkey key = { a < b ? a : b, a < b ? b : a };
         s_e2tval *v = (s_e2tval *)hash_get_or_create(&e2h, &key);
         if (!v) { herr = 1; break; }
-        if (v->cnt == 0) v->t0 = t; else if (v->cnt == 1) v->t1 = t;
+        if (v->cnt == 0) { v->lo = key.lo; v->hi = key.hi; }
+        if (v->cnt < SV_EMAXT) v->t[v->cnt] = t;
         v->cnt++;
     }
     if (!herr) {
@@ -521,7 +1000,7 @@ static inline int build_cell_surface(const s_dynarray *tris, double EPS_DEG,
         else {
             hash_to_array(&e2h, ev);
             for (size_t i = 0; i < nk; i++)
-                if (ev[i].cnt == 2) UF_union(ev[i].t0, ev[i].t1, parent, rank);
+                if (ev[i].cnt == 2) UF_union(ev[i].t[0], ev[i].t[1], parent, rank);
             free(ev);
         }
     }
@@ -554,7 +1033,25 @@ static inline int build_cell_surface(const s_dynarray *tris, double EPS_DEG,
             nf++;
         }
         s_trimesh m = trimesh_from_arrays(cc, nv, cf, nf, EPS_DEG);
-        if (trimesh_is_valid(&m)) meshes[nmesh++] = m;   /* skip any residual bad component */
+        int valid = trimesh_is_valid(&m);
+        double cvol = valid ? volume_trimesh(&m) : 0.0;
+        int keep = valid, degenerate = 0;
+        if (valid) {
+            /* Discard degenerate zero-volume "double-wall" sheets: a real lobe
+             * has volume ~ size^3, a folded flat sheet ~ machine epsilon.  The
+             * near-coplanar hull faces leave such slivers even after the vertex
+             * merge; they carry no volume and are not part of the cell surface. */
+            s_point clo = cc[0], chi = cc[0];
+            for (int i = 1; i < nv; i++) {
+                if (cc[i].x<clo.x)clo.x=cc[i].x; if (cc[i].x>chi.x)chi.x=cc[i].x;
+                if (cc[i].y<clo.y)clo.y=cc[i].y; if (cc[i].y>chi.y)chi.y=cc[i].y;
+                if (cc[i].z<clo.z)clo.z=cc[i].z; if (cc[i].z>chi.z)chi.z=cc[i].z;
+            }
+            double d2 = norm_squared(subtract_points(chi, clo));
+            if (fabs(cvol) < 1e-9 * d2 * sqrt(d2)) { keep = 0; degenerate = 1; }
+        }
+        if (keep) meshes[nmesh++] = m;                 /* skip bad or degenerate-sheet components */
+        else if (degenerate) free_trimesh(&m);
         for (int t = 0; t < Nf; t++) if (labels[t] == c) /* reset only touched l2 entries */
             for (int k = 0; k < 3; k++) l2[F[3*t+k]] = -1;
     }
