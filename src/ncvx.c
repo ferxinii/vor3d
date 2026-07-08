@@ -592,7 +592,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
     if (out_labels) *out_labels = NULL;
     s_point s = seeds->p[seed_id];
     int NB = adj->offset[seed_id + 1] - adj->offset[seed_id];
-    const int *nbr = adj->neighbor + adj->offset[seed_id];   /* NB neighbour seed indices */
+    const int *nbr = NB ? adj->neighbor + adj->offset[seed_id] : NULL;  /* NB neighbour seed indices */
 
     int sigma_f[4];
     lp3_tet_face_orient(tet, sigma_f);
@@ -886,6 +886,397 @@ static inline int face_is_domain_boundary(const s_ncell *nc, int f)
     return !nc->opposite[f] || !nc->opposite[f]->interior;
 }
 
+/* ====================== Orphan-merge post-pass ============================
+ * See MERGING_ORPHANS.md. A non-convex domain can leave a Voronoi cell as
+ * several disconnected pieces (an "orphan" across a concavity). This pass
+ * reassigns every orphan to a neighbouring seed so that each seed owns exactly
+ * one spatially-connected region, re-extracted as a single closed trimesh with
+ * volume conserved. It reads the per-cell piece accumulators `pcs`, surface
+ * accumulators `surf`, and the triangle-range map `piece_tri_off` built during
+ * the clip, and OVERWRITES vcells[] with the merged pieces/volume/surface.
+ * On success the convex-hull pieces in pcs[] are MOVED into vcells (the caller
+ * frees the emptied pcs[] buffers with dynarray_free). On failure vcells is
+ * left zeroed and the pieces stay owned by pcs[] (caller frees them). */
+
+static int  mo_find(int *p, int x) { while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; } return x; }
+static void mo_union(int *p, int a, int b)
+{
+    a = mo_find(p, a); b = mo_find(p, b);
+    if (a != b) { if (a < b) p[b] = a; else p[a] = b; }
+}
+
+typedef struct { int cell; int comp; int is_seed; double volume; } s_mo_node;
+typedef struct { int u, v; double w; } s_mo_edge;
+typedef struct { double w; int owner; int o; int r; } s_mo_heap;
+
+/* (plane, piece) record: per-cell PK_FACE adjacency grouping (Step 3). */
+typedef struct { s_pkey plane; int piece; } s_mo_fr;
+static int mo_fr_cmp(const void *A, const void *B)
+{
+    const s_mo_fr *a = (const s_mo_fr *)A, *b = (const s_mo_fr *)B;
+    int c = memcmp(&a->plane, &b->plane, sizeof(s_pkey));
+    return c ? c : (a->piece - b->piece);
+}
+
+/* Directed bisector boundary-edge record (Step 4). A shared interface between
+ * two components is a canceling pair: the same undirected edge {lo,hi} on the
+ * same bisector plane, emitted with OPPOSITE orientation by two different cells.
+ * Matching at edge level (not just plane level) is location-specific, so two
+ * disjoint patches of one bisector plane -- which occur in a non-convex domain --
+ * are never cross-linked (which would merge geodesically-far regions). */
+typedef struct { s_pkey plane; s_vkey lo, hi; int node, sign; double len; } s_mo_er;
+static int mo_er_cmp(const void *A, const void *B)
+{
+    const s_mo_er *a = (const s_mo_er *)A, *b = (const s_mo_er *)B;
+    int c = memcmp(&a->plane, &b->plane, sizeof(s_pkey));
+    if (c) return c;
+    c = memcmp(&a->lo, &b->lo, sizeof(s_vkey));
+    if (c) return c;
+    return memcmp(&a->hi, &b->hi, sizeof(s_vkey));
+}
+/* Dedup key for the final undirected node-node edges. */
+static int mo_edge_cmp(const void *A, const void *B)
+{
+    const s_mo_edge *a = (const s_mo_edge *)A, *b = (const s_mo_edge *)B;
+    if (a->u != b->u) return a->u - b->u;
+    return a->v - b->v;
+}
+
+/* Max priority by (w desc, owner seed asc, orphan node asc): a<b means a is
+ * LOWER priority (pops later). Deterministic tie-break for reproducibility. */
+static int mo_heap_lower(s_mo_heap a, s_mo_heap b)
+{
+    if (a.w != b.w)         return a.w < b.w;
+    if (a.owner != b.owner) return a.owner > b.owner;
+    return a.o > b.o;
+}
+static void mo_heap_push(s_mo_heap *h, int *n, s_mo_heap e)
+{
+    int i = (*n)++;
+    h[i] = e;
+    while (i > 0) {
+        int par = (i - 1) / 2;
+        if (mo_heap_lower(h[par], h[i])) { s_mo_heap t = h[par]; h[par] = h[i]; h[i] = t; i = par; }
+        else break;
+    }
+}
+static s_mo_heap mo_heap_pop(s_mo_heap *h, int *n)
+{
+    s_mo_heap top = h[0];
+    h[0] = h[--(*n)];
+    int i = 0;
+    for (;;) {
+        int l = 2*i+1, r = 2*i+2, b = i;
+        if (l < *n && mo_heap_lower(h[b], h[l])) b = l;
+        if (r < *n && mo_heap_lower(h[b], h[r])) b = r;
+        if (b == i) break;
+        s_mo_heap t = h[b]; h[b] = h[i]; h[i] = t; i = b;
+    }
+    return top;
+}
+
+static int merge_orphans_pass(const s_ncvx_domain *domain, const s_points *real_seeds,
+                              int N, double EPS_DEG, s_dynarray *surf, s_dynarray *pcs,
+                              s_dynarray *piece_tri_off, s_vcell *vcells)
+{
+    const s_points *cverts = &domain->cdt.points;
+    int rc = 0;
+
+    for (int i = 0; i < N; i++) { vcells[i] = (s_vcell){0}; vcells[i].seed_id = i; }
+
+    /* ---- Step 3: per-cell piece-components (union-find over PK_FACE walls) ---- */
+    s_mo_node *nodes      = NULL;                               /* freed once, in cleanup     */
+    int      **piece_comp = calloc((size_t)N, sizeof(int *));   /* [i][p] -> local comp id  */
+    int       *ncomp      = calloc((size_t)N, sizeof(int));     /* components per cell        */
+    int       *seed_comp  = calloc((size_t)N, sizeof(int));     /* the seed-owning component  */
+    int       *node_off   = calloc((size_t)N + 1, sizeof(int)); /* prefix sum of nodes        */
+    if (!piece_comp || !ncomp || !seed_comp || !node_off) goto cleanup;
+
+    for (int i = 0; i < N; i++) {
+        int np = (int)pcs[i].N;
+        if (np == 0) { ncomp[i] = 0; seed_comp[i] = -1; continue; }
+        const s_convh *pieces = (const s_convh *)pcs[i].items;
+        const int *off = (const int *)piece_tri_off[i].items;   /* np+1 offsets */
+        int *par = malloc((size_t)np * sizeof(int));
+        piece_comp[i] = malloc((size_t)np * sizeof(int));
+        if (!par || !piece_comp[i]) { free(par); goto cleanup; }
+        for (int p = 0; p < np; p++) par[p] = p;
+
+        /* Gather (PK_FACE plane, piece) records, sort, union pieces sharing a plane. */
+        size_t nt = surf[i].N;
+        s_mo_fr *fr = malloc((nt ? nt : 1) * sizeof(s_mo_fr));
+        if (!fr) { free(par); goto cleanup; }
+        int nfr = 0, p = 0;
+        for (size_t t = 0; t < nt; t++) {
+            while (p + 1 < np && (int)t >= off[p + 1]) p++;   /* piece owning triangle t */
+            const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(&surf[i], t);
+            if (tr->plane.tag == PK_FACE) fr[nfr++] = (s_mo_fr){ tr->plane, p };
+        }
+        qsort(fr, (size_t)nfr, sizeof(s_mo_fr), mo_fr_cmp);
+        for (int a = 0; a < nfr; ) {
+            int b = a + 1;
+            while (b < nfr && memcmp(&fr[b].plane, &fr[a].plane, sizeof(s_pkey)) == 0) b++;
+            for (int k = a + 1; k < b; k++)          /* union all distinct pieces on this plane */
+                if (fr[k].piece != fr[a].piece) mo_union(par, fr[a].piece, fr[k].piece);
+            a = b;
+        }
+        free(fr);
+
+        /* Compress roots to local comp ids 0..ncomp-1. */
+        int *root2comp = malloc((size_t)np * sizeof(int));
+        if (!root2comp) { free(par); goto cleanup; }
+        for (int q = 0; q < np; q++) root2comp[q] = -1;
+        int nc = 0;
+        for (int q = 0; q < np; q++) {
+            int r = mo_find(par, q);
+            if (root2comp[r] < 0) root2comp[r] = nc++;
+            piece_comp[i][q] = root2comp[r];
+        }
+        free(root2comp); free(par);
+        ncomp[i] = nc;
+
+        /* Seed-component: the piece containing the seed (interior, else boundary,
+         * else the largest-volume piece as a defensive fallback). */
+        int sp = -1, sp_bdy = -1, sp_big = 0;
+        double big = -1.0;
+        for (int q = 0; q < np; q++) {
+            e_geom_test tp = test_point_in_convhull(&pieces[q], real_seeds->p[i], EPS_DEG, 0.0);
+            if (tp == TEST_IN) { sp = q; break; }
+            if (tp == TEST_BOUNDARY && sp_bdy < 0) sp_bdy = q;
+            double v = volume_convhull(&pieces[q]);
+            if (v > big) { big = v; sp_big = q; }
+        }
+        if (sp < 0) sp = (sp_bdy >= 0) ? sp_bdy : sp_big;
+        if (sp < 0) { fprintf(stderr, "merge_orphans: cell %d seed in no piece\n", i); sp = 0; }
+        seed_comp[i] = piece_comp[i][sp];
+    }
+    for (int i = 0; i < N; i++) node_off[i + 1] = node_off[i] + ncomp[i];
+    int Nnode = node_off[N];
+
+    nodes = calloc((size_t)(Nnode ? Nnode : 1), sizeof(s_mo_node));
+    if (!nodes) goto cleanup;
+    for (int i = 0; i < N; i++) {
+        int np = (int)pcs[i].N;
+        const s_convh *pieces = (const s_convh *)pcs[i].items;
+        for (int c = 0; c < ncomp[i]; c++) {
+            int nd = node_off[i] + c;
+            nodes[nd].cell = i; nodes[nd].comp = c;
+            nodes[nd].is_seed = (c == seed_comp[i]);
+            nodes[nd].volume = 0.0;
+        }
+        for (int q = 0; q < np; q++)
+            nodes[node_off[i] + piece_comp[i][q]].volume += volume_convhull(&pieces[q]);
+    }
+
+    /* ---- Step 4: component-adjacency graph from shared bisector edges ---- */
+    size_t ner_max = 0;
+    for (int i = 0; i < N; i++) ner_max += 3 * surf[i].N;   /* 3 directed edges / triangle */
+    s_mo_er *er = malloc((ner_max ? ner_max : 1) * sizeof(s_mo_er));
+    if (!er) goto cleanup;
+    int ner = 0;
+    for (int i = 0; i < N; i++) {
+        int np = (int)pcs[i].N;
+        if (np == 0) continue;
+        const int *off = (const int *)piece_tri_off[i].items;
+        size_t nt = surf[i].N;
+        int p = 0;
+        for (size_t t = 0; t < nt; t++) {
+            while (p + 1 < np && (int)t >= off[p + 1]) p++;
+            const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(&surf[i], t);
+            if (tr->plane.tag != PK_BIS) continue;
+            int nd = node_off[i] + piece_comp[i][p];
+            for (int k = 0; k < 3; k++) {
+                s_vkey va = tr->v[k].lb.key, vb = tr->v[(k + 1) % 3].lb.key;
+                int cmp = sv_vkey_cmp(va, vb);
+                if (cmp == 0) continue;                    /* degenerate edge */
+                s_mo_er e;
+                e.plane = tr->plane;
+                e.lo = cmp < 0 ? va : vb;
+                e.hi = cmp < 0 ? vb : va;
+                e.node = nd;
+                e.sign = cmp < 0 ? 1 : -1;                 /* +1 if va<vb (edge lo->hi) */
+                e.len = norm(subtract_points(tr->v[k].p, tr->v[(k + 1) % 3].p));
+                er[ner++] = e;
+            }
+        }
+    }
+    qsort(er, (size_t)ner, sizeof(s_mo_er), mo_er_cmp);
+
+    /* Within each (plane, undirected-edge) group, a +1 record and a -1 record
+     * from DIFFERENT cells are the two sides of a real shared boundary edge ->
+     * an interface between their components. Emit one raw edge per such pair
+     * (weight += shared edge length). Internal triangulation diagonals appear as
+     * a +1/-1 pair from the SAME cell and are correctly ignored. */
+    s_dynarray raw = dynarray_initialize(sizeof(s_mo_edge), 64);
+    if (!raw.items) { free(er); goto cleanup; }
+    for (int a = 0; a < ner; ) {
+        int b = a + 1;
+        while (b < ner && mo_er_cmp(&er[a], &er[b]) == 0) b++;
+        for (int x = a; x < b; x++) for (int y = a; y < b; y++) {
+            if (er[x].sign <= 0 || er[y].sign >= 0) continue;   /* x is +1, y is -1 */
+            if (nodes[er[x].node].cell == nodes[er[y].node].cell) continue;
+            int u = er[x].node, v = er[y].node;
+            s_mo_edge ed = { u < v ? u : v, u < v ? v : u, er[x].len };
+            if (!dynarray_push(&raw, &ed)) { free(er); dynarray_free(&raw); goto cleanup; }
+        }
+        a = b;
+    }
+    free(er);
+
+    /* Dedup raw edges by node pair, summing weights (interface perimeter). */
+    qsort(raw.items, raw.N, sizeof(s_mo_edge), mo_edge_cmp);
+    s_dynarray edges = dynarray_initialize(sizeof(s_mo_edge), 64);
+    if (!edges.items) { dynarray_free(&raw); goto cleanup; }
+    for (unsigned a = 0; a < raw.N; ) {
+        s_mo_edge *e0 = (s_mo_edge *)dynarray_get_ptr(&raw, a);
+        double w = 0;
+        unsigned b = a;
+        while (b < raw.N && mo_edge_cmp(dynarray_get_ptr(&raw, b), e0) == 0) {
+            w += ((s_mo_edge *)dynarray_get_ptr(&raw, b))->w; b++;
+        }
+        s_mo_edge ed = { e0->u, e0->v, w };
+        if (!dynarray_push(&edges, &ed)) { dynarray_free(&raw); dynarray_free(&edges); goto cleanup; }
+        a = b;
+    }
+    dynarray_free(&raw);
+
+    /* CSR adjacency over nodes. */
+    int Nedge = (int)edges.N;
+    const s_mo_edge *ea = (const s_mo_edge *)edges.items;
+    int    *adj_off = calloc((size_t)Nnode + 1, sizeof(int));
+    int    *adj_nbr = malloc((size_t)(2 * Nedge ? 2 * Nedge : 1) * sizeof(int));
+    double *adj_w   = malloc((size_t)(2 * Nedge ? 2 * Nedge : 1) * sizeof(double));
+    if (!adj_off || !adj_nbr || !adj_w) { dynarray_free(&edges); free(adj_off); free(adj_nbr); free(adj_w); goto cleanup; }
+    for (int e = 0; e < Nedge; e++) { adj_off[ea[e].u + 1]++; adj_off[ea[e].v + 1]++; }
+    for (int i = 0; i < Nnode; i++) adj_off[i + 1] += adj_off[i];
+    { int *cur = calloc((size_t)Nnode + 1, sizeof(int));
+      if (!cur) { dynarray_free(&edges); free(adj_off); free(adj_nbr); free(adj_w); goto cleanup; }
+      for (int e = 0; e < Nedge; e++) {
+          int u = ea[e].u, v = ea[e].v; double w = ea[e].w;
+          int iu = adj_off[u] + cur[u]++; adj_nbr[iu] = v; adj_w[iu] = w;
+          int iv = adj_off[v] + cur[v]++; adj_nbr[iv] = u; adj_w[iv] = w;
+      }
+      free(cur);
+    }
+    dynarray_free(&edges);
+
+    /* ---- Step 5: priority flood (watershed) ---- */
+    int *label = malloc((size_t)(Nnode ? Nnode : 1) * sizeof(int));
+    s_mo_heap *heap = malloc((size_t)(2 * Nedge + 1) * sizeof(s_mo_heap));
+    if (!label || !heap) { free(adj_off); free(adj_nbr); free(adj_w); free(label); free(heap); goto cleanup; }
+    for (int nd = 0; nd < Nnode; nd++) label[nd] = nodes[nd].is_seed ? nodes[nd].cell : -1;
+    int hn = 0;
+    for (int nd = 0; nd < Nnode; nd++) {
+        if (label[nd] < 0) continue;
+        for (int k = adj_off[nd]; k < adj_off[nd + 1]; k++)
+            if (label[adj_nbr[k]] < 0)
+                mo_heap_push(heap, &hn, (s_mo_heap){ adj_w[k], label[nd], adj_nbr[k], nd });
+    }
+    while (hn > 0) {
+        s_mo_heap top = mo_heap_pop(heap, &hn);
+        if (label[top.o] >= 0) continue;
+        label[top.o] = top.owner;
+        for (int k = adj_off[top.o]; k < adj_off[top.o + 1]; k++)
+            if (label[adj_nbr[k]] < 0)
+                mo_heap_push(heap, &hn, (s_mo_heap){ adj_w[k], top.owner, adj_nbr[k], top.o });
+    }
+    for (int nd = 0; nd < Nnode; nd++)
+        if (label[nd] < 0) {
+            fprintf(stderr, "merge_orphans: node %d (cell %d) unreachable; keeping own seed\n",
+                    nd, nodes[nd].cell);
+            label[nd] = nodes[nd].cell;
+        }
+
+    free(adj_off); free(adj_nbr); free(adj_w); free(heap);
+
+    /* ---- Step 6: re-extract merged surfaces + reassign pieces/volume ---- */
+    s_dynarray *merged = calloc((size_t)N, sizeof(s_dynarray));
+    int        *own_n  = calloc((size_t)N, sizeof(int));
+    double     *own_v  = calloc((size_t)N, sizeof(double));
+    s_convh   **newp   = calloc((size_t)N, sizeof(s_convh *));
+    s_trimesh **news   = calloc((size_t)N, sizeof(s_trimesh *));
+    int        *newsn  = calloc((size_t)N, sizeof(int));
+    if (!merged || !own_n || !own_v || !newp || !news || !newsn) {
+        free(label); free(merged); free(own_n); free(own_v); free(newp); free(news); free(newsn);
+        goto cleanup;
+    }
+    for (int s = 0; s < N; s++) merged[s] = dynarray_initialize(sizeof(s_surf_tri), 8);
+
+    /* Pass A: tally owned pieces/volume and concatenate owned triangles per seed. */
+    int passA_ok = 1;
+    for (int i = 0; i < N && passA_ok; i++) {
+        int np = (int)pcs[i].N;
+        const s_convh *pieces = (const s_convh *)pcs[i].items;
+        const int *off = (const int *)piece_tri_off[i].items;
+        for (int q = 0; q < np && passA_ok; q++) {
+            int s = label[node_off[i] + piece_comp[i][q]];
+            own_n[s]++;
+            own_v[s] += volume_convhull(&pieces[q]);
+            for (int t = off[q]; t < off[q + 1]; t++) {
+                const s_surf_tri *tr = (const s_surf_tri *)dynarray_get_ptr_c(&surf[i], (size_t)t);
+                if (!dynarray_push(&merged[s], tr)) { passA_ok = 0; break; }
+            }
+        }
+    }
+
+    /* Pass B: build each seed's surface and pre-allocate its pieces array. */
+    int passB_ok = passA_ok;
+    for (int s = 0; s < N && passB_ok; s++) {
+        if (own_n[s] == 0) continue;
+        newp[s] = malloc((size_t)own_n[s] * sizeof(s_convh));
+        if (!newp[s]) { passB_ok = 0; break; }
+        s_trimesh *sm = NULL; int sn = 0;
+        int r = build_cell_surface(&merged[s], s, real_seeds, cverts, EPS_DEG, &sm, &sn);
+        if (r < 0) { passB_ok = 0; break; }
+        news[s] = sm; newsn[s] = sn;   /* r==0 -> sm NULL, sn 0 (empty surface) */
+    }
+
+    for (int s = 0; s < N; s++) dynarray_free(&merged[s]);
+    free(merged);
+
+    if (passB_ok) {
+        /* Finalize (infallible): move pieces into their owner's array, set vcells. */
+        int *cur = calloc((size_t)N, sizeof(int));
+        if (cur) {
+            for (int i = 0; i < N; i++) {
+                int np = (int)pcs[i].N;
+                s_convh *pieces = (s_convh *)pcs[i].items;
+                for (int q = 0; q < np; q++) {
+                    int s = label[node_off[i] + piece_comp[i][q]];
+                    newp[s][cur[s]++] = pieces[q];   /* move (shallow): pcs no longer owns it */
+                }
+            }
+            for (int s = 0; s < N; s++) {
+                vcells[s].seed_id   = s;
+                vcells[s].N_pieces  = own_n[s];
+                vcells[s].pieces    = own_n[s] ? newp[s] : (free(newp[s]), (s_convh *)NULL);
+                vcells[s].volume    = own_v[s];
+                vcells[s].surface   = news[s];
+                vcells[s].N_surface = newsn[s];
+            }
+            free(cur);
+            rc = 1;
+        }
+    }
+
+    if (rc != 1) {   /* failure: drop anything we built; pieces stay owned by pcs */
+        for (int s = 0; s < N; s++) {
+            free(newp[s]);
+            for (int k = 0; k < newsn[s]; k++) free_trimesh(&news[s][k]);
+            free(news[s]);
+        }
+        for (int i = 0; i < N; i++) { vcells[i] = (s_vcell){0}; vcells[i].seed_id = i; }
+    }
+    free(own_n); free(own_v); free(newp); free(news); free(newsn);
+    free(label);
+
+cleanup:
+    free(nodes);
+    for (int i = 0; piece_comp && i < N; i++) free(piece_comp[i]);
+    free(piece_comp); free(ncomp); free(seed_comp); free(node_off);
+    return rc;
+}
+
 /* Inverse (tet-outer) clip of the whole domain. For each interior CDT tet, find
  * the Voronoi cells that carve it (seed-DT point location of the tet centroid +
  * vertices, then a flood fill over Voronoi adjacency, keeping neighbours of any
@@ -895,7 +1286,8 @@ static inline int face_is_domain_boundary(const s_ncell *nc, int f)
  * Returns 1 on success, 0 on allocation error. */
 static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                        s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
-                       double EPS_DEG, int want_surface, s_vcell *vcells)
+                       double EPS_DEG, bool want_surface, bool merge_orphans,
+                       s_vcell *vcells)
 {
     int N = real_seeds->N;
     int  *owner    = NULL;                                /* 2a: per-CDT-vertex owner cell */
@@ -904,13 +1296,21 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
     char *cellkind = NULL;                                /* Part II: 0 interior, 1 boundary */
     s_dynarray *pcs   = calloc((size_t)N, sizeof(s_dynarray));
     s_dynarray *surf  = want_surface ? calloc((size_t)N, sizeof(s_dynarray)) : NULL;
+    /* Step 1 (merge_orphans): per-cell parallel int array of triangle-range
+     * offsets into surf[i]; piece p's triangles are the half-open range
+     * [piece_tri_off[i][p], piece_tri_off[i][p+1]). Filled with N_pieces+1
+     * entries: a start offset pushed before each piece's piece_to_surface, plus
+     * one final surf[i].N after all pieces are emitted. */
+    s_dynarray *piece_tri_off = merge_orphans ? calloc((size_t)N, sizeof(s_dynarray)) : NULL;
     double     *vol   = calloc((size_t)N, sizeof(double));
     int        *stamp = calloc((size_t)N, sizeof(int));   /* per-cell visit stamp */
     s_dynarray  queue = dynarray_initialize(sizeof(int), 64);
-    if (!pcs || (want_surface && !surf) || !vol || !stamp || !queue.items) goto err_early;
+    if (!pcs || (want_surface && !surf) || (merge_orphans && !piece_tri_off) ||
+        !vol || !stamp || !queue.items) goto err_early;
     for (int i = 0; i < N; i++) {
         pcs[i]  = dynarray_initialize(sizeof(s_convh), 2);
         if (want_surface) surf[i] = dynarray_initialize(sizeof(s_surf_tri), 8);
+        if (merge_orphans) piece_tri_off[i] = dynarray_initialize(sizeof(int), 4);
     }
 
     if (!compute_vertex_owners(domain, real_seeds, seed_dt, adj, N, &owner, &tie))
@@ -928,7 +1328,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
      * slow (clipped) path. */
     for (int i = 0; i < N; i++) {
         int ne = adj->edge_off[i+1] - adj->edge_off[i];
-        const int *ed = adj->edge + 4 * adj->edge_off[i];
+        const int *ed = ne ? adj->edge + 4 * adj->edge_off[i] : NULL;
         for (int e = 0; e < ne; e++)
             if (ed[4*e+2] == -1 || ed[4*e+3] == -1) { cellkind[i] = 1; break; }
     }
@@ -958,8 +1358,8 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         if (o >= 0) { stamp[o] = tet_stamp; if (!dynarray_push(&queue, &o)) goto err; }
         for (unsigned qh = 0; qh < queue.N; qh++) {
             int i; dynarray_get_value(&queue, qh, &i);
-            const int *nbr = adj->neighbor + adj->offset[i];
             int NB = adj->offset[i+1] - adj->offset[i];
+            const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
             if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, nbr, NB))
                 continue;
             if (!cellkind[i]) {
@@ -1007,8 +1407,8 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
 
         for (unsigned qh = 0; qh < queue.N; qh++) {
             int i; dynarray_get_value(&queue, qh, &i);
-            const int *nbr = adj->neighbor + adj->offset[i];
             int NB = adj->offset[i+1] - adj->offset[i];
+            const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
             if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, nbr, NB))
                 continue;                                 /* frontier */
 
@@ -1018,8 +1418,8 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
             } else {                                      /* BOUNDARY: clip against this tet */
                 int n_vtx  = adj->vtx_off[i+1]  - adj->vtx_off[i];
                 int n_edge = adj->edge_off[i+1] - adj->edge_off[i];
-                const int *vv = adj->vtx  + 3 * adj->vtx_off[i];
-                const int *ve = adj->edge + 4 * adj->edge_off[i];
+                const int *vv = n_vtx  ? adj->vtx  + 3 * adj->vtx_off[i] : NULL;
+                const int *ve = n_edge ? adj->edge + 4 * adj->edge_off[i] : NULL;
                 int *rv = resolved ? resolved + adj->vtx_off[i] : NULL;
                 s_convh piece; s_vlabel *labels = NULL;
                 int r = clip_vcell_clip_tet_lp(i, real_seeds, adj, vv, n_vtx, ve, n_edge,
@@ -1027,10 +1427,23 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                                                EPS_DEG, &piece, want_surface ? &labels : NULL);
                 if (r == 1) {
                     double pv = volume_convhull(&piece);
-                    if (pv < EPS_DEG) { free_convhull(&piece); free(labels); }
+                    /* Keep every valid positive-volume piece. A piece is dropped
+                     * only if genuinely degenerate (pv <= 0): dropping a tiny but
+                     * valid interior piece breaks surface cancellation with its
+                     * kept neighbours, leaving the hole's boundary as a spurious
+                     * closed component (see the merge-orphans investigation). */
+                    if (pv <= 0.0) {
+                        free_convhull(&piece); free(labels);
+                    }
                     else {
                         vol[i] += pv;
                         tet_acc += pv;
+                        if (merge_orphans) {   /* Step 1: this piece's triangle-range start */
+                            int off = (int)surf[i].N;
+                            if (!dynarray_push(&piece_tri_off[i], &off)) {
+                                free(labels); free_convhull(&piece); goto err;
+                            }
+                        }
                         if (want_surface && !piece_to_surface(&piece, labels, nc, i, &surf[i])) {
                             free(labels); free_convhull(&piece); goto err;
                         }
@@ -1077,16 +1490,23 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
     for (int i = 0; i < N; i++) {
         if (cellkind[i]) continue;
         int n_vtx = adj->vtx_off[i+1] - adj->vtx_off[i];
-        const int *vv = adj->vtx + 3 * adj->vtx_off[i];
+        const int *vv = n_vtx ? adj->vtx + 3 * adj->vtx_off[i] : NULL;
         s_convh hull; double hv; s_vlabel *labels = NULL;
+        int nnb = adj->offset[i+1] - adj->offset[i];
         int r = emit_interior_cell(i, real_seeds,
-                                   adj->neighbor + adj->offset[i],
-                                   adj->offset[i+1] - adj->offset[i],
+                                   nnb ? adj->neighbor + adj->offset[i] : NULL,
+                                   nnb,
                                    vv, n_vtx, EPS_DEG, &hull, &hv,
                                    want_surface ? &labels : NULL);
         if (r == -1) goto err;
         if (r == 1) {
             vol[i] = hv;
+            if (merge_orphans) {   /* Step 1: this piece's triangle-range start */
+                int off = (int)surf[i].N;
+                if (!dynarray_push(&piece_tri_off[i], &off)) {
+                    free(labels); free_convhull(&hull); goto err;
+                }
+            }
             if (want_surface && !piece_to_surface(&hull, labels, NULL, i, &surf[i])) {
                 free(labels); free_convhull(&hull); goto err;
             }
@@ -1097,33 +1517,52 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         }
     }
 
-    /* Assemble per-cell vcells, transferring each accumulator's buffer directly
-     * (no copy / no further allocation that could fail here). */
-    for (int i = 0; i < N; i++) {
-        vcells[i] = (s_vcell){0};
-        vcells[i].seed_id  = i;
-        vcells[i].N_pieces = (int)pcs[i].N;
-        vcells[i].volume   = vol[i];
-        if (pcs[i].N > 0) {
-            vcells[i].pieces = (s_convh *)pcs[i].items;     /* transfer ownership */
-        } else {
-            dynarray_free(&pcs[i]);
-            vcells[i].pieces = NULL;
+    if (merge_orphans) {
+        /* Step 1: close each cell's piece_tri_off with the final offset (= end of
+         * the last piece's triangles), now that all pieces are emitted. */
+        for (int i = 0; i < N; i++) {
+            int off = (int)surf[i].N;
+            if (!dynarray_push(&piece_tri_off[i], &off)) goto err;
         }
-
-        if (want_surface) {   /* a pinched cell splits into >1 connected component */
-            s_trimesh *sm = NULL; int sn = 0;
-            if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt.points,
-                                   EPS_DEG, &sm, &sn) == 1) {
-                vcells[i].surface   = sm;
-                vcells[i].N_surface = sn;
-            }
+        /* Steps 3-6: reassign orphan components so each seed owns one connected
+         * region. Fills vcells[] and MOVES the pieces out of pcs[] on success. */
+        if (!merge_orphans_pass(domain, real_seeds, N, EPS_DEG,
+                                surf, pcs, piece_tri_off, vcells))
+            goto err;   /* pieces still owned by pcs[]; err path frees them */
+        for (int i = 0; i < N; i++) {
+            dynarray_free(&pcs[i]);          /* buffer only; s_convh moved into vcells */
             dynarray_free(&surf[i]);
+            dynarray_free(&piece_tri_off[i]);
+        }
+    } else {
+        /* Assemble per-cell vcells, transferring each accumulator's buffer directly
+         * (no copy / no further allocation that could fail here). */
+        for (int i = 0; i < N; i++) {
+            vcells[i] = (s_vcell){0};
+            vcells[i].seed_id  = i;
+            vcells[i].N_pieces = (int)pcs[i].N;
+            vcells[i].volume   = vol[i];
+            if (pcs[i].N > 0) {
+                vcells[i].pieces = (s_convh *)pcs[i].items;     /* transfer ownership */
+            } else {
+                dynarray_free(&pcs[i]);
+                vcells[i].pieces = NULL;
+            }
+
+            if (want_surface) {   /* a pinched cell splits into >1 connected component */
+                s_trimesh *sm = NULL; int sn = 0;
+                if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt.points,
+                                       EPS_DEG, &sm, &sn) == 1) {
+                    vcells[i].surface   = sm;
+                    vcells[i].N_surface = sn;
+                }
+                dynarray_free(&surf[i]);
+            }
         }
     }
     dynarray_free(&queue);
     free(owner); free(tie); free(resolved); free(cellkind);
-    free(pcs); free(surf); free(vol); free(stamp);
+    free(pcs); free(surf); free(piece_tri_off); free(vol); free(stamp);
     return 1;
 
 err:
@@ -1133,11 +1572,12 @@ err:
         }
         dynarray_free(&pcs[i]);
         if (surf) dynarray_free(&surf[i]);
+        if (piece_tri_off) dynarray_free(&piece_tri_off[i]);
     }
 err_early:
     dynarray_free(&queue);
     free(owner); free(tie); free(resolved); free(cellkind);
-    free(pcs); free(surf); free(vol); free(stamp);
+    free(pcs); free(surf); free(piece_tri_off); free(vol); free(stamp);
     return 0;
 }
 
@@ -1150,11 +1590,14 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
                                   double EPS_DEG, double TOL,
                                   int (*randint)(void*, int), void *rctx,
                                   s_dynarray *buff_points, int *out_kept_idx,
-                                  int want_surface)
+                                  bool want_surface, bool merge_orphans)
 {
     (void)vol_max_rel_diff; (void)randint; (void)rctx; (void)buff_points;
     if (!seeds || seeds->N <= 0 || !ncvx_domain_is_valid(domain))
         return (s_ncvx_vdiagram){0};
+    /* The orphan-merge pass reads the surface accumulators, so it needs the
+     * surface machinery on regardless of the caller's want_surface. */
+    if (merge_orphans) want_surface = true;
 
     /* Seed Delaunay of the real seeds plus 8 FAR auxiliary points (a box many
      * times the domain size). They guarantee a non-degenerate 3D DT even for 1-3
@@ -1217,7 +1660,8 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
     }
 
     /* Inverse (tet-outer) clip fills all vcells. */
-    if (!clip_domain(domain, &real_seeds, &seed_dt, &adj, EPS_DEG, want_surface, vcells)) {
+    if (!clip_domain(domain, &real_seeds, &seed_dt, &adj, EPS_DEG, want_surface,
+                     merge_orphans, vcells)) {
         free(vcells); free_cell_adjacency(&adj); free_complex(&seed_dt);
         return (s_ncvx_vdiagram){0};
     }
@@ -1256,13 +1700,14 @@ s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
                                    double EPS_DEG, double TOL,
                                    int (*randint)(void*, int), void *rctx,
                                    s_dynarray *buff_points, int *out_kept_idx,
-                                   int want_surface)
+                                   bool want_surface, bool merge_orphans)
 {
     s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL, 0);
     if (!ncvx_domain_is_valid(&domain)) return (s_ncvx_vdiagram){0};
     s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, &domain, vol_max_rel_diff,
                                            EPS_DEG, TOL, randint, rctx,
-                                           buff_points, out_kept_idx, want_surface);
+                                           buff_points, out_kept_idx,
+                                           want_surface, merge_orphans);
     free_ncvx_domain(&domain);  /* result owns its own copy */
     return out;
 }

@@ -4,3 +4,4 @@ example/virtual_population/*
 .clangd
 .cache
 build/
+example/*.vtk

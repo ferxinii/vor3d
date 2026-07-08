@@ -1798,31 +1798,42 @@ static void classify_interior_exterior(s_scplx *dt, s_hash_table *constrained,
     }
 
     /* Phase 4: record the interior flag on every tet, then delete tets per the
-     * keep_exterior policy (ghosts only, or ghosts + pockets). */
+     * keep_exterior policy (ghosts only, or ghosts + pockets). Done in TWO passes
+     * so no tet is ever read after it is freed: a deleted tet inspects its
+     * neighbours' deleted-status (ncell_is_deleted), and adjacent deleted tets
+     * would otherwise read each other across a free. Pass 1 rewires surviving
+     * neighbours + point2tet with nothing freed yet (every neighbour read valid);
+     * pass 2 unlinks and frees, reading only the tet being freed. */
+
+    /* Pass 1: set interior flag; for each deleted tet, null its back-pointers in
+     * surviving neighbours and repoint point2tet to a surviving incident tet. */
+    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
+        nc->interior = (nc->mark_token == int_stamp);
+        if (!ncell_is_deleted(nc, keep_exterior, ext_stamp)) continue;
+        for (int fi = 0; fi < 4; fi++) {
+            s_ncell *nb = nc->opposite[fi];
+            if (!nb || ncell_is_deleted(nb, keep_exterior, ext_stamp)) continue;
+            for (int k = 0; k < 4; k++)
+                if (nb->opposite[k] == nc) { nb->opposite[k] = NULL; break; }
+        }
+        for (int j = 0; j < 4; j++) {
+            int v = nc->vertex_id[j];
+            if (v < 4) { dt->point2tet[v] = NULL; continue; }
+            if (dt->point2tet[v] != nc) continue;
+            s_ncell *rep = NULL;
+            for (int fi = 0; fi < 4 && !rep; fi++) {
+                s_ncell *nb = nc->opposite[fi];
+                if (nb && !ncell_is_deleted(nb, keep_exterior, ext_stamp)) rep = nb;
+            }
+            dt->point2tet[v] = rep;
+        }
+    }
+
+    /* Pass 2: unlink and free the deleted tets (no neighbour reads). */
     s_ncell *nc = dt->head;
     while (nc) {
         s_ncell *next = nc->next;
-        nc->interior = (nc->mark_token == int_stamp);
         if (ncell_is_deleted(nc, keep_exterior, ext_stamp)) {
-            /* Null out opposite pointers in surviving neighbors. */
-            for (int fi = 0; fi < 4; fi++) {
-                s_ncell *nb = nc->opposite[fi];
-                if (!nb || ncell_is_deleted(nb, keep_exterior, ext_stamp)) continue;
-                for (int k = 0; k < 4; k++)
-                    if (nb->opposite[k] == nc) { nb->opposite[k] = NULL; break; }
-            }
-            /* Fix point2tet: repoint to any surviving incident neighbor. */
-            for (int j = 0; j < 4; j++) {
-                int v = nc->vertex_id[j];
-                if (v < 4) { dt->point2tet[v] = NULL; continue; }
-                if (dt->point2tet[v] != nc) continue;
-                s_ncell *rep = NULL;
-                for (int fi = 0; fi < 4 && !rep; fi++) {
-                    s_ncell *nb = nc->opposite[fi];
-                    if (nb && !ncell_is_deleted(nb, keep_exterior, ext_stamp)) rep = nb;
-                }
-                dt->point2tet[v] = rep;
-            }
             if (nc->prev) nc->prev->next = nc->next; else dt->head = nc->next;
             if (nc->next) nc->next->prev = nc->prev;
             dt->N_ncells--;

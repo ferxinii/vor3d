@@ -51,21 +51,29 @@ s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_par
 // vor3d_in_trimesh is the one-shot convenience wrapper.
 //
 // The convex-hull pieces (vcell.pieces / N_pieces) and per-cell volume are
-// always produced. If want_surface != 0, the cell boundary trimesh(es)
+// always produced. If want_surface is true, the cell boundary trimesh(es)
 // (vcell.surface / N_surface, one per connected component) are also built;
 // otherwise they are left NULL/0.
+//
+// If merge_orphans is true, a post-pass reassigns every disconnected cell
+// component ("orphan", left across a concavity) to a neighbouring seed so that
+// each seed owns exactly one spatially-connected region, exported as a single
+// closed trimesh with volume conserved (see MERGING_ORPHANS.md). This pass is
+// driven by the surface accumulators, so it REQUIRES the surface machinery:
+// passing merge_orphans=true forces want_surface on internally (the merged
+// surface is produced regardless of the want_surface argument).
 s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const s_ncvx_domain *domain,
                                  double vol_max_rel_diff,
                                  double EPS_DEG, double TOL,
                                  int (*randint)(void*, int), void *rctx,
                                  s_dynarray *buff_points, int *out_kept_idx,
-                                 int want_surface);
+                                 bool want_surface, bool merge_orphans);
 
 s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const s_trimesh *mesh,
                                   double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
                                   int (*randint)(void*, int), void *rctx,
                                   s_dynarray *buff_points, int *out_kept_idx,
-                                  int want_surface);
+                                  bool want_surface, bool merge_orphans);
 
 #endif
