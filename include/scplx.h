@@ -10,6 +10,8 @@ typedef struct simplical_complex {  // May in stack
     int N_ncells;
     struct ncell *head;  // Linked list of ncells
     int mark_stamp;
+    int walk_stamp;      // in_ncell_walk loop-detection stamp; independent of mark_stamp
+                         // so the walk never collides with CDT/other mark_token users.
     struct ncell **point2tet;  // [v] = one tet containing vertex v; NULL if unused
     int exact_ids;  // 0 = coordinate predicates (default); 1 = cdt_predicates by vertex id.
                     // Set only for CDT builds (see dt_predseam.h); must be zero for weighted.
@@ -27,6 +29,8 @@ typedef struct ncell {  // Must live in heap
     int mark_token;  // Used to mark particular ncells: mark_token == mark_stamp
     int mark_token2; // Private traversal mark for ncells_incident_face, so its
                      // flood-fill never clobbers a caller's mark_token dedup.
+    int walk_token;  // Private to in_ncell_walk: == scplx.walk_stamp iff this cell
+                     // was already visited in the current walk (loop detection).
     bool mask_alpha;  // if it belongs to the alpha complex (for a given alpha)
     bool in_stack;
     bool interior;   // CDT domain classification: true = tet inside the trimesh.

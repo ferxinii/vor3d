@@ -449,9 +449,9 @@ s_ncell *bruteforce_find_ncell_containing(const s_scplx *scplx, s_point p)
         // if (test == TEST_DEGENERATE);  /* These are expected! Just skip them */
         current = current->next;
     }
-    fprintf(stderr, "Warning: Did not find container ncell.\n");
-    fprintf(stderr, "p: %g, %g, %g\n", p.x, p.y, p.z);
-    exit(1);
+    /* No tet contains p: for a convex complex this means p is outside it. Return
+     * NULL (a legitimate "outside" answer) rather than aborting the process. */
+    return NULL;
 }
 
 
@@ -504,13 +504,19 @@ static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id
     s_point facet_vertices[3];
     s_ncell *prev = current;
 
-    int steps = 0;
+    /* Loop detection: stamp each cell as we enter it; if we re-enter a cell
+     * already visited THIS walk, the walk is oscillating (degenerate/coplanar
+     * geometry, or p on a boundary face) -- stop and resolve by brute force.
+     * walk_stamp/walk_token are private to the walk (see scplx.h), so this never
+     * disturbs mark_token/mark_stamp used by CDT and other traversals. The stamp
+     * is mutable scratch on a logically-const complex, hence the cast. */
+    const int wstamp = ++((s_scplx *)scplx)->walk_stamp;
+
     STEP:
-    steps++;
-    if (steps > 3 * scplx->N_ncells) {
-        fprintf(stderr, "Warning: in_ncell_walk seems to be in a loop. Now bruteforcing to find inside which ncell.\n");
+    if (current->walk_token == wstamp)
         return bruteforce_find_ncell_containing(scplx, p);
-    }
+    current->walk_token = wstamp;
+
     int order[4]; random_order_04(order);
     for (int kk=0; kk<4; kk++) {  /* Visit faces in random order to prevent loops ? */
         int ii = order[kk];
