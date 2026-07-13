@@ -6,6 +6,7 @@
 #include "points.h"
 #include "gtests.h"
 #include "dt_predseam.h"  /* Phase 1: id-based predicate seam (dead exact branch until Phase 2) */
+#include "voronoi_predicates.h"  /* orient3d_dd for the sentinel regularity reductions */
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,9 +14,168 @@
 #include <math.h>
 
 
+/* orient3d of four s_point (Shewchuk convention: sign det3(a-d, b-d, c-d)). */
+static int or3_pts(s_point a, s_point b, s_point c, s_point d)
+{
+    s_point plane[3] = {a, b, c};
+    return test_orientation(plane, d);
+}
+
+/* sign det3(a-b, c-d, e-f), robust (voronoi_predicates.cpp). */
+static int dd_pts(s_point a, s_point b, s_point c, s_point d, s_point e, s_point f)
+{
+    return orient3d_dd(a.x,a.y,a.z, b.x,b.y,b.z, c.x,c.y,c.z,
+                       d.x,d.y,d.z, e.x,e.y,e.z, f.x,f.y,f.z);
+}
+
+/* Phase 6: local regularity when ANY of the five points (four sphere-defining
+ * vertices def[0..3], or the query o) is a sentinel (id < 4).
+ *
+ * Derivation (PLAN_DE_PREDICATES.md; validated in exact rational arithmetic by
+ * tests/validate_sentinel_reductions.py, 2400/2400):
+ * Regularity is in1 = sign(D5(def, o)) * sign(orient3d(def)), where D5 is the
+ * 5x5 lifted in-sphere determinant, rows [x, y, z, x^2+y^2+z^2 - w, 1].
+ * Sentinels are points at infinity receding at the SAME RATE (the big-tetra
+ * corners are equidistant from its centre): def[i] = C + R*u_i, R -> inf.
+ * Expanding D5 by row-multilinearity, the lift column can be taken by at most
+ * ONE sentinel row, so with >= 2 sentinels the leading power of R mixes one
+ * term per sentinel; with equal norms |u_i| the mix collapses to determinants
+ * of sentinel coordinate DIFFERENCES (s-t), and the finite weights drop out.
+ * (This is why the earlier "strike one sentinel, keep the rest as ordinary
+ * points" attempt was wrong: it kept only one of the leading terms.)
+ *
+ * With F[] = finite definers and S[] = sentinel definers, BOTH in tet order
+ * (this makes all row-permutation parities cancel between D5 and orient3d --
+ * validated), and dd(a,b,c,d,e,f) = sign det3(a-b, c-d, e-f):
+ *
+ *   o finite, ns=1 (C):  or3(F0,F1,F2,o)        * or3(F0,F1,F2,S0)
+ *   o finite, ns=2 (D):  dd(F0,o, F1,o, S0,S1)  * or3(F0,F1,S0,S1)
+ *   o finite, ns=3 (E):  dd(F0,o, S1,S0, S2,S0) * or3(F0,S0,S1,S2)
+ *   o finite, ns=4 (X):  +1  (the initial big tetra conflicts with everything)
+ *   o sent,   ns=0 (B):  -1  (a point at infinity is outside any finite sphere)
+ *   o sent,   ns=1 (M1): dd(F1,F0, F2,F0, S0,o) * or3(F0,F1,F2,S0)
+ *   o sent,   ns=2 (M2): -dd(F0,F1, S1,S0, o,S0) * or3(F0,F1,S0,S1)
+ *   o sent,   ns=3 (M3): -or3(S1,S2,o,S0)        * or3(F0,S0,S1,S2)
+ *
+ * Geometrically: the degenerate orthosphere is a halfspace bounded by the
+ * plane through the finite definers parallel to the sentinel chord (D: s-t)
+ * or to the sentinel face (E: plane(s,t,u)).  Sentinel coordinates enter only
+ * robust orientation predicates (size-stable, Finding G); the orthosphere
+ * itself never sees a sentinel.  Assumes the big tetra is present (ids 0..3
+ * are sentinels), which holds during construction and for complexes kept with
+ * keep_big_tetra.
+ *
+ * Returns test_orthosphere convention: +1 inside/conflict, -1 outside.
+ * Resolution ladder on ties: L1 symbolic leading term (below); L2 exact finite
+ * orthosphere (orthosphere_tiebreak); L3 weight-SoS (insphere_sos).  A 0 can
+ * only escape if the five points are exactly coplanar, which the flat-tet
+ * guard upstream prevents. */
+/* Ladder level L2: finite-orthosphere evaluation of the same 5 points, used to
+ * break ties of the symbolic reduction (leading R-term exactly zero, e.g. the
+ * two finite definers of Case D collinear with the query).  On a tie the true
+ * sign lives in the subleading R-orders; the robust finite determinant computes
+ * ALL orders exactly at the actual sentinel radius.  Finding G blow-ups are not
+ * a concern here: they affect configurations whose LEADING term is nonzero, and
+ * those never reach this fallback. */
+static int orthosphere_tiebreak(const s_scplx *scplx, const int def[4], int o_id)
+{
+    s_point c[4]; double w[4];
+    for (int i = 0; i < 4; i++) {
+        c[i] = scplx->points.p[def[i]];
+        w[i] = scplx->weights ? scplx->weights[def[i]] : 0.0;
+    }
+    return test_orthosphere(4, c, w, scplx->points.p[o_id],
+                            scplx->weights ? scplx->weights[o_id] : 0.0);
+}
+
+/* Ladder level L3 (Phase 6f): deterministic weight-SoS when the exact finite
+ * determinant D5 of the 5 points (rows def[0..3], o) is itself zero, i.e. the
+ * actual configuration is genuinely degenerate (weighted-cospherical).
+ *
+ * Perturbation model: w_i -> w_i + eps^(2^id_i), eps -> 0+.  Distinct global
+ * ids give distinct eps-powers; the SMALLEST id dominates (sentinels 0..3
+ * resolve first, in fixed order).  D5 is linear in each w_j, which appears
+ * only in entry (row j, lift column) with coefficient -1, so
+ *     dD5/dw_j = (-1)^rr_j * Omega_j
+ * with rr_j = j's 0-based row index and Omega_j = orient3d of the OTHER FOUR
+ * points in row order.  Perturbing two weights strikes the lift column twice
+ * (proportional rows), so ALL cross-terms vanish: the perturbed sign is
+ * decided by the smallest id whose Omega is nonzero.  If every Omega is zero
+ * the five points are coplanar -- pre-guarded by the flat-tet check upstream.
+ * The predicate is in1 = sign(perturbed D5) * sign(orient3d(def)) as in the
+ * master identity.  Validated in exact rational arithmetic against the
+ * eps-perturbed determinant, incl. chain depth >= 2 and two-sided facet
+ * consistency: tests/validate_sos.py (941/941). */
+static int insphere_sos(const s_scplx *scplx, const int def[4], int o_id)
+{
+    int ids[5] = { def[0], def[1], def[2], def[3], o_id };
+    s_point P[5];
+    for (int i = 0; i < 4; i++) P[i] = scplx->points.p[def[i]];
+    P[4] = scplx->points.p[o_id];
+
+    int base = or3_pts(P[0], P[1], P[2], P[3]);
+    if (base == 0) return 0;   /* flat definers: pre-guarded upstream */
+
+    int order[5] = { 0, 1, 2, 3, 4 };
+    for (int i = 1; i < 5; i++) {   /* insertion sort by ascending id */
+        int k = order[i], j = i - 1;
+        while (j >= 0 && ids[order[j]] > ids[k]) { order[j+1] = order[j]; j--; }
+        order[j+1] = k;
+    }
+
+    for (int n = 0; n < 5; n++) {
+        int rr = order[n];
+        s_point q[4]; int m = 0;
+        for (int i = 0; i < 5; i++) if (i != rr) q[m++] = P[i];
+        int om = or3_pts(q[0], q[1], q[2], q[3]);
+        if (om != 0) return ((rr % 2 == 0) ? 1 : -1) * om * base;
+    }
+    return 0;   /* all five coplanar: unreachable past the flat guard */
+}
+
+static int insphere_sentinel(const s_scplx *scplx, const int def[4], int o_id)
+{
+    s_point F[4], S[4];   /* Case B has 4 finite definers; Case X has 4 sentinels */
+    int nf = 0, ns = 0;
+    for (int i = 0; i < 4; i++) {
+        if (def[i] < 4) S[ns++] = scplx->points.p[def[i]];
+        else            F[nf++] = scplx->points.p[def[i]];
+    }
+    s_point o = scplx->points.p[o_id];
+
+    int r = 0;
+    if (o_id >= 4) {   /* query finite */
+        switch (ns) {
+            case 1: r = or3_pts(F[0], F[1], F[2], o)
+                      * or3_pts(F[0], F[1], F[2], S[0]);         break;
+            case 2: r = dd_pts(F[0],o, F[1],o, S[0],S[1])
+                      * or3_pts(F[0], F[1], S[0], S[1]);         break;
+            case 3: r = dd_pts(F[0],o, S[1],S[0], S[2],S[0])
+                      * or3_pts(F[0], S[0], S[1], S[2]);         break;
+            case 4: return 1;
+            default: assert(0 && "insphere_sentinel: bad pattern"); return 0;
+        }
+    } else {           /* query is a sentinel */
+        switch (ns) {
+            case 0: return -1;
+            case 1: r = dd_pts(F[1],F[0], F[2],F[0], S[0],o)
+                      * or3_pts(F[0], F[1], F[2], S[0]);         break;
+            case 2: r = -dd_pts(F[0],F[1], S[1],S[0], o,S[0])
+                      * or3_pts(F[0], F[1], S[0], S[1]);         break;
+            case 3: r = -or3_pts(S[1], S[2], o, S[0])
+                      * or3_pts(F[0], S[0], S[1], S[2]);         break;
+            default: assert(0 && "insphere_sentinel: bad pattern"); return 0;
+        }
+    }
+    if (r != 0) return r;                              /* L1: symbolic */
+    r = orthosphere_tiebreak(scplx, def, o_id);        /* L2: exact finite */
+    if (r != 0) return r;
+    return insphere_sos(scplx, def, o_id);             /* L3: weight-SoS */
+}
+
 bool are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opposite,
                           e_delaunay_test_type type)
-{   
+{
     const int *v1 = ncell->vertex_id;
     const int *v2 = ncell->opposite[id_opposite]->vertex_id;
 
@@ -30,13 +190,55 @@ bool are_locally_delaunay(const s_scplx *scplx, const s_ncell *ncell, int id_opp
 
     int in1;
     if (scplx->weights) {
-        /* Weighted (regular triangulation) path -- Voronoi seeds only, always
-         * exact_ids==0; keep coordinate-based orthosphere. */
-        s_point coords1[4]; extract_vertices_ncell(scplx, ncell, coords1);
-        double weights1[4]; extract_weights_ncell(scplx, ncell, weights1);
-        in1 = test_orthosphere(4, coords1, weights1,
-                scplx->points.p[opp_face_vertex_id], scplx->weights[opp_face_vertex_id]);
+        /* Weighted (regular triangulation) path.  Phase 6: keep the orthosphere
+         * OFF the sentinels -- when the sphere-defining tet touches a sentinel,
+         * reduce to a robust ORIENTATION of the finite points (Finding G).  This
+         * is what makes the RT tile the convex hull regardless of sentinel size. */
+        int nsent = 0;
+        for (int i = 0; i < 4; i++) if (v1[i] < 4) nsent++;
+        bool o_sent = (opp_face_vertex_id < 4);
+
+        if (nsent == 0 && !o_sent) {
+            /* Case A: all five points finite -> genuine finite orthosphere;
+             * exact tie (weighted-cospherical) resolved by weight-SoS. */
+            s_point coords1[4]; extract_vertices_ncell(scplx, ncell, coords1);
+            double weights1[4]; extract_weights_ncell(scplx, ncell, weights1);
+            in1 = test_orthosphere(4, coords1, weights1,
+                    scplx->points.p[opp_face_vertex_id], scplx->weights[opp_face_vertex_id]);
+            if (in1 == 0)
+                in1 = insphere_sos(scplx, v1, opp_face_vertex_id);
+        } else {
+            /* Any sentinel among the 5 points: symbolic reduction to robust
+             * orientation predicates (Cases B/C/D/E/M1-M3/X, see
+             * insphere_sentinel). */
+            in1 = insphere_sentinel(scplx, v1, opp_face_vertex_id);
+        }
+    } else if (!scplx->exact_ids) {
+        /* Unweighted (non-CDT) path.  Historically this used the finite
+         * insphere everywhere and tolerated two flaws on degenerate input
+         * (diagnosed 2026-07-13 via the intermittent example_basic "invalid
+         * volume" failures, seed-deterministic repro in tests/repro_basic.c):
+         *   (1) sentinel-touching tets judged with the FINITE insphere are
+         *       left in unfixable strict conflict near hull slivers (Finding
+         *       G), so the complex is non-Delaunay BEFORE later insertions --
+         *       voiding the star-insertion correctness lemma; and
+         *   (2) exact cosphericity ties (mirror-symmetric Voronoi point sets)
+         *       frozen as "regular" block the repair flips.
+         * Fix: same treatment as the weighted path -- symbolic sentinel
+         * reductions when any of the 5 points is a sentinel (weights read as
+         * 0), and the deterministic weight-SoS chain on exact ties. */
+        int nsent = 0;
+        for (int i = 0; i < 4; i++) if (v1[i] < 4) nsent++;
+
+        if (nsent > 0 || opp_face_vertex_id < 4) {
+            in1 = insphere_sentinel(scplx, v1, opp_face_vertex_id);
+        } else {
+            in1 = dtp_insphere(scplx, v1[0], v1[1], v1[2], v1[3], opp_face_vertex_id);
+            if (in1 == 0)
+                in1 = insphere_sos(scplx, v1, opp_face_vertex_id);
+        }
     } else {
+        /* CDT/exact-ids path: untouched seam. */
         in1 = dtp_insphere(scplx, v1[0], v1[1], v1[2], v1[3], opp_face_vertex_id);
     }
 
@@ -90,49 +292,21 @@ static bool p_locally_redundant_in_ncell(const s_scplx *scplx, const s_ncell *nc
 
     s_point v[4]; double w[4];
     extract_vertices_and_weights_ncell(scplx, nc, v, w);
-    return (test_orthosphere(4, v, w, scplx->points.p[p_id], scplx->weights[p_id]) != -1);
-
-
-
-    // s_point v[4];  double w[4];
-    // extract_vertices_and_weights_ncell(scplx, nc, v, w);
-    // return (test_orthosphere(4, v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
-    //
-    //
-    // /* Count how many and which vertices of nc are part of big tetra */
-    // int N_bigtetra = 0, bigtetra_ids[4] = {0};
-    // for (int i=0; i<4; i++) 
-    //     if (nc->vertex_id[i] < 4) bigtetra_ids[N_bigtetra++] = i;
-    //
-    // /* Select the vertices that are NOT part of big tetra */
-    // s_point v_real[4];  double w_real[4];
-    // for (int i = 0, k = 0; i < 4; i++) {
-    //     bool is_bigtetra = false;
-    //     for (int j = 0; j < N_bigtetra; j++)
-    //         if (bigtetra_ids[j] == i) { is_bigtetra = true; break; }
-    //     if (!is_bigtetra) {
-    //         v_real[k] = v[i];
-    //         w_real[k] = w[i];
-    //         k++;
-    //     }
-    // }
-    //
-    // switch (N_bigtetra) {
-    //     case 0:
-    //         return (test_orthosphere(4, v, w, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
-    //     case 1:
-    //         // return (test_orthosphere(3, v_real, w_real, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
-    //         return false;
-    //     case 2:
-    //         return (test_orthosphere(2, v_real, w_real, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
-    //     case 3:
-    //         return (test_orthosphere(1, v_real, w_real, scplx->points.p[p_id], scplx->weights[p_id]) == 1);
-    //     case 4:
-    //         return false;
-    //     default:
-    //         fprintf(stderr, "p_locally_redundant_in_ncell: error in switch!\n");
-    //         exit(1);
-    // }
+    /* p is redundant iff its lifted point lies STRICTLY ABOVE the lifted facet
+     * of the containing tet, i.e. pi(p^, orthosphere(nc)) > 0 (Vigo et al.
+     * Sec. 4).  test_orthosphere returns -1 exactly in that case (+1 == in
+     * conflict, must insert).  The exact tie pi == 0 (p on the orthosphere,
+     * e.g. grid data with cospherical equal-weight points) is resolved by the
+     * same weight-SoS chain as regularity: p on the orthosphere is NOT above
+     * the lifted hull, and its power cell can be full-dimensional, so the old
+     * "tie -> drop" heuristic silently lost real points; consistent SoS keeps
+     * or drops per the perturbed configuration, matching the flips. */
+    int s = test_orthosphere(4, v, w, scplx->points.p[p_id],
+                             scplx->weights[p_id]);
+    if (s == 0)
+        s = insphere_sos(scplx, nc->vertex_id, p_id);
+    return (s != 1);   /* s == 0 only for a flat containing tet: keep the
+                        * conservative drop in that (corrupt) case */
 }
 
 
@@ -406,6 +580,20 @@ static int can_perform_flip32(const s_ncell *ncell, int opp_cell_id, int *ridge_
             inarray(opp_opp->vertex_id, 4, ncell->vertex_id[opp_cell_id]) &&
             inarray(opp_opp->vertex_id, 4, opp_ncell->vertex_id[opp_face_lid])) {
                 *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, opp_ncell->vertex_id[ii]);
+                /* ES/Vigo flippability: a 3->2 flip is valid only if the reflex
+                 * edge (ridge) has degree EXACTLY 3 -- i.e. the ring
+                 * ncell->n2->n3 closes back to ncell.  Finding a third tet
+                 * sharing p and d is necessary but NOT sufficient; on a degree>3
+                 * ridge the facet is not flippable yet and flip32's surgery would
+                 * corrupt the complex (duplicate tets).  Defer so the cascade
+                 * flips other facets first (which reduces this ridge's degree). */
+                int m2, s2, m3, s3, m4, s4;
+                s_ncell *n2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &m2, &s2);
+                if (!n2) return 0;
+                s_ncell *n3 = next_ncell_ridge_cycle(n2, m2, s2, &m3, &s3);
+                if (!n3) return 0;
+                s_ncell *n4 = next_ncell_ridge_cycle(n3, m3, s3, &m4, &s4);
+                if (n4 != ncell) return 0;
                 return 1;
         }
     }
@@ -490,7 +678,7 @@ static int flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
 
 
 static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int opp_cell_id, int *ridge_id_2)
-{   /* In general, in config44 no need for coplanarity. But since this flip is only done on a degenerate case, 
+{   /* In general, in config44 no need for coplanarity. But since this flip is only done on a degenerate case,
        it makes the test simpler. ridge_id_2 is the other vertex NOT belonging to the ridge. */
     /* Determine ridge along which we are in config44 */
     int opp_face_localid; face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_localid);
@@ -522,7 +710,26 @@ static int can_perform_flip44(const s_scplx *scplx, const s_ncell *ncell, int op
         s_ncell *nc4 = next_ncell_ridge_cycle(nc3, nc3_id1, nc3_id2, &nc4_id1, &nc4_id2);
         if (!nc4) continue;
 
-        if (nc4->opposite[nc4_id1] == ncell) return 1;
+        if (nc4->opposite[nc4_id1] == ncell) {
+            /* Duplicate-avoidance guard (local, O(4)): flip44's internal flip23
+             * would replace {ncell, its neighbour} with three tets
+             * {p,d}+(each edge of the shared face {a,c,b}).  Each such tet shares
+             * a face CONTAINING p with ncell, so it already exists iff one of
+             * ncell's neighbours across a face containing p (any face except the
+             * shared one, opp_cell_id) also contains d (= did).  If so the flip
+             * would duplicate that cell and corrupt the complex (same risk
+             * CASE_P_IN_EDGE guards for flip23).  Defer: try the other candidate
+             * ridge, else fall through to return 0 so the BW loop flips
+             * elsewhere first. */
+            bool would_dup = false;
+            for (int f = 0; f < 4 && !would_dup; f++) {
+                if (f == opp_cell_id) continue;         /* the shared face (opposite p) */
+                const s_ncell *nb = ncell->opposite[f];
+                if (nb && inarray(nb->vertex_id, 4, did)) would_dup = true;
+            }
+            if (would_dup) continue;
+            return 1;
+        }
     }
     return 0;
 }
@@ -645,7 +852,38 @@ static int can_perform_flip41(const s_ncell *ncell, int opp_cell_id, int *redund
                 redundant_vid = degree3_edges[0][i];
 
     assert(redundant_vid != -1);
+    /* Finding D: never flip away a big-tetra sentinel (id < 4).  Near the hull
+     * the degree-3 pattern can land on a sentinel; removing it corrupts the hull
+     * topology.  Reject the flip41 -- flip_tetrahedra falls through to flip32. */
+    if (redundant_vid < 4) return 0;
     *redundant_localid = id_where_equal_int(ncell->vertex_id, 4, redundant_vid);
+
+    /* The two degree-3 edges are NECESSARY but not SUFFICIENT for a 4->1 flip.
+     * A hull-adjacent weighted configuration can pass the edge test yet have the
+     * redundant vertex's star NOT be a clean 4-tet diamond (the 4 incident tets
+     * span 5+ vertices).  flip41's pointer surgery assumes a diamond, so a false
+     * positive corrupts the complex (stack overflow in face_localid_of_adjacent
+     * _ncell writing multiple ids into a single-int slot).  Build the star and
+     * require exactly 4 incident tets whose vertices, minus r, are exactly 4
+     * distinct.  If not, reject -- flip_tetrahedra falls through to flip32. */
+    const s_ncell *star[4]; star[0] = ncell; int k = 1;
+    for (int i = 0; i < 4; i++) {
+        if (i == *redundant_localid) continue;
+        const s_ncell *nb = ncell->opposite[i];
+        if (nb && inarray(nb->vertex_id, 4, redundant_vid) && k < 4) star[k++] = nb;
+    }
+    if (k != 4) return 0;
+    int diamond[4], nd = 0;
+    for (int i = 0; i < 4; i++)
+        for (int m = 0; m < 4; m++) {
+            int v = star[i]->vertex_id[m];
+            if (v == redundant_vid) continue;
+            if (!inarray(diamond, nd, v)) {
+                if (nd >= 4) return 0;   /* 5th distinct vertex -> not a diamond */
+                diamond[nd++] = v;
+            }
+        }
+    if (nd != 4) return 0;
     return 1;
 }
 
@@ -691,11 +929,12 @@ static int flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid
     }
     assert(d != -1);
 
-    /* Update nc1 to be the surviving tetrahedron */
-    set_ncell_vids(star[0], a, b, c, d);
-
-    /* Correct opposite pointer correspondence. 
-     * out_i is opposite to whichever of {a,b,c,d} is absent from star[i]. */
+    /* Correct opposite pointer correspondence.  out[j] is the external neighbour
+     * across the face opposite abcd[j], i.e. the old outer-neighbour of whichever
+     * star tet is MISSING abcd[j].  IMPORTANT: compute this BEFORE overwriting
+     * star[0]'s vertices -- star[0] is the tet missing d, so it must still read
+     * as {r,a,b,c} here, otherwise its external neighbour (out[d]) is never
+     * reconnected and is left as a one-directional (orphan) opposite pointer. */
     int abcd[4] = {a, b, c, d};
     s_ncell *out_raw[4]  = {nc1_opp_old[nc1_r], nc2_opp_old[nc2_r],
                             nc3_opp_old[nc3_r], nc4_opp_old[nc4_r]};
@@ -704,6 +943,9 @@ static int flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid
         for (int j = 0; j < 4; j++)
             if (!inarray(star[i]->vertex_id, 4, abcd[j]))
                 { out[j] = out_raw[i]; break; }
+
+    /* Now overwrite star[0] to be the surviving tetrahedron {a,b,c,d}. */
+    set_ncell_vids(star[0], a, b, c, d);
 
     set_ncell_opposite_pointers(star[0], out[0], out[1], out[2], out[3]);
 
@@ -740,6 +982,24 @@ static int flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid
     free_ncell(star[3]);
     if (scplx->point2tet) scplx->point2tet[r_vid] = NULL;
     p2t_update(scplx, star[0]);
+
+    /* Finding E: same invariant hole as flip44 (see the comment in flip44).  The
+     * BW loop only re-checks the face opposite the inserted point, but flip41
+     * rewired all four faces of the surviving tet star[0]; a face that changed
+     * its incident-cell pair may be left non-regular and never re-examined.  Under
+     * exact general position ES theory says they stay regular, but the weighted
+     * float path has no SoS, so re-check star[0]'s faces explicitly (NONSTRICT to
+     * avoid degenerate flip cycles).  flip_tetrahedra may free/replace star[0], so
+     * break after the first flip -- the flipped cells are on the stack. */
+    if (stack) {
+        for (int fi = 0; fi < 4; fi++) {
+            if (!star[0]->opposite[fi]) continue;
+            if (!are_locally_delaunay(scplx, star[0], fi, DELAUNAY_TEST_NONSTRICT)) {
+                if (flip_tetrahedra(scplx, stack, star[0], fi, ignored) == -1) return 0;
+                break;
+            }
+        }
+    }
     return 1;
 }
 
@@ -763,16 +1023,6 @@ static void regular_tetrahedron(s_point centre, double inradius, s_point out[4])
         out[ii+1].x = centre.x + r_circle * cos(angle);
         out[ii+1].y = centre.y + r_circle * sin(angle);
         out[ii+1].z = centre.z - inradius;
-    }
-}
-
-static void perturb_big_tetra(s_point out[4], double inradius)
-{   /* Small random perturbation relative to inradius to break degeneracies */
-    double eps = inradius * 1e-6;
-    for (int ii = 0; ii < 4; ii++) {
-        out[ii].x += eps * ((double)rand()/RAND_MAX - 0.5);
-        out[ii].y += eps * ((double)rand()/RAND_MAX - 0.5);
-        out[ii].z += eps * ((double)rand()/RAND_MAX - 0.5);
     }
 }
 
@@ -817,9 +1067,15 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
     /* inradius min: bdiag/2 + 2*maxr, but the bigger it makes less errors. */
     double inradius = (2*bdiag + 8*maxr);    // TODO TEST WHY TIGHTENING RESULTS IN FAILS
     // double inradius = 1.1 * (bdiag/2 + 2*maxr);  
+    /* Deterministic, unperturbed regular tetrahedron.  The sentinel regularity
+     * reductions (insphere_sentinel) assume equal-norm sentinel directions
+     * about the big-tetra centre, which the exact construction satisfies to
+     * ulp; the old rand() jitter broke that premise at 1e-6 relative scale AND
+     * made hull-adjacent topology nondeterministic.  Degeneracies between
+     * sentinels and data are handled by the exact predicates' tie paths
+     * (orthosphere_tiebreak now; SoS in Phase 6f), not by randomness. */
     regular_tetrahedron(centre, inradius, scplx_points.p);
-    perturb_big_tetra(scplx_points.p, inradius);
-    
+
     out->points.N = points->N + 4;
     out->points = scplx_points;
     s_ncell *big_ncell = malloc_ncell();
@@ -968,7 +1224,7 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
             } else return 0;
         case CASE_FLAT:
             if (can_perform_flip44(scplx, ncell, opp_cell_id, &ridge_id_2)) {
-                if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL, ignored) == -1) 
+                if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL, ignored) == -1)
                     return -1;
                 else return 1;
             } else return 0;

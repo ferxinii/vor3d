@@ -26,7 +26,7 @@ add_library(vor3d STATIC
     src/mirroring.c
     src/ncvx.c
     src/medax.c
-    # src/volsph.c
+    src/volsph.c
 )
 
 target_include_directories(vor3d

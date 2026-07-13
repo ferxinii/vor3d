@@ -128,22 +128,34 @@ static bool vertex_test(s_scplx *scplx, s_ncell *nc, int v_localid, double alpha
     double  pi_wt = scplx->weights ? scplx->weights[vid] : 0.0;
     if (test_orthosphere_w(1, &pi_pt, &pi_wt, alpha) > 0) return false;
 
-    (void)buff_ncellPTR;
-    // /* 2) Conflict condition by checking star of vertex */
-    // int v_localid_ARR[3]; extract_ids_face(nc, 2, &v_localid, v_localid_ARR);
-    // ncells_incident_face(scplx, nc, 0, v_localid_ARR, buff_ncellPTR);
-    //
-    // for (unsigned i=0; i<buff_ncellPTR->N; i++) {
-    //     s_ncell **tc = dynarray_get_ptr(buff_ncellPTR, i);
-    //     for (int j=0; j<4; j++) {
-    //         int vjd = (*tc)->vertex_id[j];
-    //         if (vjd == vid) continue;
-    //         if (has_big_tetra && vjd < 4) continue;
-    //         s_point pj = scplx->points.p[vjd];
-    //         double  wj  = scplx->weights ? scplx->weights[vjd] : 0.0;
-    //         if (test_orthosphere(1, &pi_pt, &pi_wt, pj, wj) > 0) return false;
-    //     }
-    // }
+    /* 2) Conflict ("attached") condition (Finding C).  A vertex can be
+     * non-redundant in the RT (nonempty power cell) yet be buried inside a
+     * bigger neighbouring ball, contributing nothing to the union; such a
+     * vertex must be excluded from K.  Vertex a is "attached" to neighbour b iff
+     * dist(a,b)^2 + wa - wb < 0, which is exactly test_orthosphere(1, {a}, b) > 0
+     * (b in conflict with a's vertex-orthosphere y_a = (a, -wa)).  Walk the star
+     * of the vertex and test every neighbouring vertex.
+     *
+     * ncells_incident_face(dim_face=0) identifies the vertex by the LOCAL ids of
+     * the OTHER three tet vertices (it flood-fills across faces opposite those),
+     * so pass {0,1,2,3} \ {v_localid} -- NOT extract_ids_face, which returns
+     * GLOBAL ids and would break the star walk. */
+    int other_localids[3];
+    for (int i = 0, k = 0; i < 4; i++)
+        if (i != v_localid) other_localids[k++] = i;
+    ncells_incident_face(scplx, nc, 0, other_localids, buff_ncellPTR);
+
+    for (unsigned i = 0; i < buff_ncellPTR->N; i++) {
+        s_ncell **tc = dynarray_get_ptr(buff_ncellPTR, i);
+        for (int j = 0; j < 4; j++) {
+            int vjd = (*tc)->vertex_id[j];
+            if (vjd == vid) continue;
+            if (has_big_tetra && vjd < 4) continue;
+            s_point pj = scplx->points.p[vjd];
+            double  wj = scplx->weights ? scplx->weights[vjd] : 0.0;
+            if (test_orthosphere(1, &pi_pt, &pi_wt, pj, wj) > 0) return false;
+        }
+    }
 
     return true;
 }

@@ -24,4 +24,16 @@ double volume_union_3_spheres(s_point pA, double rA,
 double volume_union_spheres(const s_points *centers, const double radii[centers->N],
                             double EPS_DEGEN, double TOL_dup, struct dynarray *buff_ncellPTR);
 
+/* Per-ball contributions to Vol(union): out_contrib has length centers->N,
+ * indexed by ORIGINAL ball id, with sum_i out_contrib[i] == volume_union_spheres(
+ * centers, radii, EPS_DEGEN, TOL_dup, buff_ncellPTR) (up to rounding).  The
+ * per-ball unit is the Laguerre/power partition Vol(union INTERSECT
+ * power-cell(i)).  Redundant/fully-contained balls (dropped by the RT) get 0.
+ * An individual contribution is always >= 0; the K-tet power split may produce
+ * negative intermediate pieces that cancel, but the total per ball is a volume. */
+void volume_contribution_spheres(const s_points *centers, const double radii[centers->N],
+                                 double EPS_DEGEN, double TOL_dup,
+                                 struct dynarray *buff_ncellPTR,
+                                 double out_contrib[centers->N]);
+
 #endif

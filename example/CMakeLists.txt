@@ -30,7 +30,7 @@ add_executable(example_lobe example_lobe.c)
 add_executable(example_medax example_medax.c)
 add_executable(example_ashape example_ashape.c)
 add_executable(example_merge_orphans example_merge_orphans.c)
-# add_executable(example_volsph example_volsph.c)
+add_executable(example_volsph example_volsph.c)
 
 target_link_libraries(example_basic 
         PUBLIC vor3d OpenMP::OpenMP_C
@@ -56,9 +56,9 @@ target_link_libraries(example_ashape
 target_link_libraries(example_merge_orphans
         PUBLIC vor3d m OpenMP::OpenMP_C
 )
-# target_link_libraries(example_volsph
-#         PUBLIC vor3d 
-# )
+target_link_libraries(example_volsph
+        PUBLIC vor3d
+)
 
 target_compile_options(example_basic 
     PRIVATE
@@ -88,10 +88,10 @@ target_compile_options(example_merge_orphans
     PRIVATE
         -Wall -Werror -Wextra -O3
 )
-# target_compile_options(example_volsph
-#     PRIVATE
-#         -Wall -Werror -Wextra -O3
-# )
+target_compile_options(example_volsph
+    PRIVATE
+        -Wall -Werror -Wextra -O3
+)
 
 # ------ SETUP INPUT / OUTPUT -------
 # Create symlink for the lobes directory
