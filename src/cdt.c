@@ -60,6 +60,21 @@ typedef struct {
     double t;
 } s_lnc_info;
 
+/* One (sub)segment of the constraint set (Phase A).
+ * ep[] are the CURRENT endpoints (DT ids; either may be a Steiner point).
+ * oei indexes the ORIGINAL mesh edge this segment is a piece of, and [u0,u1] is
+ * the piece it covers along that edge (u=0 at orig_edges[oei][0], u=1 at [1]).
+ * Splitting a segment SUBDIVIDES it in place (left half) plus one new segment
+ * (right half): it never creates a new constraint.  Keeping the constraint set
+ * fixed under splitting is what makes Phase A terminate -- the old code split
+ * the trimesh instead, which manufactured two new constrained edges per split
+ * and diverged.  See CDT_FACET_PLAN.md Sec 2. */
+typedef struct {
+    int    ep[2];
+    int    oei;
+    double u0, u1;
+} s_seg;
+
 /* Half-cavity from splitting the region Tf by the constraint plane.
  * All indices are DT indices. */
 typedef struct {
@@ -86,10 +101,29 @@ typedef struct {
     s_dynarray orig_bnd;  /* int[3]   -- snapshot of initial cavity boundary for is_occluded */
     s_dynarray usable;    /* int      -- usable1/2 in gift_wrap_face */
     s_dynarray active;    /* int[3]   -- active faces per gw_half iteration */
-    s_dynarray lnc_info;  /* s_lnc_info -- ensure_ridge_protected */
-    s_dynarray to_split;  /* int[2]   -- ensure_ridge_protected inner loop */
+    s_dynarray lnc_info;  /* s_lnc_info -- segment_recovery, indexed by DT point id */
     s_dynarray comm_cur;  /* int[3]   -- gw_half current deferred on-plane faces */
+
+    /* Phase A constraint set (fixed under splitting; see s_seg). */
+    s_dynarray segs;         /* s_seg    -- current (sub)segments                  */
+    s_dynarray miss;         /* int      -- indices into segs, missing this pass   */
+    s_dynarray orig_edges;   /* int[2]   -- original mesh edges, DT ids            */
+    s_dynarray face_edges;   /* int[3]   -- per input face, its 3 orig_edges ids   */
+    s_dynarray edge_steiner; /* s_dynarray of int -- Steiner ids per original edge */
+
+    /* Phase B facet scratch (rebuilt per facet; see facet_ring / facet_conforming). */
+    s_dynarray f_ring;    /* int    -- facet boundary vertices, in order        */
+    s_dynarray f_lines;   /* int    -- per ring vertex, bitmask of edges it lies on */
+    s_dynarray f_cover;   /* int[3] -- DT faces currently covering the facet    */
 } s_cdt_scratch;
+
+/* edge_steiner holds one dynarray per original edge; free those first. */
+static void edge_steiner_free(s_cdt_scratch *sc)
+{
+    for (unsigned i = 0; i < sc->edge_steiner.N; i++)
+        dynarray_free((s_dynarray *)dynarray_get_ptr(&sc->edge_steiner, i));
+    dynarray_clear(&sc->edge_steiner);
+}
 
 static void cdt_scratch_free(s_cdt_scratch *sc)
 {
@@ -103,8 +137,16 @@ static void cdt_scratch_free(s_cdt_scratch *sc)
     dynarray_free(&sc->usable);
     dynarray_free(&sc->active);
     dynarray_free(&sc->lnc_info);
-    dynarray_free(&sc->to_split);
     dynarray_free(&sc->comm_cur);
+    edge_steiner_free(sc);
+    dynarray_free(&sc->edge_steiner);
+    dynarray_free(&sc->segs);
+    dynarray_free(&sc->miss);
+    dynarray_free(&sc->orig_edges);
+    dynarray_free(&sc->face_edges);
+    dynarray_free(&sc->f_ring);
+    dynarray_free(&sc->f_lines);
+    dynarray_free(&sc->f_cover);
 }
 
 static size_t ncell_ptr_hash(const void *key)
@@ -152,61 +194,6 @@ static bool edge_in_dt(s_scplx *dt, int va, int vb, s_cdt_scratch *sc)
         if (nb == vb) return true;
     }
     return false;
-}
-
-/* Replace every face containing edge (va,vb) with two faces split at new_id. */
-static int split_trimesh_edge(s_trimesh *mesh, int va, int vb, int new_id)
-{
-    int n_split = 0;
-    for (int fi = 0; fi < mesh->Nf; fi++) {
-        bool has_va = false, has_vb = false;
-        for (int j = 0; j < 3; j++) {
-            if (mesh->faces[fi*3+j] == va) has_va = true;
-            if (mesh->faces[fi*3+j] == vb) has_vb = true;
-        }
-        if (has_va && has_vb) n_split++;
-    }
-
-    int new_Nf = mesh->Nf + n_split;
-    int     *new_faces    = malloc((size_t)new_Nf * 3 * sizeof(int));
-    s_point *new_fnormals = malloc((size_t)new_Nf     * sizeof(s_point));
-    if (!new_faces || !new_fnormals) {
-        free(new_faces); free(new_fnormals); return 0;
-    }
-
-    int out = 0;
-    for (int fi = 0; fi < mesh->Nf; fi++) {
-        int v0 = mesh->faces[fi*3], v1 = mesh->faces[fi*3+1], v2 = mesh->faces[fi*3+2];
-        bool has_va = (v0==va || v1==va || v2==va);
-        bool has_vb = (v0==vb || v1==vb || v2==vb);
-
-        if (!has_va || !has_vb) {
-            new_faces[out*3]   = v0;
-            new_faces[out*3+1] = v1;
-            new_faces[out*3+2] = v2;
-            new_fnormals[out]  = mesh->fnormals[fi];
-            out++;
-        } else {
-            int vc = -1;
-            int vs[3] = {v0, v1, v2};
-            for (int j = 0; j < 3; j++)
-                if (vs[j] != va && vs[j] != vb) { vc = vs[j]; break; }
-            assert(vc != -1);
-
-            new_faces[out*3]   = va;     new_faces[out*3+1] = new_id; new_faces[out*3+2] = vc;
-            new_fnormals[out]  = mesh->fnormals[fi];
-            out++;
-            new_faces[out*3]   = new_id; new_faces[out*3+1] = vb;     new_faces[out*3+2] = vc;
-            new_fnormals[out]  = mesh->fnormals[fi];
-            out++;
-        }
-    }
-
-    free(mesh->faces);    mesh->faces    = new_faces;
-    free(mesh->fnormals); mesh->fnormals = new_fnormals;
-    free(mesh->adjacency); mesh->adjacency = NULL;
-    mesh->Nf = new_Nf;
-    return 1;
 }
 
 static size_t edge_pair_hash(const void *key)
@@ -321,14 +308,83 @@ static double compute_steiner_t(const s_scplx *dt,
     return t;
 }
 
-/* Ensure every trimesh boundary edge is present in the DT.
- * Processes ALL unprotected edges per pass (not one at a time) so each pass
- * is O(N_faces) instead of O(N_faces^2) and the total work is proportional
- * to the number of edges that actually need splitting.
- * mesh->faces holds 0-based canonical indices; the +4 builder offset is
- * applied only at the DT lookup call sites here -- the trimesh is never shifted. */
-static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double EPS_DEG, double TOL,
-                                   s_cdt_scratch *sc)
+/* Divergence guards for segment recovery.  With the constraint set fixed (see
+ * s_seg) the loop converges on any reasonably-shaped input; these caps exist so
+ * that a pathological one (a surface with near-degenerate slivers, whose local
+ * feature size is at double-precision resolution) fails cleanly in seconds
+ * instead of hanging.
+ * NOTE: do NOT add a "missing set grew for k passes -> diverging" heuristic.
+ * A healthy recovery routinely grows for several passes before it decays
+ * (measured: 123 -> 159 -> 197 -> 223 -> 188 -> ... -> 0), because each Steiner
+ * can break neighbouring segments before fixing its own.  Such a guard reports
+ * false divergence on inputs that recover perfectly well; only the absolute
+ * budgets below are trustworthy. */
+#define RIDGE_MAX_PASSES       100   /* hard bound on recovery passes (a healthy
+                                      * cut cell legitimately needs up to ~40)  */
+#define RIDGE_MAX_STEINER_RATIO  8   /* Steiner budget, x input vertex count.
+                                      * Healthy Voronoi cut cells measured at
+                                      * 1.9x-4.3x, so this leaves real headroom
+                                      * while still failing a runaway in ~1s.   */
+
+/* Enumerate the unique undirected edges of the input mesh into sc->orig_edges
+ * (as DT ids), record each face's three edge ids in sc->face_edges, and seed
+ * sc->segs with one full-length segment per original edge.
+ * Edge ei of a face is the one OPPOSITE its local vertex ei, matching the
+ * convention used elsewhere in this file. */
+static int build_segments(const s_trimesh *mesh, s_cdt_scratch *sc)
+{
+    s_hash_table emap;
+    if (!hash_init(&emap, sizeof(int[2]), sizeof(int),
+                   (size_t)(mesh->Nf * 4 + 1), (size_t)(mesh->Nf * 2),
+                   edge_pair_hash, edge_pair_eq, NULL)) return 0;
+
+    dynarray_clear(&sc->orig_edges);
+    dynarray_clear(&sc->face_edges);
+    dynarray_clear(&sc->segs);
+    edge_steiner_free(sc);
+
+    int ok = 1;
+    for (int fi = 0; fi < mesh->Nf && ok; fi++) {
+        int fe[3];
+        for (int ei = 0; ei < 3; ei++) {
+            int va = mesh->faces[fi*3 + (ei+1)%3];
+            int vb = mesh->faces[fi*3 + (ei+2)%3];
+            int key[2] = { va < vb ? va : vb, va < vb ? vb : va };
+
+            int *found = (int *)hash_get(&emap, key);
+            if (found) { fe[ei] = *found; continue; }
+
+            int idx = (int)sc->orig_edges.N;
+            int e_dt[2] = { key[0] + 4, key[1] + 4 };
+            s_seg seg = { .ep = { e_dt[0], e_dt[1] }, .oei = idx, .u0 = 0.0, .u1 = 1.0 };
+            s_dynarray st = dynarray_initialize(sizeof(int), 2);
+            if (!st.items ||
+                hash_insert(&emap, key, &idx) != 1 ||
+                !dynarray_push(&sc->orig_edges, e_dt) ||
+                !dynarray_push(&sc->segs, &seg) ||
+                !dynarray_push(&sc->edge_steiner, &st)) { ok = 0; break; }
+            fe[ei] = idx;
+        }
+        if (ok && !dynarray_push(&sc->face_edges, fe)) ok = 0;
+    }
+
+    hash_free(&emap);
+    return ok;
+}
+
+/* Phase A -- segment recovery.
+ * Every segment of the constraint set must be an edge of the DT: that is the
+ * edge-protection precondition a CDT needs (Shewchuk; paper Sec 3.2-3.3).  A
+ * missing segment is split by inserting a Steiner point ON IT, which subdivides
+ * that segment and nothing else -- the trimesh is NOT retriangulated, so the
+ * constraint set never grows (REFS/CDT/src/PLC.cpp:527, PLCx::edgeSplit).
+ *
+ * The Steiner is registered as an LNC of the ORIGINAL edge endpoints (which are
+ * explicit input vertices), so it lies exactly on the original segment no matter
+ * how deep the subdivision goes -- u composes along the parent, it does not
+ * accumulate rounding through intermediate Steiners. */
+static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_DEG, double TOL,
+                            s_cdt_scratch *sc)
 {
     /* Registry: in exact mode dt_builder_begin_exact already cleared and
      * registered every initial point; in coordinate mode we must populate it
@@ -341,80 +397,116 @@ static int ensure_ridge_protected(s_dt_builder *b, s_trimesh *mesh, double EPS_D
         }
     }
 
-    /* lnc_info[dt_point_id]: v1==-1 for explicit vertices, DT indices for Steiners. */
+    /* lnc_info[dt_point_id]: v1==-1 for explicit vertices, else the ORIGINAL
+     * edge endpoints the Steiner sits on (used by compute_steiner_t). */
     dynarray_clear(&sc->lnc_info);
     s_lnc_info explicit_entry = { .v1 = -1, .v2 = 0, .t = 0.0 };
-    for (int i = 0; i < b->dt.points.N; i++) {
+    for (int i = 0; i < b->dt.points.N; i++)
         if (!dynarray_push(&sc->lnc_info, &explicit_entry)) return 0;
-    }
 
-    for (;;) {
-        s_hash_table edge_set;
-        int dummy = 1;
-        if (!hash_init(&edge_set, sizeof(int[2]), sizeof(int),
-                       (size_t)(mesh->Nf * 4 + 1), (size_t)(mesh->Nf),
-                       edge_pair_hash, edge_pair_eq, NULL)) return 0;
+    if (!build_segments(mesh, sc)) return 0;
 
-        dynarray_clear(&sc->to_split);
+    const int n_points_0  = b->dt.points.N;                  /* sentinels included */
+    const int max_steiner = RIDGE_MAX_STEINER_RATIO * (n_points_0 - 4);
+    int       pass        = 0;
 
-        for (int fi = 0; fi < mesh->Nf; fi++) {
-            for (int ei = 0; ei < 3; ei++) {
-                int va = mesh->faces[fi*3 + (ei+1)%3];
-                int vb = mesh->faces[fi*3 + (ei+2)%3];
-                if (edge_in_dt(&b->dt, va + 4, vb + 4, sc)) continue;
-
-                int pair[2] = { va < vb ? va : vb, va < vb ? vb : va };
-                if (hash_get(&edge_set, pair)) continue;
-                if (!hash_insert(&edge_set, pair, &dummy)) {
-                    hash_free(&edge_set); return 0;
-                }
-                if (!dynarray_push(&sc->to_split, pair)) {
-                    hash_free(&edge_set); return 0;
-                }
-            }
+    for (pass = 0; ; pass++) {
+        if (pass >= RIDGE_MAX_PASSES) {
+            fprintf(stderr,
+                "[cdt] segment recovery did not converge after %d passes "
+                "(%d Steiner points added). Giving up -- see CDT_FACET_PLAN.md.\n",
+                pass, b->dt.points.N - n_points_0);
+            return 0;
         }
 
-        hash_free(&edge_set);
+        dynarray_clear(&sc->miss);
+        for (unsigned i = 0; i < sc->segs.N; i++) {
+            const s_seg *sg = (const s_seg *)dynarray_get_ptr(&sc->segs, i);
+            if (edge_in_dt(&b->dt, sg->ep[0], sg->ep[1], sc)) continue;
+            int idx = (int)i;
+            if (!dynarray_push(&sc->miss, &idx)) return 0;
+        }
+        if (sc->miss.N == 0) break;
 
-        if (sc->to_split.N == 0) break;
+        CDT_DBG("segment recovery pass %d: %u missing of %u segments "
+                "(%d Steiner points so far)\n",
+                pass, sc->miss.N, sc->segs.N, b->dt.points.N - n_points_0);
 
-        for (unsigned i = 0; i < sc->to_split.N; i++) {
-            int *pair = (int *)dynarray_get_ptr(&sc->to_split, i);
-            int va = pair[0], vb = pair[1];
-            int va_dt = va + 4, vb_dt = vb + 4;
+        for (unsigned k = 0; k < sc->miss.N; k++) {
+            int si; dynarray_get_value(&sc->miss, k, &si);
 
-            int refpt_id = scout_refpt(&b->dt, va_dt, vb_dt, EPS_DEG);
-            double t = compute_steiner_t(&b->dt, va_dt, vb_dt, refpt_id,
-                                          (const s_lnc_info *)sc->lnc_info.items,
-                                          (int)sc->lnc_info.N, EPS_DEG);
+            /* Copy: pushing the right half below may realloc sc->segs. */
+            s_seg cur = *(const s_seg *)dynarray_get_ptr(&sc->segs, (size_t)si);
 
-            int new_id = b->dt.points.N;
-            /* Steiner at fraction t from A: M = (1-t)*A + t*B.  In the
-             * cdt_point_set_lnc convention s*V[va] + (1-s)*V[vb] this is s = 1-t,
-             * so both paths store M in points.p AND register the matching exact
-             * LNC (consistent -- no reflection across the midpoint). */
+            /* An insertion earlier in this pass may already have recovered it. */
+            if (edge_in_dt(&b->dt, cur.ep[0], cur.ep[1], sc)) continue;
+
+            int oe[2]; dynarray_get_value(&sc->orig_edges, (size_t)cur.oei, oe);
+
+            int refpt_id = scout_refpt(&b->dt, cur.ep[0], cur.ep[1], EPS_DEG);
+            double t = compute_steiner_t(&b->dt, cur.ep[0], cur.ep[1], refpt_id,
+                                         (const s_lnc_info *)sc->lnc_info.items,
+                                         (int)sc->lnc_info.N, EPS_DEG);
+
+            /* t is a fraction along the CURRENT sub-segment; compose it onto the
+             * original edge so the LNC is exact w.r.t. the original endpoints. */
+            const double u = cur.u0 + t * (cur.u1 - cur.u0);
+
+            const int new_id = b->dt.points.N;
+            /* Point = (1-u)*V[oe0] + u*V[oe1].  cdt_point_set_lnc's convention is
+             * s*V[v1] + (1-s)*V[v2], hence s = 1-u. */
             if (b->dt.exact_ids) {
-                if (!dt_builder_extend_lnc(b, va_dt, vb_dt, 1.0 - t, TOL)) return 0;
+                if (!dt_builder_extend_lnc(b, oe[0], oe[1], 1.0 - u, TOL)) return 0;
             } else {
-                s_point A = b->dt.points.p[va_dt];
-                s_point B = b->dt.points.p[vb_dt];
-                s_point M = { .x = (1.0-t)*A.x + t*B.x,
-                              .y = (1.0-t)*A.y + t*B.y,
-                              .z = (1.0-t)*A.z + t*B.z };
+                s_point A = b->dt.points.p[oe[0]];
+                s_point B = b->dt.points.p[oe[1]];
+                s_point M = { .x = (1.0-u)*A.x + u*B.x,
+                              .y = (1.0-u)*A.y + u*B.y,
+                              .z = (1.0-u)*A.z + u*B.z };
                 s_points single = { .N = 1, .p = &M };
                 if (!dt_builder_extend(b, &single, TOL)) return 0;
                 if (b->dt.points.N > new_id)
-                    cdt_point_set_lnc(new_id, va_dt, vb_dt, 1.0 - t);
+                    cdt_point_set_lnc(new_id, oe[0], oe[1], 1.0 - u);
             }
 
-            if (b->dt.points.N > (int)sc->lnc_info.N) {
-                s_lnc_info info = { .v1 = va_dt, .v2 = vb_dt, .t = t };
-                if (!dynarray_push(&sc->lnc_info, &info)) return 0;
+            /* Dropped as a near-duplicate of an existing vertex: the segment
+             * would stay missing forever, so fail loudly rather than spin. */
+            if (b->dt.points.N == new_id) {
+                fprintf(stderr,
+                    "[cdt] segment recovery: Steiner point on edge (%d,%d) at u=%g "
+                    "was rejected as a duplicate (TOL=%g). Giving up.\n",
+                    oe[0], oe[1], u, TOL);
+                return 0;
             }
 
-            if (!split_trimesh_edge(mesh, va, vb, new_id - 4)) return 0;
+            s_lnc_info info = { .v1 = oe[0], .v2 = oe[1], .t = u };
+            if (!dynarray_push(&sc->lnc_info, &info)) return 0;
+
+            /* Subdivide: this segment becomes the left half, push the right half. */
+            s_seg right = { .ep = { new_id, cur.ep[1] }, .oei = cur.oei,
+                            .u0 = u, .u1 = cur.u1 };
+            if (!dynarray_push(&sc->segs, &right)) return 0;
+            s_seg *left = (s_seg *)dynarray_get_ptr(&sc->segs, (size_t)si);
+            left->ep[1] = new_id;
+            left->u1    = u;
+
+            s_dynarray *st = (s_dynarray *)dynarray_get_ptr(&sc->edge_steiner, (size_t)cur.oei);
+            if (!dynarray_push(st, &new_id)) return 0;
+
+            if (b->dt.points.N - n_points_0 > max_steiner) {
+                fprintf(stderr,
+                    "[cdt] segment recovery exceeded its Steiner budget "
+                    "(%d points added for %d input vertices). Giving up -- "
+                    "see CDT_FACET_PLAN.md.\n",
+                    b->dt.points.N - n_points_0, n_points_0 - 4);
+                return 0;
+            }
         }
     }
+
+    CDT_DBG("segment recovery: %u segments from %u edges, %d Steiner points, "
+            "%d passes\n", sc->segs.N, sc->orig_edges.N,
+            b->dt.points.N - n_points_0, pass);
     return 1;
 }
 
@@ -493,12 +585,99 @@ static void mark_constrained_face(s_hash_table *ht, int va, int vb, int vc)
 
 /* ----------------------------------------------------------------------- */
 
+/* --- facets (Phase B constraint units) ----------------------------------
+ *
+ * A FACET is one input triangle plus the Steiner points that segment recovery
+ * put on its three edges.  Every one of those Steiners lies exactly ON an edge
+ * of the triangle (it is an LNC of that edge's original endpoints), so:
+ *   - the facet is a CONVEX polygon whose vertices all lie on the triangle's
+ *     boundary, and its REGION is still exactly the triangle (va,vb,vc).  The
+ *     blocker test, the plane, and the half-cavity split therefore keep working
+ *     on the corner triple, unchanged;
+ *   - orient3d(va,vb,vc, s) == 0 EXACTLY for every facet vertex s, so routing
+ *     on-plane vertices into both half-cavities is sound, not a tolerance call.
+ * What changes is only that the facet is no longer a single triangle of the DT:
+ * it is the union of several DT faces, and ANY in-plane tiling of its region is
+ * acceptable (the paper: "each facet of P is the union of some triangular
+ * facets of T").  Conformity is TESTED (facet_conforming), never enforced: no
+ * tiling is prescribed to the recovery, whose middle wall emerges from the
+ * cavity fills.
+ *
+ * This is what lets segment recovery leave the input triangulation alone (see
+ * s_seg): a split edge no longer needs the surface to be re-triangulated. */
+
+/* Which of the facet's three edges a ring vertex lies on, as a bitmask.
+ * A corner lies on two of them; a Steiner on exactly one. */
+#define FACET_EDGE_BIT(e) (1 << (e))
+
+/* Build the facet of input face fi: its boundary ring (corners interleaved with
+ * each edge's Steiners, in order along the edge) and the per-vertex edge mask.
+ * corner[] are the triangle's three DT ids in face order. */
+static int facet_ring(s_cdt_scratch *sc, int fi, const int corner[3])
+{
+    dynarray_clear(&sc->f_ring);
+    dynarray_clear(&sc->f_lines);
+
+    int fe[3]; dynarray_get_value(&sc->face_edges, (size_t)fi, fe);
+
+    for (int e = 0; e < 3; e++) {
+        /* Edge e of the face runs corner[e] -> corner[(e+1)%3]; it is the
+         * original edge fe[k] whose two endpoints are those corners. */
+        int ca = corner[e], cb = corner[(e+1)%3];
+        int oei = -1;
+        for (int k = 0; k < 3 && oei < 0; k++) {
+            int oe[2]; dynarray_get_value(&sc->orig_edges, (size_t)fe[k], oe);
+            if ((oe[0]==ca && oe[1]==cb) || (oe[0]==cb && oe[1]==ca)) oei = fe[k];
+        }
+        if (oei < 0) return 0;
+
+        int oe[2]; dynarray_get_value(&sc->orig_edges, (size_t)oei, oe);
+        const bool forward = (oe[0] == ca);   /* u increases from ca to cb */
+
+        /* corner[e], with the bits of the edge that ends here and the one that starts */
+        int prev_e = (e + 2) % 3;
+        int cmask = FACET_EDGE_BIT(e) | FACET_EDGE_BIT(prev_e);
+        if (!dynarray_push(&sc->f_ring, &ca) ||
+            !dynarray_push(&sc->f_lines, &cmask)) return 0;
+
+        /* This edge's Steiners, ordered along ca -> cb by their LNC parameter. */
+        s_dynarray *st = (s_dynarray *)dynarray_get_ptr(&sc->edge_steiner, (size_t)oei);
+        int ns = (int)st->N;
+        if (ns == 0) continue;
+
+        int *ids = (int *)malloc((size_t)ns * sizeof(int));
+        if (!ids) return 0;
+        for (int i = 0; i < ns; i++) dynarray_get_value(st, (size_t)i, &ids[i]);
+
+        /* insertion sort by u (the LNC parameter along the ORIGINAL edge) */
+        const s_lnc_info *lnc = (const s_lnc_info *)sc->lnc_info.items;
+        for (int i = 1; i < ns; i++) {
+            int key = ids[i];
+            double ku = lnc[key].t;
+            int j = i - 1;
+            while (j >= 0 && ((forward && lnc[ids[j]].t > ku) ||
+                              (!forward && lnc[ids[j]].t < ku))) {
+                ids[j+1] = ids[j]; j--;
+            }
+            ids[j+1] = key;
+        }
+
+        int smask = FACET_EDGE_BIT(e);
+        for (int i = 0; i < ns; i++) {
+            if (!dynarray_push(&sc->f_ring, &ids[i]) ||
+                !dynarray_push(&sc->f_lines, &smask)) { free(ids); return 0; }
+        }
+        free(ids);
+    }
+    return 1;
+}
+
 /* --- find_region_R (Step 4) --------------------------------------------- */
 
 /* Exact test: does tet nc "block" constraint triangle (va,vb,vc), i.e. does
  * it improperly intersect the closed triangle so that f cannot be a face of
  * the DT while nc exists?  Three exact sub-tests (paper's Tf, extended with
- * the coplanar contacts our per-triangle recovery requires):
+ * the coplanar contacts our facet-region recovery requires):
  *   1. a tet edge strictly straddling the plane pierces f's interior;
  *   2. a coplanar tet edge crosses f's interior (2D);
  *   3. a coplanar tet vertex lies strictly inside f (2D).
@@ -543,6 +722,120 @@ static bool tet_blocks_face(int va, int vb, int vc, const s_ncell *nc)
     return false;
 }
 
+/* Is v one of the facet's boundary vertices (corners + edge Steiners)? */
+static bool vertex_on_facet(const s_dynarray *ring, int v)
+{
+    for (unsigned i = 0; i < ring->N; i++) {
+        int rv; dynarray_get_value(ring, i, &rv);
+        if (rv == v) return true;
+    }
+    return false;
+}
+
+/* Are x and y cyclically adjacent in the ring, i.e. is (x,y) one of the
+ * facet's protected boundary sub-segments? */
+static bool ring_adjacent(const s_dynarray *ring, int x, int y)
+{
+    unsigned n = ring->N;
+    for (unsigned i = 0; i < n; i++) {
+        int a; dynarray_get_value(ring, i, &a);
+        int b; dynarray_get_value(ring, (i+1)%n, &b);
+        if ((a==x && b==y) || (a==y && b==x)) return true;
+    }
+    return false;
+}
+
+/* MEMBERSHIP test (the paper's "each facet of P is the union of some
+ * triangular facets of T" -- TESTED, not enforced).  Collects every DT face
+ * whose three vertices are facet-boundary vertices into sc->f_cover, then
+ * checks that those faces tile the facet region exactly, by edge counting:
+ * a diagonal interior to the region is shared by exactly two covering faces,
+ * so after toggling every face's edges the odd-count ones must be exactly the
+ * facet's boundary sub-segments.
+ *
+ * The DT is free to tile the facet with ANY diagonals.  Demanding our own
+ * precomputed tiling instead forces pointless -- and sometimes UNACHIEVABLE --
+ * surgery on facets that already conform: e.g. when the DT picked the flipped
+ * diagonal of the quad our ear-clip triangulated the other way, the cavity's
+ * below-plane walls cut underneath our tiles and no tet can ever be seated
+ * against them (observed as a stuck gift-wrap on clean_lobe fi=43).
+ *
+ * All covering faces are found in the stars of ring vertices: a covering
+ * face's vertices ARE ring vertices.  Every face spanned by ring vertices lies
+ * inside the region (they sit on the boundary of a convex polygon).
+ * Returns 0 on allocation failure; *conforms is the verdict. */
+static int facet_conforming(s_scplx *dt, const s_dynarray *ring,
+                            s_cdt_scratch *sc, bool *conforms)
+{
+    *conforms = false;
+    dynarray_clear(&sc->f_cover);
+
+    size_t cap = ring->N * 8 + 16;
+    s_hash_table seen, toggle;
+    if (!hash_init(&seen, sizeof(int[3]), sizeof(int), cap, 0,
+                   face_triple_hash, face_triple_eq, NULL)) return 0;
+    if (!hash_init(&toggle, sizeof(int[2]), sizeof(int), cap, 0,
+                   edge_pair_hash, edge_pair_eq, NULL)) { hash_free(&seen); return 0; }
+
+    int ok = 1;
+    for (unsigned e = 0; e < ring->N && ok; e++) {
+        int p; dynarray_get_value(ring, e, &p);
+        if (!dt->point2tet[p]) continue;
+        s_ncell *start = dt->point2tet[p];
+        int p_lid = ncell_local_id(start, p);
+        if (p_lid < 0) continue;
+        int comp[3]; for (int i = 0, k = 0; i < 4; i++) if (i != p_lid) comp[k++] = i;
+
+        dynarray_clear(&sc->ring);
+        ncells_incident_face(dt, start, 0, comp, &sc->ring);
+        for (unsigned i = 0; i < sc->ring.N && ok; i++) {
+            s_ncell *nc; dynarray_get_value(&sc->ring, i, &nc);
+            for (int fi = 0; fi < 4 && ok; fi++) {
+                int fids[3]; FACE_IDS(nc, fi, fids);
+                if (!vertex_on_facet(ring, fids[0]) ||
+                    !vertex_on_facet(ring, fids[1]) ||
+                    !vertex_on_facet(ring, fids[2])) continue;
+                sort3(&fids[0], &fids[1], &fids[2]);
+                if (hash_get(&seen, fids)) continue;
+                int one = 1;
+                if (hash_insert(&seen, fids, &one) != 1 ||
+                    !dynarray_push(&sc->f_cover, fids)) { ok = 0; break; }
+                for (int k = 0; k < 3; k++) {
+                    int u = fids[k], v = fids[(k+1)%3];
+                    int key[2] = { u < v ? u : v, u < v ? v : u };
+                    int *cnt = (int *)hash_get_or_create(&toggle, key);
+                    if (!cnt) { ok = 0; break; }
+                    (*cnt)++;
+                }
+            }
+        }
+    }
+
+    if (ok) {
+        bool good = sc->f_cover.N >= 1;
+        /* every boundary sub-segment covered an odd number of times ... */
+        for (unsigned i = 0; i < ring->N && good; i++) {
+            int a; dynarray_get_value(ring, i, &a);
+            int b; dynarray_get_value(ring, (i+1)%ring->N, &b);
+            int key[2] = { a < b ? a : b, a < b ? b : a };
+            int *cnt = (int *)hash_get(&toggle, key);
+            if (!cnt || (*cnt % 2) == 0) good = false;
+        }
+        /* ... and every odd-count edge is a boundary sub-segment. */
+        for (size_t b = 0; b < toggle.nbuckets && good; b++)
+            for (s_hash_entry *e = toggle.buckets[b]; e && good; e = e->next) {
+                int cnt = *(int *)entry_value(&toggle, e);
+                if (cnt % 2 == 0) continue;
+                const int *k = (const int *)entry_key(e);
+                if (!ring_adjacent(ring, k[0], k[1])) good = false;
+            }
+        *conforms = good;
+    }
+
+    hash_free(&seen); hash_free(&toggle);
+    return ok;
+}
+
 /* Collect the tets improperly intersecting constraint triangle (va,vb,vc).
  * Seeds: blockers among the tets incident to f's corners.  Growth: neighbors
  * that block.  The blocked part of f's region is tiled by blockers, so the
@@ -550,6 +843,7 @@ static bool tet_blocks_face(int va, int vb, int vc, const s_ncell *nc)
  * Returns 1 on success, 0 on allocation failure. */
 static int find_region_R(s_scplx *dt,
                           int va, int vb, int vc,
+                          const s_dynarray *ring,
                           s_dynarray *in_R,
                           s_cdt_scratch *sc)
 {
@@ -559,9 +853,10 @@ static int find_region_R(s_scplx *dt,
     /* sc->stack doubles as the result vector (iterated by index). */
     dynarray_clear(&sc->stack);
 
-    int corners[3] = {va, vb, vc};
-    for (int e = 0; e < 3; e++) {
-        int p = corners[e];
+    /* Seed from the star of EVERY facet-boundary vertex, not just the corners:
+     * a blocker (or an on-facet tet) may touch only an edge Steiner. */
+    for (unsigned e = 0; e < ring->N; e++) {
+        int p; dynarray_get_value(ring, e, &p);
         if (!dt->point2tet[p]) continue;
         s_ncell *start = dt->point2tet[p];
         int p_lid = ncell_local_id(start, p);
@@ -579,7 +874,7 @@ static int find_region_R(s_scplx *dt,
         }
     }
 
-    /* Fallback for a blocked region not touching any corner ring. */
+    /* Fallback for a blocked region not touching any facet vertex. */
     if (sc->stack.N == 0) {
         for (s_ncell *nc = dt->head; nc; nc = nc->next) {
             if (tet_blocks_face(va, vb, vc, nc)) {
@@ -609,16 +904,19 @@ static int find_region_R(s_scplx *dt,
 }
 
 
-/* Split Tf by the constraint plane, producing two half-cavities C1 (above)
- * and C2 (below).  va_dt/vb_dt/vc_dt are DT indices of the constraint face.
+/* Split Tf by the facet plane, producing two half-cavities C1 (above) and C2
+ * (below).  va_dt/vb_dt/vc_dt are the facet's corner DT indices (they define
+ * the plane and the region; the facet's own triangulation is NOT represented
+ * here -- the middle wall emerges from the fills, see gw_half_cavity).
  * C1->tets: Tf tets with >=1 vertex strictly above.
  * C2->tets: Tf tets with >=1 vertex strictly below.
  * C1->verts: DT indices of vertices on or above the plane.
  * C2->verts: DT indices of vertices on or below the plane.
- * C1->boundary / C2->boundary: sorted int[3] face triples of dCi, including
- * the constraint face itself. */
+ * C1->boundary / C2->boundary: sorted int[3] face triples of dCi (walls only,
+ * no separating-surface entry). */
 static int build_half_cavities(s_scplx *dt,
                                 int va_dt, int vb_dt, int vc_dt,
+                                const s_dynarray *ring,
                                 s_hash_table *constrained,
                                 s_half_cavity *C1, s_half_cavity *C2,
                                 s_cdt_scratch *sc)
@@ -627,7 +925,7 @@ static int build_half_cavities(s_scplx *dt,
 
     dynarray_clear(&sc->in_R);
 
-    if (!find_region_R(dt, va_dt, vb_dt, vc_dt, &sc->in_R, sc))
+    if (!find_region_R(dt, va_dt, vb_dt, vc_dt, ring, &sc->in_R, sc))
         return 0;
 
     C1->tets     = dynarray_initialize(sizeof(s_ncell *), 32);
@@ -722,13 +1020,12 @@ static int build_half_cavities(s_scplx *dt,
         }
     }
 
-    {
-        int key[4] = {va_dt, vb_dt, vc_dt, -1};
-        sort3(&key[0], &key[1], &key[2]);
-        if (!dynarray_push(&C1->boundary, key)) goto err;
-        if (!dynarray_push(&C2->boundary, key)) goto err;
-    }
-
+    /* NOTE: no separating-surface entry is pushed.  The middle wall is NOT
+     * prescribed -- it EMERGES from the fills (each half local DT induces the
+     * 2D Delaunay triangulation of the shared on-plane vertices; the gift-wrap
+     * builds it via the comm mechanism).  Prescribing a wall triangulation here
+     * would force pointless or unachievable surgery whenever the DT prefers
+     * different diagonals; membership (facet_conforming) verifies the result. */
     hash_free(&in_R_set);
     return 1;
 
@@ -753,7 +1050,7 @@ typedef struct { int count; int void_sign; } s_bnd_face_val;
  * keeps all-o>=0 faces, side=-1 all-o<=0; plane faces are routed by the
  * interior vertex), mirroring build_half_cavities: the wrong-side faces of
  * straddling tets belong to the OTHER half-cavity.
- * The constraint face is always appended at the end. */
+ * Like build_half_cavities, no separating-surface entry is appended. */
 static int rebuild_half_boundary(s_half_cavity *C,
                                   int va_dt, int vb_dt, int vc_dt, int side)
 {
@@ -806,9 +1103,7 @@ static int rebuild_half_boundary(s_half_cavity *C,
     }
     hash_free(&cnt);
 
-    int key[4] = {va_dt, vb_dt, vc_dt, -1};
-    sort3(&key[0], &key[1], &key[2]);
-    return dynarray_push(&C->boundary, key);
+    return 1;
 }
 
 /* Try to expand half-cavity C until every face in dC appears in the local DT
@@ -855,9 +1150,6 @@ static int try_cavity_expansion(s_scplx *dt,
         hash_insert(&removal_set, &nc, &dummy);
     }
 
-    int constraint_key[3] = {va_dt, vb_dt, vc_dt};
-    sort3(&constraint_key[0], &constraint_key[1], &constraint_key[2]);
-
     s_scplx ldt = {0};
     int ret = 0;
     int dbg_iter = 0;
@@ -882,16 +1174,16 @@ static int try_cavity_expansion(s_scplx *dt,
         ldt = dt_builder_end(&lb, true, NULL, NULL, 0);
         if (!ldt.head) { CDT_DBG("expand side=%d iter=%d: ldt build fail (n=%d)\n", side, dbg_iter, n); goto done; }
 
-        /* Check every boundary face.  The constraint face itself MUST also be
-         * present in the local DT: committing a local DT that lacks it would
-         * rebuild the cavity without recovering f, and the Phase B outer loop
-         * would retry the exact same cavity forever. */
+        /* Check every boundary (wall) face.  Nothing is demanded of the
+         * facet itself: the local DT of this half's vertices induces SOME
+         * in-plane triangulation of the cross-section (the 2D Delaunay of the
+         * on-plane vertices), and any tiling is acceptable -- the caller
+         * verifies agreement between the halves (middle_walls_agree) and
+         * conformity afterwards (facet_conforming). */
         int expand_face[3] = {-1, -1, -1};
         bool missing_constrained = false;
         for (unsigned bi = 0; bi < C->boundary.N; bi++) {
             int *f = (int *)dynarray_get_ptr(&C->boundary, bi);
-            bool is_ck = (f[0]==constraint_key[0] && f[1]==constraint_key[1] &&
-                          f[2]==constraint_key[2]);
             int *pi0 = (int *)hash_get(&g2l, &f[0]);
             int *pi1 = (int *)hash_get(&g2l, &f[1]);
             int *pi2 = (int *)hash_get(&g2l, &f[2]);
@@ -901,11 +1193,10 @@ static int try_cavity_expansion(s_scplx *dt,
                 goto done;
             }
             if (face_in_dt(&ldt, *pi0+4, *pi1+4, *pi2+4, sc)) continue;
-            /* Neither the constraint face nor a previously recovered
-             * constrained wall face may be expanded across; try the other
-             * missing faces first and fail (-> gift-wrapping) if they never
-             * conform. */
-            if (is_ck || is_constrained_face(constrained, f[0], f[1], f[2])) {
+            /* A previously recovered constrained wall face may not be expanded
+             * across; try the other missing faces first and fail (-> gift-
+             * wrapping) if they never conform. */
+            if (is_constrained_face(constrained, f[0], f[1], f[2])) {
                 missing_constrained = true;
                 continue;
             }
@@ -1122,6 +1413,50 @@ static int link_new_tets(s_scplx *dt, s_dynarray *new_tets, s_hash_table *adj_ma
 
 /* Commit both half-cavities: remove old Tf tets, insert local-DT tets, fix adjacency.
  * On failure, the DT is inconsistent; the caller must abort. */
+/* The two half local DTs triangulate the SAME on-plane vertex set from their
+ * respective sides, so their induced in-plane (middle wall) faces normally
+ * agree: each is the 2D Delaunay triangulation of those points.  They can
+ * disagree when expansion added an on-plane vertex to one half only, or when an
+ * exact cocircular tie breaks differently against different off-plane points.
+ * Committing mismatched halves would leave cracks along the wall, so verify
+ * agreement first and let the caller fall back to gift-wrapping when it fails.
+ * Faces are compared as GLOBAL sorted triples of on-plane vertices. */
+static int middle_walls_agree(const s_scplx *ldt1, const int *l2g1,
+                              const s_scplx *ldt2, const int *l2g2,
+                              int va, int vb, int vc)
+{
+    s_hash_table set;
+    if (!hash_init(&set, sizeof(int[3]), sizeof(int), 257, 0,
+                   face_triple_hash, face_triple_eq, NULL)) return 0;
+
+    int agree = 1;
+    for (int half = 0; half < 2 && agree; half++) {
+        const s_scplx *ldt = half ? ldt2 : ldt1;
+        const int     *l2g = half ? l2g2 : l2g1;
+        for (const s_ncell *nc = ldt->head; nc && agree; nc = nc->next) {
+            for (int fi = 0; fi < 4; fi++) {
+                int fids[3]; FACE_IDS(nc, fi, fids);
+                if (fids[0] < 4 || fids[1] < 4 || fids[2] < 4) continue; /* sentinel */
+                int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
+                if (cdt_orient3d(va, vb, vc, g[0]) != 0 ||
+                    cdt_orient3d(va, vb, vc, g[1]) != 0 ||
+                    cdt_orient3d(va, vb, vc, g[2]) != 0) continue;
+                sort3(&g[0], &g[1], &g[2]);
+                int *v = (int *)hash_get_or_create(&set, g);
+                if (!v) { agree = 0; break; }
+                *v |= (1 << half);
+            }
+        }
+    }
+    if (agree) {
+        for (size_t b = 0; b < set.nbuckets && agree; b++)
+            for (s_hash_entry *e = set.buckets[b]; e && agree; e = e->next)
+                if (*(int *)entry_value(&set, e) != 3) agree = 0;
+    }
+    hash_free(&set);
+    return agree;
+}
+
 static int commit_cavity_expansion(s_scplx *dt,
                                     s_half_cavity *C1, s_scplx *ldt1, int *l2g1,
                                     s_half_cavity *C2, s_scplx *ldt2, int *l2g2,
@@ -1403,10 +1738,11 @@ static int coplanar_rel_orientation(int f0, int f1, int f2,
  * original_bnd: snapshot of the initial boundary (int[3] sorted triples) used
  *   for the occlusion test in condition (iii).
  * comm_out: if non-NULL (upper-cavity fill), active faces lying entirely in
- *   the constraint plane with their void BELOW the plane (this includes the
- *   constraint face itself) are not connected here; they are collected into
- *   comm_out and form the shared middle wall that the lower fill must consume
- *   (paper S.4.4: the triangulation induced on f by C1 is inherited by C2). */
+ *   the facet plane with their void BELOW the plane are not connected here;
+ *   they are collected into comm_out and form the shared middle wall that the
+ *   lower fill must consume (paper S.4.4: the triangulation induced on f by C1
+ *   is inherited by C2).  This IS the emergent middle wall: no facet
+ *   triangulation is prescribed anywhere. */
 static int gw_half(s_scplx *dt,
                     s_hash_table *toggle,
                     s_dynarray *usable_v,
@@ -1504,20 +1840,16 @@ static int gw_half(s_scplx *dt,
                 }
 
                 /* (ii-b) Any new face of the candidate that lies entirely in
-                 * the constraint plane must not improperly overlap the middle
-                 * wall: neither the constraint face itself nor another
-                 * on-plane wall face.  This steers the wall triangulation to
-                 * contain the constraint face exactly (our pipeline recovers
-                 * individual triangles, not whole coplanar PLC patches). */
+                 * the constraint plane must not improperly overlap the on-plane
+                 * cavity walls or the already-emerged middle-wall faces.  The
+                 * wall itself is NOT steered towards any prescribed tiling: it
+                 * emerges from the fill, and membership (facet_conforming)
+                 * verifies the result afterwards. */
                 if (ok && cdt_orient3d(va_dt, vb_dt, vc_dt, w) == 0) {
                     for (int nf = 0; nf < 3 && ok; nf++) {
                         int p0 = sigma[nf], p1 = sigma[(nf+1)%3], p2 = w;
                         if (cdt_orient3d(va_dt, vb_dt, vc_dt, p0) != 0) continue;
                         if (cdt_orient3d(va_dt, vb_dt, vc_dt, p1) != 0) continue;
-                        if (coplanar_tris_improper_overlap(p0, p1, p2,
-                                                           va_dt, vb_dt, vc_dt)) {
-                            ok = false; break;
-                        }
                         for (unsigned ai = 0; ai < sc->active.N && ok; ai++) {
                             const int *u = (const int *)dynarray_get_ptr(&sc->active, ai);
                             if (cdt_orient3d(va_dt, vb_dt, vc_dt, u[0]) != 0 ||
@@ -1632,11 +1964,10 @@ static int gw_half_cavity(s_scplx *dt,
                    face_triple_hash, face_triple_eq, NULL)) return 0;
     for (unsigned i = 0; i < C->boundary.N; i++) {
         const int *f = (const int *)dynarray_get_ptr(&C->boundary, i);
-        /* The constraint-face entry (f[3]==-1) is never seeded.  The middle
-         * wall (f included) is not known a priori: it EMERGES as the on-plane
-         * faces created by the upper fill, which are deferred to comm_out and
-         * seeded into the lower fill via comm_in. */
-        if (f[3] < 0) continue;
+        /* Only walls are seeded (the boundary holds nothing else).  The middle
+         * wall is not known a priori: it EMERGES as the on-plane faces created
+         * by the upper fill, which are deferred to comm_out and seeded into
+         * the lower fill via comm_in. */
         int vs = cdt_orient3d(f[0],f[1],f[2],f[3]);
         if (!toggle_boundary_face(&toggle, f[0], f[1], f[2], vs)) {
             hash_free(&toggle); return 0;
@@ -1657,7 +1988,6 @@ static int gw_half_cavity(s_scplx *dt,
     dynarray_clear(&sc->orig_bnd);
     for (unsigned i = 0; i < C->boundary.N; i++) {
         const int *f = (const int *)dynarray_get_ptr(&C->boundary, i);
-        if (f[3] < 0) continue; /* occlusion walls: original boundary only */
         int key[3] = {f[0], f[1], f[2]};
         dynarray_push(&sc->orig_bnd, key);
     }
@@ -1674,7 +2004,8 @@ static int gw_half_cavity(s_scplx *dt,
 
 /* Gift-wrapping fallback for when cavity expansion fails.
  * C1/C2 still hold original Tf tets; they are removed here.
- * On success, Tf tets are replaced and the constraint face is filled. */
+ * On success, Tf tets are replaced and the facet region is covered by the
+ * emergent middle wall (facet_conforming verifies afterwards). */
 static int gift_wrap_face(s_scplx *dt,
                            s_half_cavity *C1, s_half_cavity *C2,
                            int va_dt, int vb_dt, int vc_dt,
@@ -1911,11 +2242,21 @@ static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
     sc.usable   = dynarray_initialize(sizeof(int),         32);
     sc.active   = dynarray_initialize(sizeof(int[3]),      16);
     sc.lnc_info = dynarray_initialize(sizeof(s_lnc_info),  64);
-    sc.to_split = dynarray_initialize(sizeof(int[2]),      64);
     sc.comm_cur = dynarray_initialize(sizeof(int[3]),      16);
+    sc.segs         = dynarray_initialize(sizeof(s_seg),      64);
+    sc.miss         = dynarray_initialize(sizeof(int),        64);
+    sc.orig_edges   = dynarray_initialize(sizeof(int[2]),     64);
+    sc.face_edges   = dynarray_initialize(sizeof(int[3]),     64);
+    sc.edge_steiner = dynarray_initialize(sizeof(s_dynarray), 64);
+    sc.f_ring       = dynarray_initialize(sizeof(int),        16);
+    sc.f_lines      = dynarray_initialize(sizeof(int),        16);
+    sc.f_cover      = dynarray_initialize(sizeof(int[3]),     16);
     if (!sc.ring.items || !sc.out_ids.items || !sc.stack.items || !sc.in_R.items ||
         !sc.queue.items || !sc.new_tets.items || !sc.orig_bnd.items || !sc.usable.items ||
-        !sc.active.items || !sc.lnc_info.items || !sc.to_split.items || !sc.comm_cur.items) {
+        !sc.active.items || !sc.lnc_info.items || !sc.comm_cur.items ||
+        !sc.segs.items || !sc.miss.items || !sc.orig_edges.items ||
+        !sc.face_edges.items || !sc.edge_steiner.items ||
+        !sc.f_ring.items || !sc.f_lines.items || !sc.f_cover.items) {
         cdt_scratch_free(&sc); free_trimesh(&working); return (s_scplx){0};
     }
 
@@ -1987,7 +2328,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
     s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL);
     if (!b._stack) return (s_scplx){0};
 
-    if (!ensure_ridge_protected(&b, working, EPS_DEG, TOL, sc)) {
+    if (!segment_recovery(&b, working, EPS_DEG, TOL, sc)) {
         s_scplx tmp = dt_builder_end(&b, false, NULL, NULL, 0);
         free_complex(&tmp); return (s_scplx){0};
     }
@@ -2039,10 +2380,13 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
          * caller splits it. */
         if (++pass > 30) {
             for (int fi = 0; fi < working->Nf; fi++) {
-                int va = working->faces[fi*3]   + 4;
-                int vb = working->faces[fi*3+1] + 4;
-                int vc = working->faces[fi*3+2] + 4;
-                if (!face_in_dt(&dt, va, vb, vc, sc)) {
+                int corner[3] = { working->faces[fi*3]   + 4,
+                                  working->faces[fi*3+1] + 4,
+                                  working->faces[fi*3+2] + 4 };
+                if (!facet_ring(sc, fi, corner)) continue;
+                bool conf = false;
+                if (!facet_conforming(&dt, &sc->f_ring, sc, &conf)) conf = false;
+                if (!conf) {
                     CDT_DBG("PHASE B: no convergence after %d passes; "
                             "giving up on fi=%d\n", pass, fi);
                     *fail_fi = fi;
@@ -2060,8 +2404,33 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
             int vb = working->faces[fi*3+1] + 4;
             int vc = working->faces[fi*3+2] + 4;
 
-            if (face_in_dt(&dt, va, vb, vc, sc)) {
-                mark_constrained_face(&constrained, va, vb, vc);
+            /* The constraint unit is the FACET: this triangle plus the Steiners
+             * segment recovery put on its edges.  Its region is still exactly
+             * (va,vb,vc), but in the DT it may be tiled by several faces, and
+             * ANY tiling is acceptable (membership below), so no tiling is
+             * prescribed anywhere -- the recovery walls emerge from the fills. */
+            int corner[3] = { va, vb, vc };
+            if (!facet_ring(sc, fi, corner)) {
+                CDT_DBG("PHASE B: could not build facet fi=%d (%d,%d,%d)\n", fi, va, vb, vc);
+                *fail_fi = fi;
+                hash_free(&constrained);
+                free_complex(&dt); cdt_predicates_clear();
+                return (s_scplx){0};
+            }
+            const s_dynarray *ring = &sc->f_ring;
+
+            bool conforms = false;
+            if (!facet_conforming(&dt, ring, sc, &conforms)) {
+                *fail_fi = fi;
+                hash_free(&constrained);
+                free_complex(&dt); cdt_predicates_clear();
+                return (s_scplx){0};
+            }
+            if (conforms) {
+                for (unsigned ci = 0; ci < sc->f_cover.N; ci++) {
+                    const int *t = (const int *)dynarray_get_ptr(&sc->f_cover, ci);
+                    mark_constrained_face(&constrained, t[0], t[1], t[2]);
+                }
                 continue;
             }
             any_missing = true;
@@ -2085,7 +2454,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
             }
 
             s_half_cavity C1 = {0}, C2 = {0};
-            if (!build_half_cavities(&dt, va, vb, vc, &constrained, &C1, &C2, sc))
+            if (!build_half_cavities(&dt, va, vb, vc, ring, &constrained, &C1, &C2, sc))
                 PHASE_B_ABORT();
 
             s_scplx ldt1 = {0}, ldt2 = {0};
@@ -2097,6 +2466,14 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                       ? try_cavity_expansion(&dt, &C2, va, vb, vc, -1, TOL, &constrained,
                                              &ldt2, &l2g2, &n2, sc)
                       : 0;
+
+            /* Both halves induce a middle-wall triangulation of the same
+             * on-plane vertex set; commit only if they agree (else cracks). */
+            if (ok1 && ok2 &&
+                !middle_walls_agree(&ldt1, l2g1, &ldt2, l2g2, va, vb, vc)) {
+                CDT_DBG("PHASE B: fi=%d middle walls disagree, gift-wrapping\n", fi);
+                ok2 = 0;
+            }
 
             bool face_ok;
             if (ok1 && ok2) {
@@ -2113,7 +2490,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                  * the gift-wrap.  Rebuild the pristine half-cavities first. */
                 half_cavity_free(&C1); half_cavity_free(&C2);
                 C1 = (s_half_cavity){0}; C2 = (s_half_cavity){0};
-                if (!build_half_cavities(&dt, va, vb, vc, &constrained, &C1, &C2, sc))
+                if (!build_half_cavities(&dt, va, vb, vc, ring, &constrained, &C1, &C2, sc))
                     PHASE_B_ABORT();
                 face_ok = gift_wrap_face(&dt, &C1, &C2, va, vb, vc, sc);
             }
@@ -2122,11 +2499,16 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
             /* Safety net: a "successful" recovery that did not actually
              * produce the face would make the outer loop retry the same
              * cavity forever.  Abort loudly instead. */
-            if (face_ok && !face_in_dt(&dt, va, vb, vc, sc)) {
-                CDT_DBG("PHASE B: face fi=%d (%d,%d,%d) still missing after "
-                        "recovery reported success (ok1=%d ok2=%d)\n",
-                        fi, va, vb, vc, ok1, ok2);
-                face_ok = false;
+            if (face_ok) {
+                bool now_conforms = false;
+                if (!facet_conforming(&dt, ring, sc, &now_conforms))
+                    PHASE_B_ABORT();
+                if (!now_conforms) {
+                    CDT_DBG("PHASE B: facet fi=%d (%d,%d,%d) still missing "
+                            "after recovery reported success (ok1=%d ok2=%d)\n",
+                            fi, va, vb, vc, ok1, ok2);
+                    face_ok = false;
+                }
             }
             {
                 static int validate = -1;
@@ -2144,7 +2526,12 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
             }
             if (face_ok) {
                 dbg_n_recovered++;
-                mark_constrained_face(&constrained, va, vb, vc);
+                /* facet_conforming above just refilled f_cover with the DT
+                 * faces that now tile the facet. */
+                for (unsigned ci = 0; ci < sc->f_cover.N; ci++) {
+                    const int *t = (const int *)dynarray_get_ptr(&sc->f_cover, ci);
+                    mark_constrained_face(&constrained, t[0], t[1], t[2]);
+                }
             } else {
                 CDT_DBG("PHASE B ABORT: fi=%d (va,vb,vc)=(%d,%d,%d) ok1=%d ok2=%d "
                         "(%d faces surgically recovered before this)\n",

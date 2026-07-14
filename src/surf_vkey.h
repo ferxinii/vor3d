@@ -313,9 +313,114 @@ static inline int sv_cw_before(s_point2d V, s_point2d U, s_point2d A, s_point2d 
     return (fabs(A.x - V.x) + fabs(A.y - V.y)) < (fabs(B.x - V.x) + fabs(B.y - V.y));
 }
 
-/* Ear-clip a simple loop (vertex ids into `coords`, length n) into `faces_out`
- * (int[3] per triangle). Exact orient2d decisions. Falls back to a fan if no ear
- * is found (still Steiner-free -> still closed). Returns 1 OK, -1 alloc error. */
+/* Is X strictly inside the circumcircle of (A,B,C)?  Exact, orientation-agnostic.
+ * Returns 0 for a collinear (degenerate) triangle: it has no circumcircle. */
+static inline int sv_in_circumcircle(s_point2d A, s_point2d B, s_point2d C, s_point2d X)
+{
+    int o = test_orientation_2d((s_point2d[]){ A, B }, C);
+    if (o == 0) return 0;
+    s_point2d tri[3];
+    if (o > 0) { tri[0] = A; tri[1] = B; tri[2] = C; }   /* test_incircle wants CCW */
+    else       { tri[0] = A; tri[1] = C; tri[2] = B; }
+    return test_incircle(tri, X) > 0;
+}
+
+/* One directed triangle edge, for pairing triangles across shared edges. */
+typedef struct { int lo, hi, t, c; } s_sv_tedge;  /* c = corner OPPOSITE the edge */
+
+static inline int sv_tedge_cmp(const void *a, const void *b)
+{
+    const s_sv_tedge *x = (const s_sv_tedge *)a, *y = (const s_sv_tedge *)b;
+    if (x->lo != y->lo) return x->lo - y->lo;
+    return x->hi - y->hi;
+}
+
+/* Lawson-flip the INTERIOR diagonals of a triangulated simple polygon until no
+ * edge is locally non-Delaunay.  tris holds ntri triangles as local ring indices
+ * into P, all wound consistently; both are modified in place.
+ *
+ * Boundary edges are shared by only one triangle here, so they are never
+ * flipped: the polygon's region, its boundary and its vertex set are all
+ * preserved (Steiner-free -- neighbouring facets keep conforming).  What changes
+ * is only WHICH diagonals are used.
+ *
+ * This matters because ear clipping alone produces arbitrarily bad triangles: on
+ * a Voronoi cut face the clip stalls (collinear ring vertices are never ears)
+ * and the fan fallback below then fans the rest from a single hub -- measured on
+ * one cell: one vertex in 111 of 151 triangles, needles down to 0.0016 deg, and
+ * triangles whose apex sits ~1e-15 from the opposite edge.  Segment recovery in
+ * the CDT cannot converge on that (it would need Steiner points spaced ~1e-15
+ * apart).  Flipping to Delaunay gives the best-conditioned triangulation of this
+ * vertex set.  A flip is taken when the edge is non-Delaunay OR when it borders
+ * a zero-area triangle, so degenerate slivers are actively removed.
+ * Requires a strictly convex quad, so the flip is always geometrically valid. */
+static inline void sv_flip_to_delaunay(const s_point2d *P, int *tris, int ntri)
+{
+    if (ntri < 2) return;
+
+    s_sv_tedge *E    = (s_sv_tedge *)malloc(sizeof(s_sv_tedge) * (size_t)(3 * ntri));
+    char       *hot  = (char *)malloc((size_t)ntri);
+    if (!E || !hot) { free(E); free(hot); return; }   /* keep the ear-clip result */
+
+    const int max_rounds = 4 * ntri + 8;
+    for (int round = 0; round < max_rounds; round++) {
+        int ne = 0;
+        for (int t = 0; t < ntri; t++)
+            for (int c = 0; c < 3; c++) {
+                int u = tris[3*t + (c+1)%3], v = tris[3*t + (c+2)%3];
+                E[ne].lo = u < v ? u : v;
+                E[ne].hi = u < v ? v : u;
+                E[ne].t  = t;
+                E[ne].c  = c;
+                ne++;
+            }
+        qsort(E, (size_t)ne, sizeof(s_sv_tedge), sv_tedge_cmp);
+        memset(hot, 0, (size_t)ntri);
+
+        int nflips = 0;
+        for (int i = 0; i + 1 < ne; i++) {
+            if (E[i].lo != E[i+1].lo || E[i].hi != E[i+1].hi) continue;  /* boundary edge */
+
+            int t1 = E[i].t,   c1 = E[i].c;
+            int t2 = E[i+1].t, c2 = E[i+1].c;
+            if (hot[t1] || hot[t2]) continue;      /* already re-shaped this round */
+
+            /* t1 carries the edge DIRECTED u1 -> v1; t2 carries it reversed. */
+            int u1 = tris[3*t1 + (c1+1)%3];
+            int v1 = tris[3*t1 + (c1+2)%3];
+            int w1 = tris[3*t1 + c1];
+            int w2 = tris[3*t2 + c2];
+
+            /* The flip replaces diagonal (u1,v1) with (w1,w2); it is valid only
+             * if the quad is STRICTLY convex, i.e. u1 and v1 lie on opposite
+             * sides of the new diagonal. */
+            int a1 = test_orientation_2d((s_point2d[]){ P[w1], P[w2] }, P[u1]);
+            int a2 = test_orientation_2d((s_point2d[]){ P[w1], P[w2] }, P[v1]);
+            if (a1 == 0 || a2 == 0 || (a1 > 0) == (a2 > 0)) continue;
+
+            int d1 = test_orientation_2d((s_point2d[]){ P[u1], P[v1] }, P[w1]);
+            int d2 = test_orientation_2d((s_point2d[]){ P[u1], P[v1] }, P[w2]);
+            int degenerate = (d1 == 0 || d2 == 0);   /* zero-area triangle: flip it away */
+
+            if (!degenerate &&
+                !sv_in_circumcircle(P[u1], P[v1], P[w1], P[w2])) continue;  /* Delaunay */
+
+            tris[3*t1 + 0] = u1; tris[3*t1 + 1] = w2; tris[3*t1 + 2] = w1;
+            tris[3*t2 + 0] = v1; tris[3*t2 + 1] = w1; tris[3*t2 + 2] = w2;
+            hot[t1] = hot[t2] = 1;
+            nflips++;
+        }
+        if (nflips == 0) break;
+    }
+
+    free(E); free(hot);
+}
+
+/* Triangulate a simple loop (vertex ids into `coords`, length n) into `faces_out`
+ * (int[3] per triangle): ear-clip for the topology, then Lawson-flip the interior
+ * diagonals to Delaunay for the shape.  Exact orient2d/incircle decisions.  Falls
+ * back to a fan if no ear is found (still Steiner-free -> still closed; the flip
+ * pass then repairs the fan).  Returns 1 OK, -1 alloc error. */
 static inline int surf_earclip(const s_point *coords, const int *loop, int n,
                                s_dynarray *faces_out)
 {
@@ -330,11 +435,12 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
     }
     int drop = coord_with_largest_component_3D(nrm);
 
-    s_point2d *P = (s_point2d *)malloc(sizeof(s_point2d) * n);
-    int       *V = (int *)malloc(sizeof(int) * n);        /* active ring of indices 0..n-1 */
-    if (!P || !V) { free(P); free(V); return -1; }
+    s_point2d *P    = (s_point2d *)malloc(sizeof(s_point2d) * (size_t)n);
+    int       *V    = (int *)malloc(sizeof(int) * (size_t)n);   /* active ring, indices 0..n-1 */
+    int       *tris = (int *)malloc(sizeof(int) * 3 * (size_t)(n - 2));  /* local indices */
+    if (!P || !V || !tris) { free(P); free(V); free(tris); return -1; }
     for (int i = 0; i < n; i++) { P[i] = surf_proj2d(coords[loop[i]], drop); V[i] = i; }
-    int m = n, rc = 1;
+    int m = n, nt = 0, rc = 1;
 
     /* Polygon orientation from its lexicographically-lowest vertex (always a
      * strictly convex corner): exact via orient2d. */
@@ -369,24 +475,32 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
                     (o3 == poly_or || o3 == 0)) ok = 0;   /* inside/on -> blocks ear */
             }
             if (!ok) continue;
-            int tri[3] = { loop[a], loop[b], loop[c] };
-            if (!dynarray_push(faces_out, tri)) { rc = -1; goto done; }
+            tris[3*nt + 0] = a; tris[3*nt + 1] = b; tris[3*nt + 2] = c;
+            nt++;
             for (int k = i; k < m - 1; k++) V[k] = V[k+1];
             m--; clipped = 1; break;
         }
         if (!clipped) break;                              /* no ear -> fan the rest */
     }
     if (m == 3) {
-        int tri[3] = { loop[V[0]], loop[V[1]], loop[V[2]] };
-        if (!dynarray_push(faces_out, tri)) { rc = -1; goto done; }
+        tris[3*nt + 0] = V[0]; tris[3*nt + 1] = V[1]; tris[3*nt + 2] = V[2];
+        nt++;
     } else {
         for (int i = 1; i + 1 < m; i++) {                 /* fan fallback (Steiner-free) */
-            int tri[3] = { loop[V[0]], loop[V[i]], loop[V[i+1]] };
-            if (!dynarray_push(faces_out, tri)) { rc = -1; goto done; }
+            tris[3*nt + 0] = V[0]; tris[3*nt + 1] = V[i]; tris[3*nt + 2] = V[i+1];
+            nt++;
         }
     }
-done:
-    free(P); free(V);
+
+    /* Shape pass: same vertices, same boundary, better diagonals. */
+    sv_flip_to_delaunay(P, tris, nt);
+
+    for (int t = 0; t < nt; t++) {
+        int tri[3] = { loop[tris[3*t]], loop[tris[3*t + 1]], loop[tris[3*t + 2]] };
+        if (!dynarray_push(faces_out, tri)) { rc = -1; break; }
+    }
+
+    free(P); free(V); free(tris);
     return rc;
 }
 
