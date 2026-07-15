@@ -68,11 +68,21 @@ typedef struct {
  * (right half): it never creates a new constraint.  Keeping the constraint set
  * fixed under splitting is what makes Phase A terminate -- the old code split
  * the trimesh instead, which manufactured two new constrained edges per split
- * and diverged.  See CDT_FACET_PLAN.md Sec 2. */
+ * and diverged.  See CDT_FACET_PLAN.md Sec 2.
+ *
+ * shell encodes the acute-vertex state (see split_u):
+ *   -1  neither original endpoint is acute: Si's category-1 rule applies
+ *    0  shell hub = orig_edges[oei][0]
+ *    1  shell hub = orig_edges[oei][1]
+ * The hub is chosen ONCE per original edge (the acute endpoint; if both are
+ * acute, the SHARPER one -- largest cosine between two incident edges) and is
+ * inherited unchanged by every sub-segment: all Steiners of the edge live on
+ * concentric shells around that single hub. */
 typedef struct {
     int    ep[2];
     int    oei;
     double u0, u1;
+    int    shell;
 } s_seg;
 
 /* Half-cavity from splitting the region Tf by the constraint plane.
@@ -115,6 +125,7 @@ typedef struct {
     s_dynarray f_ring;    /* int    -- facet boundary vertices, in order        */
     s_dynarray f_lines;   /* int    -- per ring vertex, bitmask of edges it lies on */
     s_dynarray f_cover;   /* int[3] -- DT faces currently covering the facet    */
+    s_dynarray fl1, fl2;  /* s_ncell* -- ldt tets inside each half-cavity       */
 } s_cdt_scratch;
 
 /* edge_steiner holds one dynarray per original edge; free those first. */
@@ -147,6 +158,8 @@ static void cdt_scratch_free(s_cdt_scratch *sc)
     dynarray_free(&sc->f_ring);
     dynarray_free(&sc->f_lines);
     dynarray_free(&sc->f_cover);
+    dynarray_free(&sc->fl1);
+    dynarray_free(&sc->fl2);
 }
 
 static size_t ncell_ptr_hash(const void *key)
@@ -170,6 +183,12 @@ static size_t int_hash(const void *key)
 static bool int_eq(const void *a, const void *b)
 {
     return memcmp(a, b, sizeof(int)) == 0;
+}
+
+static int int_cmp_asc(const void *a, const void *b)
+{
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
 }
 
 static inline int ncell_local_id(const s_ncell *nc, int v)
@@ -224,18 +243,10 @@ static double interior_angle(s_point v, s_point a, s_point b, double EPS_DEG)
     return acos(cosA);
 }
 
-/* Parameter t such that A + t*(B-A) is the orthogonal projection of V onto
- * line AB. Returns 0.5 for degenerate (zero-length) segments. */
-static double project_t_onto_segment(s_point v, s_point a, s_point b, double EPS_DEG)
-{
-    double dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-    double len2 = dx*dx + dy*dy + dz*dz;
-    if (len2 <= EPS_DEG) return 0.5;
-    return ((v.x - a.x)*dx + (v.y - a.y)*dy + (v.z - a.z)*dz) / len2;
-}
-
 /* Return the DT index of the vertex most deeply inside the diametric circumsphere
- * of segment [va_dt, vb_dt], i.e. the one with the largest interior angle to AB.
+ * of segment [va_dt, vb_dt], i.e. the one with the largest interior angle to AB
+ * (equivalently: the largest circumradius of (A,B,V) -- the reference point of
+ * Si's rules, PLC.cpp findEncroachingPoint).
  * A vertex V is inside the diametric sphere iff dot(A-V, B-V) < 0.
  * Skips sentinels (indices 0-3) and the endpoints themselves.
  * Returns -1 if no encroaching vertex exists. */
@@ -258,54 +269,116 @@ static int scout_refpt(const s_scplx *dt, int va_dt, int vb_dt, double EPS_DEG)
     return refpt;
 }
 
-/* Compute the parameter t in (0,1) for a Steiner on segment [va_dt, vb_dt].
- * Paper convention: position = t*V[va_dt] + (1-t)*V[vb_dt].
- * refpt_id: result of scout_refpt (-1 -> midpoint).
- * lnc_array/lnc_n: per-point LNC info indexed by DT id; v1==-1 means explicit.
- *
- * Adjacent-Steiner rule: if refpt was itself a Steiner on an edge sharing
- * endpoint A or B, mirror its distance from that endpoint to avoid spirals. */
-static double compute_steiner_t(const s_scplx *dt,
-                                 int va_dt, int vb_dt,
-                                 int refpt_id,
-                                 const s_lnc_info *lnc_array, int lnc_n,
-                                 double EPS_DEG)
+/* Squared distance between two points (split-point placement heuristics). */
+static inline double pt_dist2(s_point a, s_point b)
 {
-    s_point A = dt->points.p[va_dt];
-    s_point B = dt->points.p[vb_dt];
-    double t = 0.5;
+    double dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dx*dx + dy*dy + dz*dz;
+}
 
-    if (refpt_id >= 0) {
-        s_point R = dt->points.p[refpt_id];
-        int adj = 0;
+/* Coarsest dyadic value in the open interval (x, y), 0 < x < y: the multiple
+ * of the largest power of two that fits strictly inside.  Exact in double. */
+static double dyadic_in(double x, double y)
+{
+    if (!(y > x) || y <= 0.0 || x < 0.0) return 0.5 * (x + y);
+    double step = exp2(floor(log2(y - x)));
+    for (int it = 0; it < 4; it++, step *= 0.5) {
+        double q = (floor(x / step) + 1.0) * step;
+        if (q > x && q < y) return q;
+    }
+    return 0.5 * (x + y);
+}
 
-        if (refpt_id < lnc_n && lnc_array[refpt_id].v1 != -1) {
-            int pa = lnc_array[refpt_id].v1;  /* DT indices of refpt's segment */
-            int pb = lnc_array[refpt_id].v2;
-            double lab = sqrt((B.x-A.x)*(B.x-A.x) +
-                              (B.y-A.y)*(B.y-A.y) +
-                              (B.z-A.z)*(B.z-A.z));
-            if (pa == va_dt || pb == va_dt) {
-                double lar = sqrt((R.x-A.x)*(R.x-A.x) +
-                                  (R.y-A.y)*(R.y-A.y) +
-                                  (R.z-A.z)*(R.z-A.z));
-                t = (lab > EPS_DEG) ? lar / lab : 0.5;
-                adj = 1;
-            } else if (pa == vb_dt || pb == vb_dt) {
-                double lbr = sqrt((R.x-B.x)*(R.x-B.x) +
-                                  (R.y-B.y)*(R.y-B.y) +
-                                  (R.z-B.z)*(R.z-B.z));
-                t = (lab > EPS_DEG) ? 1.0 - lbr / lab : 0.5;
-                adj = 1;
+/* Choose the split position u (on the ORIGINAL edge, strictly inside the
+ * current span (u0,u1)) for a missing sub-segment.
+ *
+ * Segments with an acute endpoint (shell 0/1) use CONCENTRIC DYADIC SHELLS
+ * around their hub (Shewchuk's shells; TetGen uses the same idea for acute
+ * vertices): the Steiner goes at a distance from the hub that is a dyadic
+ * number m*2^k -- the coarsest one inside the (band-shrunk) span.  All radii
+ * of all segments therefore live on one shared, absolute ladder, so segments
+ * of a BUNDLE (many near-parallel edges through one shared vertex, the
+ * signature of thin-fan Voronoi cut facets) end up with EXACTLY equal radii
+ * -- and two points at equal distance from the hub can never encroach each
+ * other's sub-segments, whatever the angle between the edges
+ * (|s-c|^2 - (rho/2)^2 = rho^2(1-cos t) > 0).  This is what makes bundles
+ * converge with a handful of shells.
+ *
+ * We tried the reference's rules first (Si & Gaertner: sphere through the
+ * encroaching point, per-half hub adoption for both-acute edges).  They fail
+ * on full-length bundles for two measured reasons: (a) the outer half of a
+ * both-acute edge anchors at the FAR endpoint, which the bundle does not
+ * share, so radii cannot match; (b) every band/guard rejection falls back to
+ * a midpoint whose radius is unique to that edge (lengths differ), minting a
+ * fresh radius that must then propagate to every other edge of the bundle --
+ * the radii set proliferates instead of stabilizing (measured: ~40-segment
+ * plateau, ~4000 Steiner points on a 367-vertex cell whose spokes meet at
+ * 0.05 deg).  Dyadic quantization makes the radii set finite by construction.
+ *
+ * Segments with no acute endpoint use Si's category-1 rule (reference
+ * splitStrategy1) with refpt = deepest encroacher: if |ep0-r| < |ep|/2 the
+ * Steiner goes at distance |ep0-r| from ep0; else mirrored; else midpoint. */
+static double split_u(const s_scplx *dt, const s_seg *sg, const int oe[2],
+                      int refpt)
+{
+    const double um = 0.5 * (sg->u0 + sg->u1);
+
+    if (sg->shell == 0 || sg->shell == 1) {
+        const s_point H = dt->points.p[(sg->shell == 0) ? oe[0] : oe[1]];
+        const double L2 = pt_dist2(dt->points.p[oe[0]], dt->points.p[oe[1]]);
+        if (L2 <= 0.0) return um;
+        const double L  = sqrt(L2);
+        const double dv = 0.2 * (sg->u1 - sg->u0);
+        const double a  = sg->u0 + dv, b = sg->u1 - dv;    /* banded u interval */
+        const double rlo = ((sg->shell == 0) ? a : 1.0 - b) * L;  /* hub radii  */
+        const double rhi = ((sg->shell == 0) ? b : 1.0 - a) * L;
+        if (!(rhi > rlo) || rhi <= 0.0) return um;
+
+        double rho = -1.0;
+        if (refpt >= 0) {
+            const double rr = sqrt(pt_dist2(H, dt->points.p[refpt]));
+            if (rr > 0.0) {
+                /* 1. the octave shell nearest the encroacher, if it fits */
+                const double oct = exp2(floor(log2(rr) + 0.5));
+                if (oct > rlo && oct < rhi) rho = oct;
+                /* 2. else copy the encroacher's own hub radius (Si's sphere
+                 *    through r): adaptive, and still matching -- in a bundle
+                 *    the encroacher IS a neighbour's shell point, so its
+                 *    radius is already on the shared ladder */
+                else if (rr > rlo && rr < rhi) rho = rr;
             }
         }
+        /* 3. else the coarsest dyadic radius in the band: never mints a
+         *    per-edge value (all fallbacks land on the shared ladder too) */
+        if (rho < 0.0) rho = dyadic_in(rlo, rhi);
 
-        if (!adj)
-            t = project_t_onto_segment(R, A, B, EPS_DEG);
+        const double q = rho / L;
+        const double u = (sg->shell == 0) ? q : 1.0 - q;
+        return (u > sg->u0 && u < sg->u1) ? u : um;
     }
 
-    if (t < 0.2 || t > 0.8) t = 0.5;
-    return t;
+    if (refpt < 0) return um;
+
+    /* No acute endpoint: anchor at the nearest current endpoint (Si cat. 1). */
+    const s_point O0 = dt->points.p[oe[0]];
+    const s_point O1 = dt->points.p[oe[1]];
+    const s_point R  = dt->points.p[refpt];
+    const double L2 = pt_dist2(O0, O1);
+    if (L2 <= 0.0) return um;
+    const s_point E0 = dt->points.p[sg->ep[0]];
+    const s_point E1 = dt->points.p[sg->ep[1]];
+    const double e2 = pt_dist2(E0, E1);
+    const double d0 = pt_dist2(E0, R);
+    const double d1 = pt_dist2(E1, R);
+    if (4.0 * d0 < e2) {
+        const double u = sg->u0 + sqrt(d0 / L2);
+        return (u < sg->u1) ? u : um;
+    }
+    if (4.0 * d1 < e2) {
+        const double u = sg->u1 - sqrt(d1 / L2);
+        return (u > sg->u0) ? u : um;
+    }
+    return um;
 }
 
 /* Divergence guards for segment recovery.  With the constraint set fixed (see
@@ -356,7 +429,8 @@ static int build_segments(const s_trimesh *mesh, s_cdt_scratch *sc)
 
             int idx = (int)sc->orig_edges.N;
             int e_dt[2] = { key[0] + 4, key[1] + 4 };
-            s_seg seg = { .ep = { e_dt[0], e_dt[1] }, .oei = idx, .u0 = 0.0, .u1 = 1.0 };
+            s_seg seg = { .ep = { e_dt[0], e_dt[1] }, .oei = idx,
+                          .u0 = 0.0, .u1 = 1.0, .shell = -1 };
             s_dynarray st = dynarray_initialize(sizeof(int), 2);
             if (!st.items ||
                 hash_insert(&emap, key, &idx) != 1 ||
@@ -369,7 +443,71 @@ static int build_segments(const s_trimesh *mesh, s_cdt_scratch *sc)
     }
 
     hash_free(&emap);
-    return ok;
+    if (!ok) return 0;
+
+    /* Acute-vertex classification (reference: PLCx::isAcute / isAcuteAngle):
+     * a vertex is ACUTE when two of its incident constraint edges form an
+     * angle below 90 degrees (positive dot product).  Each whole segment then
+     * gets its shell state from its endpoints' acuteness (see s_seg/split_u).
+     * NOTE: unlike the reference, ALL mesh edges are segments here (per-
+     * triangle facets, no coplanar merging), so most vertices classify acute
+     * and most segments use shell splitting -- the conservative direction. */
+    {
+        const int nv = mesh->points.N;
+        const unsigned ne = sc->orig_edges.N;
+        int  *deg   = (int *)calloc((size_t)nv, sizeof(int));
+        int  *off   = (int *)malloc(((size_t)nv + 1) * sizeof(int));
+        int  *adj   = (int *)malloc((size_t)ne * 2 * sizeof(int));
+        char *acute = (char *)calloc((size_t)nv, 1);
+        if (!deg || !off || !adj || !acute) {
+            free(deg); free(off); free(adj); free(acute); return 0;
+        }
+        for (unsigned i = 0; i < ne; i++) {
+            const int *e = (const int *)dynarray_get_ptr(&sc->orig_edges, i);
+            deg[e[0] - 4]++; deg[e[1] - 4]++;
+        }
+        off[0] = 0;
+        for (int v = 0; v < nv; v++) off[v + 1] = off[v] + deg[v];
+        memset(deg, 0, (size_t)nv * sizeof(int));
+        for (unsigned i = 0; i < ne; i++) {
+            const int *e = (const int *)dynarray_get_ptr(&sc->orig_edges, i);
+            int a = e[0] - 4, b = e[1] - 4;
+            adj[off[a] + deg[a]++] = b;
+            adj[off[b] + deg[b]++] = a;
+        }
+        double *sharp = (double *)malloc((size_t)nv * sizeof(double));
+        if (!sharp) { free(deg); free(off); free(adj); free(acute); return 0; }
+        for (int v = 0; v < nv; v++) {
+            const s_point P = mesh->points.p[v];
+            double cmax = -2.0;
+            for (int i = off[v]; i < off[v + 1]; i++) {
+                const s_point A = mesh->points.p[adj[i]];
+                double ax = A.x - P.x, ay = A.y - P.y, az = A.z - P.z;
+                double la = sqrt(ax*ax + ay*ay + az*az);
+                for (int j = off[v]; j < i; j++) {
+                    const s_point B = mesh->points.p[adj[j]];
+                    double bx = B.x - P.x, by = B.y - P.y, bz = B.z - P.z;
+                    double lb = sqrt(bx*bx + by*by + bz*bz);
+                    if (la <= 0.0 || lb <= 0.0) continue;
+                    double c = (ax*bx + ay*by + az*bz) / (la * lb);
+                    if (c > cmax) cmax = c;
+                }
+            }
+            sharp[v] = cmax;             /* cosine of the sharpest incident angle */
+            acute[v] = (cmax > 0.0);     /* some pair below 90 degrees            */
+        }
+        for (unsigned i = 0; i < sc->segs.N; i++) {
+            s_seg *sg = (s_seg *)dynarray_get_ptr(&sc->segs, i);
+            const int *e = (const int *)dynarray_get_ptr(&sc->orig_edges, (size_t)sg->oei);
+            const int v0 = e[0] - 4, v1 = e[1] - 4;
+            if (acute[v0] && acute[v1])
+                sg->shell = (sharp[v0] >= sharp[v1]) ? 0 : 1;  /* sharper endpoint */
+            else
+                sg->shell = acute[v0] ? 0 : acute[v1] ? 1 : -1;
+        }
+        free(deg); free(off); free(adj); free(acute); free(sharp);
+    }
+    return 1;
 }
 
 /* Phase A -- segment recovery.
@@ -398,7 +536,8 @@ static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_D
     }
 
     /* lnc_info[dt_point_id]: v1==-1 for explicit vertices, else the ORIGINAL
-     * edge endpoints the Steiner sits on (used by compute_steiner_t). */
+     * edge endpoints the Steiner sits on, with its parameter u (used by
+     * facet_ring to order a facet edge's Steiners along the edge). */
     dynarray_clear(&sc->lnc_info);
     s_lnc_info explicit_entry = { .v1 = -1, .v2 = 0, .t = 0.0 };
     for (int i = 0; i < b->dt.points.N; i++)
@@ -444,13 +583,9 @@ static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_D
             int oe[2]; dynarray_get_value(&sc->orig_edges, (size_t)cur.oei, oe);
 
             int refpt_id = scout_refpt(&b->dt, cur.ep[0], cur.ep[1], EPS_DEG);
-            double t = compute_steiner_t(&b->dt, cur.ep[0], cur.ep[1], refpt_id,
-                                         (const s_lnc_info *)sc->lnc_info.items,
-                                         (int)sc->lnc_info.N, EPS_DEG);
-
-            /* t is a fraction along the CURRENT sub-segment; compose it onto the
-             * original edge so the LNC is exact w.r.t. the original endpoints. */
-            const double u = cur.u0 + t * (cur.u1 - cur.u0);
+            /* u is a position on the ORIGINAL edge, so the LNC below is exact
+             * w.r.t. the original endpoints at any subdivision depth. */
+            const double u = split_u(&b->dt, &cur, oe, refpt_id);
 
             const int new_id = b->dt.points.N;
             /* Point = (1-u)*V[oe0] + u*V[oe1].  cdt_point_set_lnc's convention is
@@ -482,9 +617,11 @@ static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_D
             s_lnc_info info = { .v1 = oe[0], .v2 = oe[1], .t = u };
             if (!dynarray_push(&sc->lnc_info, &info)) return 0;
 
-            /* Subdivide: this segment becomes the left half, push the right half. */
+            /* Subdivide: this segment becomes the left half, push the right
+             * half.  Both halves inherit the shell state unchanged (see s_seg:
+             * both-acute keeps BOTH candidate centers alive). */
             s_seg right = { .ep = { new_id, cur.ep[1] }, .oei = cur.oei,
-                            .u0 = u, .u1 = cur.u1 };
+                            .u0 = u, .u1 = cur.u1, .shell = cur.shell };
             if (!dynarray_push(&sc->segs, &right)) return 0;
             s_seg *left = (s_seg *)dynarray_get_ptr(&sc->segs, (size_t)si);
             left->ep[1] = new_id;
@@ -1116,7 +1253,6 @@ static int try_cavity_expansion(s_scplx *dt,
                                  s_half_cavity *C,
                                  int va_dt, int vb_dt, int vc_dt,
                                  int side,
-                                 double TOL,
                                  s_hash_table *constrained,
                                  s_scplx *ldt_out,
                                  int **l2g_out,
@@ -1132,11 +1268,21 @@ static int try_cavity_expansion(s_scplx *dt,
                    int_hash, int_eq, NULL)) {
         free(l2g); return 0;
     }
+    /* The local vertex order MUST be the restriction of the global order
+     * (paper Sec 4.4): exact cospherical ties are broken symbolically by
+     * INDEX ORDER (cdt_perturbed_insphere), and both half-cavities share
+     * their on-plane vertices.  If each half enumerates them in its own
+     * arbitrary cavity-scan order, ties break differently and the two local
+     * DTs induce DIFFERENT middle walls (measured on sliver facets, whose
+     * matched shell radii make cocircular in-plane sets common).  Sorting
+     * l2g ascending makes the tie-breaking identical in both halves. */
     for (int i = 0; i < n; i++) {
         int g; dynarray_get_value(&C->verts, i, &g);
         l2g[i] = g;
-        hash_insert(&g2l, &g, &i);
     }
+    qsort(l2g, (size_t)n, sizeof(int), int_cmp_asc);
+    for (int i = 0; i < n; i++)
+        hash_insert(&g2l, &l2g[i], &i);
 
     /* Track the growing set of C-tets to identify external neighbors. */
     s_hash_table removal_set;
@@ -1165,14 +1311,46 @@ static int try_cavity_expansion(s_scplx *dt,
         s_points lpts = { .N = n, .p = lpts_arr };
         /* Match the global DT's geometry: an exact global DT gets an exact local
          * cavity DT sharing the same registry (l2g maps local real ids -> global;
-         * sentinels use scratch slots past the global point count). */
+         * sentinels use scratch slots past the global point count).
+         * TOL_dup is 0 HERE, unlike the input build: every cavity vertex is a
+         * distinct vertex of the existing exact complex, and the duplicate
+         * filter would SILENTLY DROP vertices that sit closer than TOL to each
+         * other -- on near-degenerate sliver facets the strictly-off-plane
+         * vertices are exactly such (1e-16 off-plane, laterally sub-TOL near an
+         * acute hub), and dropping them flattens the local DT to zero real tets
+         * (measured on fail_0058 fi=82: 73 cavity tets, every one with an
+         * above-vertex, local DT empty). */
         s_dt_builder lb = dt->exact_ids
-            ? dt_builder_begin_exact_local(&lpts, TOL, l2g, n, dt->points.N)
-            : dt_builder_begin(&lpts, NULL, TOL, NULL, NULL);
+            ? dt_builder_begin_exact_local(&lpts, 0.0, l2g, n, dt->points.N)
+            : dt_builder_begin(&lpts, NULL, 0.0, NULL, NULL);
         free(lpts_arr);
         if (!lb._stack) { CDT_DBG("expand side=%d iter=%d: lb begin fail\n", side, dbg_iter); goto done; }
         ldt = dt_builder_end(&lb, true, NULL, NULL, 0);
         if (!ldt.head) { CDT_DBG("expand side=%d iter=%d: ldt build fail (n=%d)\n", side, dbg_iter, n); goto done; }
+
+        /* Degenerate local DT: an ultra-flat vertex set (near-coplanar slab,
+         * thickness ~1e-15) has sliver circumspheres of radius ~L^2/thickness
+         * that SWALLOW the finite big-tetra corners, so its Delaunay complex
+         * legitimately contains no real tet at all -- every tet touches a
+         * sentinel.  The local-DT method cannot fill such a cavity, and the
+         * wall checks below would fake success through ghost-tet faces.
+         * Fail cleanly; the caller falls back to gift-wrapping, which works on
+         * the global complex and has no sentinel exposure. */
+        {
+            bool any_real = false;
+            for (const s_ncell *nc = ldt.head; nc && !any_real; nc = nc->next) {
+                bool sent = false;
+                for (int j = 0; j < 4; j++)
+                    if (nc->vertex_id[j] < 4) { sent = true; break; }
+                if (!sent) any_real = true;
+            }
+            if (!any_real) {
+                CDT_DBG("expand side=%d iter=%d: local DT has no real tets "
+                        "(flat slab, n=%d); failing to gift-wrap\n",
+                        side, dbg_iter, n);
+                goto done;
+            }
+        }
 
         /* Check every boundary (wall) face.  Nothing is demanded of the
          * facet itself: the local DT of this half's vertices induces SOME
@@ -1256,14 +1434,22 @@ static int try_cavity_expansion(s_scplx *dt,
             goto done;
         }
 
-        /* Grow Vi and the C-tet set. */
+        /* Grow Vi and the C-tet set.  Insert IN SORTED POSITION and remap
+         * g2l: local order must stay the restriction of the global order
+         * (see the tie-breaking note above). */
         if (!hash_get(&g2l, &new_v)) {
             int *nl2g = realloc(l2g, (size_t)(n+1) * sizeof(int));
             if (!nl2g) goto done;
             l2g = nl2g;
-            l2g[n] = new_v;
-            hash_insert(&g2l, &new_v, &n);
+            int pos = n;
+            while (pos > 0 && l2g[pos-1] > new_v) { l2g[pos] = l2g[pos-1]; pos--; }
+            l2g[pos] = new_v;
             n++;
+            hash_free(&g2l);
+            if (!hash_init(&g2l, sizeof(int), sizeof(int), (size_t)(n*4+1), 0,
+                           int_hash, int_eq, NULL)) goto done;
+            for (int i = 0; i < n; i++)
+                hash_insert(&g2l, &l2g[i], &i);
             if (!dynarray_push(&C->verts, &new_v)) goto done;
         }
         if (!dynarray_push(&C->tets, &expand_nb)) goto done;
@@ -1413,6 +1599,89 @@ static int link_new_tets(s_scplx *dt, s_dynarray *new_tets, s_hash_table *adj_ma
 
 /* Commit both half-cavities: remove old Tf tets, insert local-DT tets, fix adjacency.
  * On failure, the DT is inconsistent; the caller must abort. */
+/* Classify which tets of a half-cavity's local DT lie INSIDE the cavity.
+ * The local DT covers conv(Vi), which for a non-convex cavity is strictly
+ * larger: it contains hull-filler tets beyond the cavity walls.  Committing
+ * those overlaps retained global tets (the reference prunes them explicitly,
+ * Fig. 3: only the "used" tets fill the cavity; measured here as 33 phantom
+ * in-plane faces on a sliver facet, wrecking wall agreement and the mixed
+ * wrap).  Inside = reachable from a wall face's interior side without
+ * crossing any cavity-boundary face.  C->boundary triples are all faces of
+ * the local DT (expansion guarantees it), so the flood is well defined; the
+ * plane needs no explicit wall (this half has no vertices beyond it).
+ * Pushes s_ncell* of ldt tets into out (cleared first).  Returns 1 on
+ * success, 0 on failure (no seed / allocation). */
+static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
+                           const s_half_cavity *C, s_dynarray *out)
+{
+    dynarray_clear(out);
+
+    s_hash_table bnd;
+    if (!hash_init(&bnd, sizeof(int[3]), sizeof(int),
+                   C->boundary.N * 4 + 1, C->boundary.N,
+                   face_triple_hash, face_triple_eq, NULL)) return 0;
+    for (unsigned i = 0; i < C->boundary.N; i++) {
+        const int *f = (const int *)dynarray_get_ptr_c(&C->boundary, i);
+        int key[3] = { f[0], f[1], f[2] };   /* already sorted, global ids */
+        int iv = f[3];
+        hash_insert(&bnd, key, &iv);
+    }
+
+    /* Seed: an ldt tet incident to a wall face on the wall's interior side. */
+    ldt->mark_stamp++;
+    const int stamp = ldt->mark_stamp;
+    s_ncell *seed = NULL;
+    for (s_ncell *nc = ldt->head; nc && !seed; nc = nc->next) {
+        bool sent = false;
+        for (int j = 0; j < 4; j++) if (nc->vertex_id[j] < 4) { sent = true; break; }
+        if (sent) continue;
+        for (int fi = 0; fi < 4 && !seed; fi++) {
+            int fids[3]; FACE_IDS(nc, fi, fids);
+            int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
+            sort3(&g[0], &g[1], &g[2]);
+            int *iv = (int *)hash_get(&bnd, g);
+            if (!iv) continue;
+            int s_int = cdt_orient3d(g[0], g[1], g[2], *iv);
+            if (s_int == 0) continue;             /* degenerate wall: try others */
+            int w = l2g[nc->vertex_id[fi] - 4];
+            if (cdt_orient3d(g[0], g[1], g[2], w) == s_int) seed = nc;
+        }
+    }
+    if (!seed) {
+        int nreal = 0;
+        for (s_ncell *nc = ldt->head; nc; nc = nc->next) {
+            bool snt = false;
+            for (int j = 0; j < 4; j++) if (nc->vertex_id[j] < 4) { snt = true; break; }
+            if (!snt) nreal++;
+        }
+        CDT_DBG("ldt_cavity_tets: NO SEED (bnd=%u, real ldt tets=%d)\n",
+                C->boundary.N, nreal);
+        hash_free(&bnd); return 0;
+    }
+
+    seed->mark_token = stamp;
+    if (!dynarray_push(out, &seed)) { hash_free(&bnd); return 0; }
+    for (unsigned k = 0; k < out->N; k++) {
+        s_ncell *cur; dynarray_get_value(out, k, &cur);
+        for (int fi = 0; fi < 4; fi++) {
+            int fids[3]; FACE_IDS(cur, fi, fids);
+            if (fids[0] < 4 || fids[1] < 4 || fids[2] < 4) continue;
+            int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
+            sort3(&g[0], &g[1], &g[2]);
+            if (hash_get(&bnd, g)) continue;      /* cavity wall: do not cross */
+            s_ncell *nb = cur->opposite[fi];
+            if (!nb || nb->mark_token == stamp) continue;
+            bool sent = false;
+            for (int j = 0; j < 4; j++) if (nb->vertex_id[j] < 4) { sent = true; break; }
+            if (sent) continue;                   /* ghost: outside the hull side */
+            nb->mark_token = stamp;
+            if (!dynarray_push(out, &nb)) { hash_free(&bnd); return 0; }
+        }
+    }
+    hash_free(&bnd);
+    return 1;
+}
+
 /* The two half local DTs triangulate the SAME on-plane vertex set from their
  * respective sides, so their induced in-plane (middle wall) faces normally
  * agree: each is the 2D Delaunay triangulation of those points.  They can
@@ -1421,8 +1690,8 @@ static int link_new_tets(s_scplx *dt, s_dynarray *new_tets, s_hash_table *adj_ma
  * Committing mismatched halves would leave cracks along the wall, so verify
  * agreement first and let the caller fall back to gift-wrapping when it fails.
  * Faces are compared as GLOBAL sorted triples of on-plane vertices. */
-static int middle_walls_agree(const s_scplx *ldt1, const int *l2g1,
-                              const s_scplx *ldt2, const int *l2g2,
+static int middle_walls_agree(const s_dynarray *fl1, const int *l2g1,
+                              const s_dynarray *fl2, const int *l2g2,
                               int va, int vb, int vc)
 {
     s_hash_table set;
@@ -1431,9 +1700,10 @@ static int middle_walls_agree(const s_scplx *ldt1, const int *l2g1,
 
     int agree = 1;
     for (int half = 0; half < 2 && agree; half++) {
-        const s_scplx *ldt = half ? ldt2 : ldt1;
-        const int     *l2g = half ? l2g2 : l2g1;
-        for (const s_ncell *nc = ldt->head; nc && agree; nc = nc->next) {
+        const s_dynarray *fl  = half ? fl2 : fl1;
+        const int        *l2g = half ? l2g2 : l2g1;
+        for (unsigned ti = 0; ti < fl->N && agree; ti++) {
+            const s_ncell *nc; dynarray_get_value(fl, ti, &nc);
             for (int fi = 0; fi < 4; fi++) {
                 int fids[3]; FACE_IDS(nc, fi, fids);
                 if (fids[0] < 4 || fids[1] < 4 || fids[2] < 4) continue; /* sentinel */
@@ -1453,28 +1723,38 @@ static int middle_walls_agree(const s_scplx *ldt1, const int *l2g1,
             for (s_hash_entry *e = set.buckets[b]; e && agree; e = e->next)
                 if (*(int *)entry_value(&set, e) != 3) agree = 0;
     }
+    if (!agree && getenv("CDT_DUMP_WALLS")) {
+        fprintf(stderr, "[walls] disagreement dump (mask 1=upper only, 2=lower only):\n");
+        for (size_t b = 0; b < set.nbuckets; b++)
+            for (s_hash_entry *e = set.buckets[b]; e; e = e->next) {
+                int m = *(int *)entry_value(&set, e);
+                if (m == 3) continue;
+                const int *k = (const int *)entry_key(e);
+                fprintf(stderr, "[walls]   (%d,%d,%d) mask=%d\n", k[0], k[1], k[2], m);
+            }
+    }
     hash_free(&set);
     return agree;
 }
 
 static int commit_cavity_expansion(s_scplx *dt,
-                                    s_half_cavity *C1, s_scplx *ldt1, int *l2g1,
-                                    s_half_cavity *C2, s_scplx *ldt2, int *l2g2,
+                                    s_half_cavity *C1, const s_dynarray *fl1, int *l2g1,
+                                    s_half_cavity *C2, const s_dynarray *fl2, int *l2g2,
                                     s_cdt_scratch *sc)
 {
     s_hash_table adj_map;
     if (!remove_cavity_tets(dt, C1, C2, &adj_map)) return 0;
 
-    /* Insert real tets from local DTs into global DT. */
+    /* Insert the INSIDE tets of both local DTs (ldt_cavity_tets): the local
+     * DT covers conv(Vi), and its hull-filler tets beyond the cavity walls
+     * would overlap retained global tets. */
     dynarray_clear(&sc->new_tets);
 
     for (int half = 0; half < 2; half++) {
-        s_scplx *ldt = half ? ldt2 : ldt1;
-        int     *l2g = half ? l2g2 : l2g1;
-        for (s_ncell *lnc = ldt->head; lnc; lnc = lnc->next) {
-            bool sent = false;
-            for (int j = 0; j < 4; j++) if (lnc->vertex_id[j] < 4) { sent = true; break; }
-            if (sent) continue;
+        const s_dynarray *fl  = half ? fl2 : fl1;
+        int              *l2g = half ? l2g2 : l2g1;
+        for (unsigned ti = 0; ti < fl->N; ti++) {
+            s_ncell *lnc; dynarray_get_value(fl, ti, &lnc);
 
             s_ncell *nc = malloc_ncell();
             if (!nc) { hash_free(&adj_map); return 0; }
@@ -1706,13 +1986,18 @@ static int coplanar_tris_improper_overlap(int a0, int a1, int a2,
 }
 
 /* a,b,c must already be sorted. void_sign = precomputed orient3d side of the cavity.
- * Only stored on first insertion (count==0 -> 1). */
+ * Refreshed on EVERY activation (even -> odd count), not just the first: a face
+ * can be closed and later re-activated, and its remaining void then lies on the
+ * side of the LATEST toggler.  Keeping the first sign sent the wrap back into
+ * space it had already filled -- measured as an endless cycle creating
+ * thousands of duplicate tets from a 36-vertex cavity on a degenerate sliver
+ * facet (fail_0058). */
 static int toggle_boundary_face(s_hash_table *toggle, int a, int b, int c, int void_sign)
 {
     int f[3] = {a, b, c}; /* caller must pre-sort */
     s_bnd_face_val *p = (s_bnd_face_val *)hash_get_or_create(toggle, f);
     if (!p) return 0;
-    if (p->count == 0) p->void_sign = void_sign;
+    if (p->count % 2 == 0) p->void_sign = void_sign;
     p->count++;
     return 1;
 }
@@ -1754,8 +2039,16 @@ static int gw_half(s_scplx *dt,
 {
     int dbg = 0;
     int guard = 0;
+    /* A fill of n vertices needs O(n) tets; far more means the front is
+     * folding back into filled space (degenerate geometry).  Fail fast. */
+    const unsigned max_tets = new_tets_out->N + 6u * usable_v->N + 32u;
 
     for (;;) {
+        if (new_tets_out->N > max_tets) {
+            CDT_DBG("gw: %u tets from %u vertices -- cycling, giving up\n",
+                    new_tets_out->N, usable_v->N);
+            return 0;
+        }
         if (++guard > 20000) {
             CDT_DBG("gw: pass cap reached, giving up\n");
             return 0;
@@ -1952,6 +2245,7 @@ static int gw_half(s_scplx *dt,
 static int gw_half_cavity(s_scplx *dt,
                            s_half_cavity *C,
                            int va_dt, int vb_dt, int vc_dt,
+                           int side,
                            s_dynarray *new_tets_out,
                            s_dynarray *comm_out,
                            const s_dynarray *comm_in,
@@ -1976,10 +2270,11 @@ static int gw_half_cavity(s_scplx *dt,
     if (comm_in) {
         for (unsigned i = 0; i < comm_in->N; i++) {
             const int *f = (const int *)dynarray_get_ptr_c(comm_in, i);
-            /* Void side of a middle-wall face for the lower fill: below the
-             * constraint plane, i.e. -krel (orient3d(f,w)=krel*orient3d(ck,w)). */
-            int vs = -coplanar_rel_orientation(f[0], f[1], f[2],
-                                               va_dt, vb_dt, vc_dt);
+            /* Void side of a middle-wall face for this fill: on this fill's
+             * side of the plane, i.e. side*krel
+             * (orient3d(f,w) = krel * orient3d(corner-plane, w)). */
+            int vs = side * coplanar_rel_orientation(f[0], f[1], f[2],
+                                                     va_dt, vb_dt, vc_dt);
             if (!toggle_boundary_face(&toggle, f[0], f[1], f[2], vs)) {
                 hash_free(&toggle); return 0;
             }
@@ -2044,12 +2339,12 @@ static int gift_wrap_face(s_scplx *dt,
     s_dynarray comm = dynarray_initialize(sizeof(int[3]), 16);
     if (!comm.items) { hash_free(&adj_map); return 0; }
 
-    if (!gw_half_cavity(dt, C1, va_dt, vb_dt, vc_dt, &sc->new_tets, &comm, NULL, sc)) {
+    if (!gw_half_cavity(dt, C1, va_dt, vb_dt, vc_dt, +1, &sc->new_tets, &comm, NULL, sc)) {
         CDT_DBG("gift_wrap: C1 failed (tets=%u verts=%u bnd=%u)\n",
                 C1->tets.N, C1->verts.N, C1->boundary.N);
         dynarray_free(&comm); hash_free(&adj_map); return 0;
     }
-    if (!gw_half_cavity(dt, C2, va_dt, vb_dt, vc_dt, &sc->new_tets, NULL, &comm, sc)) {
+    if (!gw_half_cavity(dt, C2, va_dt, vb_dt, vc_dt, -1, &sc->new_tets, NULL, &comm, sc)) {
         CDT_DBG("gift_wrap: C2 failed (tets=%u verts=%u bnd=%u comm=%u)\n",
                 C2->tets.N, C2->verts.N, C2->boundary.N, comm.N);
         dynarray_free(&comm); hash_free(&adj_map); return 0;
@@ -2062,6 +2357,95 @@ static int gift_wrap_face(s_scplx *dt,
     hash_free(&adj_map);
     return 1;
 }
+
+/* Does the int-dynarray contain v?  (Half-cavity vertex lists are small.) */
+static bool iarr_contains(const s_dynarray *a, int v)
+{
+    for (unsigned i = 0; i < a->N; i++) {
+        int x; dynarray_get_value(a, i, &x);
+        if (x == v) return true;
+    }
+    return false;
+}
+
+/* Mixed recovery for the walls-disagree case: cavity expansion succeeded on
+ * BOTH halves but the two local DTs induced DIFFERENT middle walls.  (With
+ * matched shell radii on a sliver facet, the in-plane vertex set contains
+ * exactly-cocircular quadruples whose Delaunay ties break differently against
+ * each half's off-plane points -- so this is not rare on degenerate facets.)
+ * Discarding both fills and gift-wrapping the whole cavity from scratch
+ * dead-ends in precisely these configurations; instead keep the KEPT half's
+ * local DT verbatim and gift-wrap only the OTHER half against the wall the
+ * kept half induced (comm seeding -- paper S.4.4: the wall triangulation of
+ * one side is inherited by the other).
+ * On failure the cavity tets are already removed, so the caller must abort
+ * the whole attempt (same contract as gift_wrap_face). */
+static int commit_mixed(s_scplx *dt,
+                        s_half_cavity *Ckeep, const s_dynarray *flkeep, int *l2g,
+                        s_half_cavity *Cwrap, int wrap_side,
+                        int va_dt, int vb_dt, int vc_dt,
+                        s_cdt_scratch *sc)
+{
+    /* The kept half's induced wall: the in-plane faces of its INSIDE tets. */
+    s_dynarray comm = dynarray_initialize(sizeof(int[3]), 16);
+    if (!comm.items) return 0;
+    for (unsigned ti = 0; ti < flkeep->N; ti++) {
+        const s_ncell *lnc; dynarray_get_value(flkeep, ti, &lnc);
+        for (int fi = 0; fi < 4; fi++) {
+            int fids[3]; FACE_IDS(lnc, fi, fids);
+            if (fids[0] < 4 || fids[1] < 4 || fids[2] < 4) continue;  /* sentinel */
+            int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
+            if (cdt_orient3d(va_dt, vb_dt, vc_dt, g[0]) != 0 ||
+                cdt_orient3d(va_dt, vb_dt, vc_dt, g[1]) != 0 ||
+                cdt_orient3d(va_dt, vb_dt, vc_dt, g[2]) != 0) continue;
+            sort3(&g[0], &g[1], &g[2]);
+            bool dup = false;
+            for (unsigned q = 0; q < comm.N && !dup; q++) {
+                const int *e = (const int *)dynarray_get_ptr_c(&comm, q);
+                if (e[0] == g[0] && e[1] == g[1] && e[2] == g[2]) dup = true;
+            }
+            if (!dup && !dynarray_push(&comm, g)) { dynarray_free(&comm); return 0; }
+        }
+    }
+
+    s_hash_table adj_map;
+    if (!remove_cavity_tets(dt, Ckeep, Cwrap, &adj_map)) {
+        dynarray_free(&comm); return 0;
+    }
+
+    dynarray_clear(&sc->new_tets);
+
+    /* Insert the kept half's INSIDE tets (same pruning as commit). */
+    for (unsigned ti = 0; ti < flkeep->N; ti++) {
+        s_ncell *lnc; dynarray_get_value(flkeep, ti, &lnc);
+        s_ncell *nc = malloc_ncell();
+        if (!nc) { dynarray_free(&comm); hash_free(&adj_map); return 0; }
+        memset(nc, 0, sizeof(s_ncell));
+        for (int j = 0; j < 4; j++) nc->vertex_id[j] = l2g[lnc->vertex_id[j] - 4];
+        nc->next = dt->head; nc->prev = NULL;
+        if (dt->head) dt->head->prev = nc;
+        dt->head = nc;
+        dt->N_ncells++;
+        for (int j = 0; j < 4; j++)
+            if (!dt->point2tet[nc->vertex_id[j]]) dt->point2tet[nc->vertex_id[j]] = nc;
+        if (!dynarray_push(&sc->new_tets, &nc)) {
+            dynarray_free(&comm); hash_free(&adj_map); return 0;
+        }
+    }
+
+    /* Gift-wrap only the other half, against the kept wall. */
+    if (!gw_half_cavity(dt, Cwrap, va_dt, vb_dt, vc_dt, wrap_side,
+                        &sc->new_tets, NULL, &comm, sc)) {
+        CDT_DBG("commit_mixed: wrap side=%d failed\n", wrap_side);
+        dynarray_free(&comm); hash_free(&adj_map); return 0;
+    }
+    dynarray_free(&comm);
+
+    int ok = link_new_tets(dt, &sc->new_tets, &adj_map);
+    hash_free(&adj_map);
+    return ok;
+}
+
 
 /* -----------------------------------------------------------------------
  * Step 7 -- Ghost-Vertex Flood-Fill for Interior/Exterior (S.4.5)
@@ -2251,12 +2635,15 @@ static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
     sc.f_ring       = dynarray_initialize(sizeof(int),        16);
     sc.f_lines      = dynarray_initialize(sizeof(int),        16);
     sc.f_cover      = dynarray_initialize(sizeof(int[3]),     16);
+    sc.fl1          = dynarray_initialize(sizeof(s_ncell *),  64);
+    sc.fl2          = dynarray_initialize(sizeof(s_ncell *),  64);
     if (!sc.ring.items || !sc.out_ids.items || !sc.stack.items || !sc.in_R.items ||
         !sc.queue.items || !sc.new_tets.items || !sc.orig_bnd.items || !sc.usable.items ||
         !sc.active.items || !sc.lnc_info.items || !sc.comm_cur.items ||
         !sc.segs.items || !sc.miss.items || !sc.orig_edges.items ||
         !sc.face_edges.items || !sc.edge_steiner.items ||
-        !sc.f_ring.items || !sc.f_lines.items || !sc.f_cover.items) {
+        !sc.f_ring.items || !sc.f_lines.items || !sc.f_cover.items ||
+        !sc.fl1.items || !sc.fl2.items) {
         cdt_scratch_free(&sc); free_trimesh(&working); return (s_scplx){0};
     }
 
@@ -2459,28 +2846,99 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
 
             s_scplx ldt1 = {0}, ldt2 = {0};
             int *l2g1 = NULL, *l2g2 = NULL, n1 = 0, n2 = 0;
+            int ok1 = 0, ok2 = 0;
+            bool walls_agree = false;
 
-            int ok1 = try_cavity_expansion(&dt, &C1, va, vb, vc, +1, TOL, &constrained,
+            /* Expansion + wall-agreement loop.  The two half local DTs induce
+             * the same middle wall iff they triangulate the SAME on-plane
+             * vertex set in the same (global, sorted) order: expansion can add
+             * an on-plane vertex to one half only, making the walls disagree
+             * legitimately.  When that happens, inject the union of on-plane
+             * vertices into both pristine halves and re-expand: both 2D point
+             * sets then match and the tie-breaking (sorted l2g + symbolic
+             * insphere) is identical, so the walls must agree. */
+            s_dynarray onp = dynarray_initialize(sizeof(int), 16);
+            if (!onp.items) { half_cavity_free(&C1); half_cavity_free(&C2); PHASE_B_ABORT(); }
+            for (int sync_try = 0; sync_try < 3; sync_try++) {
+                if (sync_try > 0) {
+                    /* fresh pristine cavities + the on-plane union */
+                    if (ldt1.head) { free_complex(&ldt1); ldt1 = (s_scplx){0}; }
+                    if (ldt2.head) { free_complex(&ldt2); ldt2 = (s_scplx){0}; }
+                    free(l2g1); l2g1 = NULL;
+                    free(l2g2); l2g2 = NULL;
+                    half_cavity_free(&C1); half_cavity_free(&C2);
+                    C1 = (s_half_cavity){0}; C2 = (s_half_cavity){0};
+                    if (!build_half_cavities(&dt, va, vb, vc, ring, &constrained,
+                                             &C1, &C2, sc)) {
+                        dynarray_free(&onp);
+                        PHASE_B_ABORT();
+                    }
+                    for (unsigned q = 0; q < onp.N; q++) {
+                        int v; dynarray_get_value(&onp, q, &v);
+                        if (!iarr_contains(&C1.verts, v) && !dynarray_push(&C1.verts, &v))
+                            { dynarray_free(&onp); PHASE_B_ABORT(); }
+                        if (!iarr_contains(&C2.verts, v) && !dynarray_push(&C2.verts, &v))
+                            { dynarray_free(&onp); PHASE_B_ABORT(); }
+                    }
+                }
+
+                ok1 = try_cavity_expansion(&dt, &C1, va, vb, vc, +1, &constrained,
                                            &ldt1, &l2g1, &n1, sc);
-            int ok2 = ok1
-                      ? try_cavity_expansion(&dt, &C2, va, vb, vc, -1, TOL, &constrained,
-                                             &ldt2, &l2g2, &n2, sc)
-                      : 0;
+                ok2 = ok1
+                          ? try_cavity_expansion(&dt, &C2, va, vb, vc, -1, &constrained,
+                                                 &ldt2, &l2g2, &n2, sc)
+                          : 0;
+                if (!(ok1 && ok2)) break;
 
-            /* Both halves induce a middle-wall triangulation of the same
-             * on-plane vertex set; commit only if they agree (else cracks). */
-            if (ok1 && ok2 &&
-                !middle_walls_agree(&ldt1, l2g1, &ldt2, l2g2, va, vb, vc)) {
-                CDT_DBG("PHASE B: fi=%d middle walls disagree, gift-wrapping\n", fi);
-                ok2 = 0;
+                /* Prune each local DT to its inside-the-cavity tets; failure
+                 * here means the walls do not close (treat like a failed
+                 * expansion -> gift-wrap path). */
+                if (!ldt_cavity_tets(&ldt1, l2g1, &C1, &sc->fl1) ||
+                    !ldt_cavity_tets(&ldt2, l2g2, &C2, &sc->fl2)) {
+                    CDT_DBG("PHASE B: fi=%d cavity flood failed\n", fi);
+                    ok2 = 0;
+                    break;
+                }
+
+                walls_agree = middle_walls_agree(&sc->fl1, l2g1, &sc->fl2, l2g2, va, vb, vc);
+                if (walls_agree) break;
+
+                /* Collect the on-plane union; if it grew, sync and retry. */
+                bool grew = false;
+                for (int half = 0; half < 2; half++) {
+                    const int *l2g = half ? l2g2 : l2g1;
+                    const int  n  = half ? n2 : n1;
+                    for (int q = 0; q < n; q++) {
+                        int v = l2g[q];
+                        if (cdt_orient3d(va, vb, vc, v) != 0) continue;
+                        if (iarr_contains(&onp, v)) continue;
+                        if (!dynarray_push(&onp, &v)) { dynarray_free(&onp); PHASE_B_ABORT(); }
+                        /* growth only counts if the OTHER half lacks it */
+                        const s_dynarray *other = half ? &C1.verts : &C2.verts;
+                        if (!iarr_contains(other, v)) grew = true;
+                    }
+                }
+                if (!grew) break;   /* sets already equal: give up to mixed commit */
+                CDT_DBG("PHASE B: fi=%d walls disagree, syncing %u on-plane verts "
+                        "and re-expanding (try %d)\n", fi, onp.N, sync_try + 1);
             }
+            dynarray_free(&onp);
+
+            const bool both_ok = (ok1 && ok2);
 
             bool face_ok;
-            if (ok1 && ok2) {
+            if (both_ok && walls_agree) {
                 int commit_ok = commit_cavity_expansion(&dt,
-                                    &C1, &ldt1, l2g1,
-                                    &C2, &ldt2, l2g2, sc);
+                                    &C1, &sc->fl1, l2g1,
+                                    &C2, &sc->fl2, l2g2, sc);
                 face_ok = commit_ok;
+            } else if (both_ok) {
+                /* On commit_mixed failure the cavity is already removed; the
+                 * face_ok=false path below PHASE_B_ABORTs the whole attempt,
+                 * which is the only sound continuation. */
+                CDT_DBG("PHASE B: fi=%d middle walls disagree, mixed commit\n", fi);
+                face_ok = commit_mixed(&dt, &C1, &sc->fl1, l2g1, &C2, -1,
+                                       va, vb, vc, sc);
             } else {
                 /* try_cavity_expansion GROWS C1/C2 in place (appends verts/tets,
                  * rebuilds boundary) -- so after a partial success (e.g. ok1=1,
