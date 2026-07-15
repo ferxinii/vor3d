@@ -394,10 +394,13 @@ static double split_u(const s_scplx *dt, const s_seg *sg, const int oe[2],
  * budgets below are trustworthy. */
 #define RIDGE_MAX_PASSES       100   /* hard bound on recovery passes (a healthy
                                       * cut cell legitimately needs up to ~40)  */
-#define RIDGE_MAX_STEINER_RATIO  8   /* Steiner budget, x input vertex count.
-                                      * Healthy Voronoi cut cells measured at
-                                      * 1.9x-4.3x, so this leaves real headroom
-                                      * while still failing a runaway in ~1s.   */
+#define RIDGE_MAX_STEINER_RATIO 16   /* Steiner budget, x input vertex count.
+                                      * Healthy Voronoi cut cells measure at
+                                      * 1.9x-4.3x; repaired cells with residual
+                                      * near-parallel bundles (see
+                                      * TRIMESH_REPAIR_PLAN.md) need up to ~12x,
+                                      * so 16x keeps margin while still failing
+                                      * a genuine runaway quickly.             */
 
 /* Enumerate the unique undirected edges of the input mesh into sc->orig_edges
  * (as DT ids), record each face's three edge ids in sc->face_edges, and seed
@@ -1309,6 +1312,28 @@ static int try_cavity_expansion(s_scplx *dt,
         for (int i = 0; i < n; i++) lpts_arr[i] = dt->points.p[l2g[i]];
 
         s_points lpts = { .N = n, .p = lpts_arr };
+        /* Sentinels ~1e6x beyond the cavity bbox: a near-degenerate slab
+         * cavity (thickness h, extent L) has sliver circumspheres of radius
+         * ~L^2/h; bbox-scale sentinels fall INSIDE those spheres and the
+         * local Delaunay complex then legitimately contains no real tets at
+         * all (the flat-slab failure below).  Far sentinels behave like
+         * points at infinity for every realistic h.  Exactness is unaffected
+         * (sentinel coordinates are explicit registry points). */
+        s_point bb_lo = lpts_arr[0], bb_hi = lpts_arr[0];
+        for (int i = 1; i < n; i++) {
+            s_point q = lpts_arr[i];
+            if (q.x < bb_lo.x) bb_lo.x = q.x;  if (q.x > bb_hi.x) bb_hi.x = q.x;
+            if (q.y < bb_lo.y) bb_lo.y = q.y;  if (q.y > bb_hi.y) bb_hi.y = q.y;
+            if (q.z < bb_lo.z) bb_lo.z = q.z;  if (q.z > bb_hi.z) bb_hi.z = q.z;
+        }
+        {
+            const double inflate = 1e6;
+            double cx = 0.5 * (bb_lo.x + bb_hi.x), sx = 0.5 * (bb_hi.x - bb_lo.x) + 1e-12;
+            double cy = 0.5 * (bb_lo.y + bb_hi.y), sy = 0.5 * (bb_hi.y - bb_lo.y) + 1e-12;
+            double cz = 0.5 * (bb_lo.z + bb_hi.z), sz = 0.5 * (bb_hi.z - bb_lo.z) + 1e-12;
+            bb_lo = (s_point){ .x = cx - inflate * sx, .y = cy - inflate * sy, .z = cz - inflate * sz };
+            bb_hi = (s_point){ .x = cx + inflate * sx, .y = cy + inflate * sy, .z = cz + inflate * sz };
+        }
         /* Match the global DT's geometry: an exact global DT gets an exact local
          * cavity DT sharing the same registry (l2g maps local real ids -> global;
          * sentinels use scratch slots past the global point count).
@@ -1321,8 +1346,9 @@ static int try_cavity_expansion(s_scplx *dt,
          * (measured on fail_0058 fi=82: 73 cavity tets, every one with an
          * above-vertex, local DT empty). */
         s_dt_builder lb = dt->exact_ids
-            ? dt_builder_begin_exact_local(&lpts, 0.0, l2g, n, dt->points.N)
-            : dt_builder_begin(&lpts, NULL, 0.0, NULL, NULL);
+            ? dt_builder_begin_exact_local(&lpts, 0.0, l2g, n, dt->points.N,
+                                           &bb_lo, &bb_hi)
+            : dt_builder_begin(&lpts, NULL, 0.0, &bb_lo, &bb_hi);
         free(lpts_arr);
         if (!lb._stack) { CDT_DBG("expand side=%d iter=%d: lb begin fail\n", side, dbg_iter); goto done; }
         ldt = dt_builder_end(&lb, true, NULL, NULL, 0);
@@ -1692,11 +1718,32 @@ static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
  * Faces are compared as GLOBAL sorted triples of on-plane vertices. */
 static int middle_walls_agree(const s_dynarray *fl1, const int *l2g1,
                               const s_dynarray *fl2, const int *l2g2,
+                              const s_half_cavity *C1, const s_half_cavity *C2,
                               int va, int vb, int vc)
 {
     s_hash_table set;
     if (!hash_init(&set, sizeof(int[3]), sizeof(int), 257, 0,
                    face_triple_hash, face_triple_eq, NULL)) return 0;
+
+    /* Cavity WALL faces (either half) are excluded from the comparison: an
+     * in-plane wall bounds the cavity against RETAINED tets, so it can appear
+     * on one side only and is already conformed-to by construction (expansion
+     * requires every wall in the local DT).  Only the EMERGENT faces -- the
+     * true middle wall between the two removed halves -- must match. */
+    s_hash_table walls;
+    if (!hash_init(&walls, sizeof(int[3]), sizeof(int),
+                   (C1->boundary.N + C2->boundary.N) * 4 + 1, 0,
+                   face_triple_hash, face_triple_eq, NULL)) {
+        hash_free(&set); return 0;
+    }
+    for (int half = 0; half < 2; half++) {
+        const s_dynarray *bnd = half ? &C2->boundary : &C1->boundary;
+        for (unsigned i = 0; i < bnd->N; i++) {
+            const int *f = (const int *)dynarray_get_ptr_c(bnd, i);
+            int one = 1;
+            hash_insert(&walls, f, &one);     /* triples pre-sorted */
+        }
+    }
 
     int agree = 1;
     for (int half = 0; half < 2 && agree; half++) {
@@ -1712,6 +1759,7 @@ static int middle_walls_agree(const s_dynarray *fl1, const int *l2g1,
                     cdt_orient3d(va, vb, vc, g[1]) != 0 ||
                     cdt_orient3d(va, vb, vc, g[2]) != 0) continue;
                 sort3(&g[0], &g[1], &g[2]);
+                if (hash_get(&walls, g)) continue;   /* wall, not middle */
                 int *v = (int *)hash_get_or_create(&set, g);
                 if (!v) { agree = 0; break; }
                 *v |= (1 << half);
@@ -1733,6 +1781,7 @@ static int middle_walls_agree(const s_dynarray *fl1, const int *l2g1,
                 fprintf(stderr, "[walls]   (%d,%d,%d) mask=%d\n", k[0], k[1], k[2], m);
             }
     }
+    hash_free(&walls);
     hash_free(&set);
     return agree;
 }
@@ -2042,6 +2091,11 @@ static int gw_half(s_scplx *dt,
     /* A fill of n vertices needs O(n) tets; far more means the front is
      * folding back into filled space (degenerate geometry).  Fail fast. */
     const unsigned max_tets = new_tets_out->N + 6u * usable_v->N + 32u;
+    /* Work budget: candidate trials cost O(active + usable) exact predicate
+     * calls each; on degenerate cavities a single sweep can burn minutes.
+     * Cap the total so a hopeless wrap fails in seconds. */
+    const double   max_work = 2e8;
+    double         work     = 0.0;
 
     for (;;) {
         if (new_tets_out->N > max_tets) {
@@ -2090,6 +2144,13 @@ static int gw_half(s_scplx *dt,
         }
 
         bool made_progress = false;
+        work += (double)sc->active.N * (double)usable_v->N *
+                (double)(sc->active.N + usable_v->N);
+        if (work > max_work) {
+            CDT_DBG("gw: work budget exceeded (active=%u usable=%u), giving up\n",
+                    sc->active.N, usable_v->N);
+            return 0;
+        }
         for (unsigned si = 0; si < sc->active.N && !made_progress; si++) {
             const int *sigma = (const int *)dynarray_get_ptr(&sc->active, si);
 
@@ -2386,9 +2447,25 @@ static int commit_mixed(s_scplx *dt,
                         int va_dt, int vb_dt, int vc_dt,
                         s_cdt_scratch *sc)
 {
-    /* The kept half's induced wall: the in-plane faces of its INSIDE tets. */
+    /* The kept half's induced MIDDLE wall: the in-plane faces of its inside
+     * tets, excluding cavity wall faces of either half (those bound retained
+     * tets and are seeded into the wrap's toggle from Cwrap->boundary already;
+     * seeding them twice would cancel them out). */
+    s_hash_table walls;
+    if (!hash_init(&walls, sizeof(int[3]), sizeof(int),
+                   (Ckeep->boundary.N + Cwrap->boundary.N) * 4 + 1, 0,
+                   face_triple_hash, face_triple_eq, NULL)) return 0;
+    for (int half = 0; half < 2; half++) {
+        const s_dynarray *bnd = half ? &Cwrap->boundary : &Ckeep->boundary;
+        for (unsigned i = 0; i < bnd->N; i++) {
+            const int *f = (const int *)dynarray_get_ptr_c(bnd, i);
+            int one = 1;
+            hash_insert(&walls, f, &one);
+        }
+    }
+
     s_dynarray comm = dynarray_initialize(sizeof(int[3]), 16);
-    if (!comm.items) return 0;
+    if (!comm.items) { hash_free(&walls); return 0; }
     for (unsigned ti = 0; ti < flkeep->N; ti++) {
         const s_ncell *lnc; dynarray_get_value(flkeep, ti, &lnc);
         for (int fi = 0; fi < 4; fi++) {
@@ -2399,14 +2476,19 @@ static int commit_mixed(s_scplx *dt,
                 cdt_orient3d(va_dt, vb_dt, vc_dt, g[1]) != 0 ||
                 cdt_orient3d(va_dt, vb_dt, vc_dt, g[2]) != 0) continue;
             sort3(&g[0], &g[1], &g[2]);
+            if (hash_get(&walls, g)) continue;       /* wall, not middle */
             bool dup = false;
             for (unsigned q = 0; q < comm.N && !dup; q++) {
                 const int *e = (const int *)dynarray_get_ptr_c(&comm, q);
                 if (e[0] == g[0] && e[1] == g[1] && e[2] == g[2]) dup = true;
             }
-            if (!dup && !dynarray_push(&comm, g)) { dynarray_free(&comm); return 0; }
+            if (!dup && !dynarray_push(&comm, g)) {
+                hash_free(&walls); dynarray_free(&comm); return 0;
+            }
         }
     }
+
+    hash_free(&walls);
 
     s_hash_table adj_map;
     if (!remove_cavity_tets(dt, Ckeep, Cwrap, &adj_map)) {
@@ -2900,7 +2982,8 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                     break;
                 }
 
-                walls_agree = middle_walls_agree(&sc->fl1, l2g1, &sc->fl2, l2g2, va, vb, vc);
+                walls_agree = middle_walls_agree(&sc->fl1, l2g1, &sc->fl2, l2g2,
+                                                 &C1, &C2, va, vb, vc);
                 if (walls_agree) break;
 
                 /* Collect the on-plane union; if it grew, sync and retry. */

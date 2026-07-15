@@ -1552,10 +1552,12 @@ s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
 }
 
 s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
-                                          const int *l2g_real, int n, int scratch_base)
+                                          const int *l2g_real, int n, int scratch_base,
+                                          const s_point *bb_min_hint,
+                                          const s_point *bb_max_hint)
 {
     (void)n;  /* n == seeds->N; the map is sized from points.N inside the impl */
-    return dt_builder_begin_impl(seeds, NULL, TOL_dup, NULL, NULL,
+    return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
                                  true, l2g_real, scratch_base);
 }
 

@@ -15,7 +15,8 @@
  * adjacency in the s_medax. Every edge is a certified-inside corridor.
  *
  * Inside/outside (Steps 3-4) is decided by point location in the flagged
- * convex-hull CDT (tetrahedralize_domain_flagged), an exact and terminating
+ * winding-number test against the surface itself (formerly a convex-hull CDT;
+ * replaced because CDT construction can fail on degenerate cut cells), a
  * oracle -- no ray-casting degeneracy, so axis-aligned meshes need no jitter. */
 
 /* ----- performance note on medax_center (the canonical center) -------------
@@ -52,6 +53,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -293,55 +295,19 @@ fail:
     return out;
 }
 
-/* ----- inside/outside oracle: point location in the flagged domain CDT ---- */
-/* orient3d sign proxy: 6x the signed volume of (a,b,c,d). */
-static inline double orient3d(s_point a, s_point b, s_point c, s_point d)
+/* ----- inside/outside oracle: generalized winding number ------------------
+ * Replaces the former domain-CDT walk (tetrahedralize_domain_flagged +
+ * point location).  Rationale: the CDT oracle requires a successful global
+ * construction, which fails (cleanly, but after minutes) on degenerate cell
+ * surfaces -- e.g. Voronoi cells containing sub-ulp slit pockets, see
+ * TRIMESH_REPAIR_PLAN.md.  The winding number is a pure per-query summation
+ * over the faces: no construction, no failure mode, robust for any valid
+ * closed trimesh; benchmarked at 20000/20000 agreement with the CDT oracle
+ * wherever the latter builds, at comparable total cost for medax-scale query
+ * counts (tests/bench_inside.c). */
+static int mesh_inside(const s_trimesh *mesh, s_point p)
 {
-    s_point n = vcross(vsub(b, a), vsub(c, a)), ad = vsub(d, a);
-    return n.x * ad.x + n.y * ad.y + n.z * ad.z;
-}
-
-/* Stochastic visibility walk over the convex-hull CDT (tetrahedralize_domain_
- * flagged). Returns 1 if p is inside the trimesh, 0 otherwise. *hint is the
- * start tet, updated to the last tet visited (pass the previous result for
- * locality). A point inside the hull lands in a tet (read .interior); a point
- * beyond a hull face (opposite == NULL) is outside the hull, hence outside. */
-static int cdt_inside(const s_scplx *cdt, s_point p, const s_ncell **hint)
-{
-    const s_ncell *cur = (hint && *hint) ? *hint : cdt->head;
-    if (!cur) return 0;
-    long maxsteps = 3L * cdt->N_ncells + 16;
-
-    for (long step = 0; step < maxsteps; step++) {
-        s_point v[4];
-        extract_vertices_ncell(cdt, cur, v);
-
-        int order[4] = {0,1,2,3};                 /* random face order: no cycles */
-        for (int k = 3; k > 0; k--) {
-            int r = rand() % (k + 1);
-            int t = order[k]; order[k] = order[r]; order[r] = t;
-        }
-
-        const s_ncell *step_to = NULL;
-        int blocked = 0;
-        for (int oo = 0; oo < 4; oo++) {
-            int i = order[oo];
-            /* face opposite vertex i = the other three vertices */
-            s_point fa = v[(i+1)&3], fb = v[(i+2)&3], fc = v[(i+3)&3];
-            double sp  = orient3d(fa, fb, fc, p);
-            double svi = orient3d(fa, fb, fc, v[i]);
-            if (sp != 0.0 && (sp < 0.0) != (svi < 0.0)) {   /* p beyond this face */
-                if (!cur->opposite[i]) { blocked = 1; break; }   /* hull -> outside */
-                step_to = cur->opposite[i];
-                break;
-            }
-        }
-        if (blocked) { if (hint) *hint = cur; return 0; }
-        if (!step_to) { if (hint) *hint = cur; return cur->interior ? 1 : 0; }
-        cur = step_to;
-    }
-    if (hint) *hint = cur;                          /* safety: treat as located */
-    return cur->interior ? 1 : 0;
+    return point_in_trimesh_winding(mesh, p);
 }
 
 /* ----- Step 3: Delaunay edge enumeration + angle/ratio/inner filter ------- */
@@ -389,13 +355,13 @@ typedef struct edge_counts {
     long unique, angle, ratio, candidate, selected;
 } s_edge_counts;
 
-/* Build the selected-inner-edge hash set from the DT. The inner test locates
- * the edge midpoint in the flagged domain CDT. Returns 0 on error. */
+/* Build the selected-inner-edge hash set from the DT. The inner test checks
+ * the edge midpoint against the cell surface (winding number). Returns 0 on
+ * error. */
 static int build_selected_edges(const s_scplx *dt, const s_medax_samples *S,
-                                const s_scplx *cdt, double theta0, double rho0,
+                                const s_trimesh *mesh, double theta0, double rho0,
                                 s_hash_table *out, s_edge_counts *cnt)
 {
-    const s_ncell *hint = cdt->head;
     size_t expected = (size_t)7 * (size_t)S->samples.N + 16;   /* ~7 edges/vert */
     if (!hash_init(out, sizeof(uint64_t), sizeof(uint8_t), expected | 1,
                    expected, edge_hash, edge_eq, NULL))
@@ -429,7 +395,7 @@ static int build_selected_edges(const s_scplx *dt, const s_medax_samples *S,
                     s_point m = {{{ (P.x + Q.x) * 0.5,
                                     (P.y + Q.y) * 0.5,
                                     (P.z + Q.z) * 0.5 }}};
-                    if (cdt_inside(cdt, m, &hint) == 1) {
+                    if (mesh_inside(mesh, m) == 1) {
                         selected = 1;
                         cnt->selected++;
                     }
@@ -518,7 +484,7 @@ static s_medial_graph *build_medgraph(const s_scplx *dt, s_hash_table *tet2node,
  * 6 edges; emit it once iff any of those 6 edges is a selected inner edge (one
  * point per tet, auto-deduplicated). If build_graph, also build the medial
  * graph over the emitted points. */
-static s_medax emit_medax(const s_scplx *dt, const s_scplx *cdt,
+static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
                           s_hash_table *sel, double EPS_DEG, int inside_filter,
                           int build_graph, s_emit_counts *cnt)
 {
@@ -538,7 +504,6 @@ static s_medax emit_medax(const s_scplx *dt, const s_scplx *cdt,
         }
     }
     *cnt = (s_emit_counts){0};
-    const s_ncell *hint = cdt->head;
 
     /* Step 4: emit points (recording tet -> node index when building a graph). */
     for (const s_ncell *c = dt->head; c; c = c->next) {
@@ -554,7 +519,7 @@ static s_medax emit_medax(const s_scplx *dt, const s_scplx *cdt,
         s_point verts[4]; extract_vertices_ncell(dt, c, verts);
         s_point cc;
         if (!circumcentre_tetrahedron(verts, EPS_DEG, &cc)) { cnt->degenerate++; continue; }
-        if (inside_filter && cdt_inside(cdt, cc, &hint) != 1) { cnt->outside++; continue; }
+        if (inside_filter && mesh_inside(mesh, cc) != 1) { cnt->outside++; continue; }
 
         double r = vnorm(vsub(cc, verts[0]));   /* all 4 verts equidistant */
         int node = (int)pts.N;
@@ -597,8 +562,19 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     if (r_sample > 0.0 && !randd01) return medax_NAN;
 
     /* Step 2: samples + umbrella records */
+    struct timespec _mt; clock_gettime(CLOCK_MONOTONIC, &_mt);
+    double _t0 = _mt.tv_sec + 1e-9 * _mt.tv_nsec, _t1;
+#define MEDAX_TICK(msg) do { \
+        clock_gettime(CLOCK_MONOTONIC, &_mt); \
+        _t1 = _mt.tv_sec + 1e-9 * _mt.tv_nsec; \
+        if (getenv("MEDAX_PROFILE")) \
+            fprintf(stderr, "[medax][t] %-10s %.3fs\n", msg, _t1 - _t0); \
+        _t0 = _t1; \
+    } while (0)
+
     s_medax_samples S = build_samples(mesh, r_sample, randd01, rctx, EPS_DEG);
     if (!S.samples.p) return medax_NAN;
+    MEDAX_TICK("sampling");
 
     /* Step 2: Delaunay triangulation of the samples (lean, no mirrors) */
     s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL);
@@ -616,23 +592,17 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
 
     fprintf(stderr, "[medax] Step 2 OK: Nv=%d Nscat=%d Ns=%d (DT built, Nreal==Ns).\n",
                     S.Nv, S.samples.N - S.Nv, S.samples.N);
+    MEDAX_TICK("sample-DT");
 
-    /* Inside/outside oracle: full convex-hull CDT of the domain, tets flagged
-     * interior. Robust (exact predicates, no ray-cast degeneracy) and fast
-     * (point location by walking). Used by both the Step 3 and Step 4 tests. */
-    s_scplx cdt = tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL);
-    if (!cdt.head) {
-        fprintf(stderr, "[medax] tetrahedralize_domain_flagged failed.\n");
-        free_complex(&dt);
-        free_samples(&S);
-        return medax_NAN;
-    }
+    /* Inside/outside oracle: generalized winding number against the input
+     * surface itself (see mesh_inside).  No construction step, no failure
+     * mode -- works for arbitrarily degenerate valid cell surfaces where the
+     * former domain-CDT oracle could fail. */
 
     /* Step 3: enumerate + filter Delaunay edges (angle/ratio/inner) */
     s_hash_table sel_edges;
     s_edge_counts cnt;
-    if (!build_selected_edges(&dt, &S, &cdt, theta0, rho0, &sel_edges, &cnt)) {
-        free_complex(&cdt);
+    if (!build_selected_edges(&dt, &S, mesh, theta0, rho0, &sel_edges, &cnt)) {
         free_complex(&dt);
         free_samples(&S);
         return medax_NAN;
@@ -640,11 +610,12 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     fprintf(stderr, "[medax] Step 3 OK: edges unique=%ld angle=%ld ratio=%ld "
                     "candidate=%ld selected(inner)=%ld.\n",
                     cnt.unique, cnt.angle, cnt.ratio, cnt.candidate, cnt.selected);
+    MEDAX_TICK("edge-sel");
 
     /* Step 4 (+5): emit circumcenters of tets touching a selected edge, and
      * optionally the medial graph over them. */
     s_emit_counts ec;
-    s_medax ma = emit_medax(&dt, &cdt, &sel_edges, EPS_DEG, /*inside_filter=*/1,
+    s_medax ma = emit_medax(&dt, mesh, &sel_edges, EPS_DEG, /*inside_filter=*/1,
                             build_graph, &ec);
     if (build_graph)
         fprintf(stderr, "[medax] Step 4-5 OK: points=%ld edges=%ld (skipped "
@@ -654,8 +625,9 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
         fprintf(stderr, "[medax] Step 4 OK: points=%ld (skipped degenerate=%ld, "
                         "outside=%ld).\n", ec.emitted, ec.degenerate, ec.outside);
 
+    MEDAX_TICK("emit");
+#undef MEDAX_TICK
     hash_free(&sel_edges);
-    free_complex(&cdt);
     free_complex(&dt);
     free_samples(&S);
     return ma;
