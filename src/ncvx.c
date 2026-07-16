@@ -608,6 +608,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
     for (int j = 0; j < 4; j++) {
         int V = tet_vids[j];
         int keep;
+        s_vlabel lb = vlabel_make3(vkey_TV(tet_vids[j]), (uint8_t)(0xF ^ (1 << j)), -1, -1, -1);
         if (!tie[V]) {
             keep = (owner[V] == seed_id);   /* exact: V in cell iff its owner is s */
         } else {                            /* boundary vertex -> exact per-bisector fallback */
@@ -616,11 +617,16 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             for (int f = 0; f < 4; f++) if (f != j) tri[n++] = FC[f];  /* 3 faces meeting at j */
             for (int k = 0; k < NB && keep; k++) {
                 s_cid3 q = { CT_SEED, nbr[k] };
-                if (lp3_feasible(tet, sigma_f, s, seeds, tri[0], tri[1], tri[2], q) < 0) keep = 0;
+                int r = lp3_feasible(tet, sigma_f, s, seeds, tri[0], tri[1], tri[2], q);
+                if (r < 0) keep = 0;
+                /* V exactly ON B(s,nbr[k]) (e.g. a CDT Steiner vertex hit dead-on
+                 * by the bisector): record the membership, or every facet face
+                 * touching V is skipped as "no common bisector" in
+                 * piece_to_surface and the cell surface opens at V. */
+                else if (r == 0) vlabel_add_bis(&lb, nbr[k]);
             }
         }
         if (keep) {
-            s_vlabel lb = vlabel_make3(vkey_TV(tet_vids[j]), (uint8_t)(0xF ^ (1 << j)), -1, -1, -1);
             if (!dynarray_push(&pts, &tet[j]) || !dynarray_push(&cand, &lb)) goto err;
         }
     }

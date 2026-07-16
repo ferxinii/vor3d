@@ -448,7 +448,15 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
     for (int i = 1; i < n; i++)
         if (P[i].x < P[e0].x || (P[i].x == P[e0].x && P[i].y < P[e0].y)) e0 = i;
     int poly_or = test_orientation_2d((s_point2d[]){ P[(e0+n-1)%n], P[e0] }, P[(e0+1)%n]);
-    if (poly_or == 0) poly_or = 1;                        /* degenerate: fan still closes */
+    if (poly_or == 0) {              /* corner degenerate (e.g. a bridge twin): shoelace */
+        double s2 = 0;
+        for (int i = 0; i < n; i++) {
+            s_point2d u = P[i], v = P[(i+1)%n];
+            s2 += u.x * v.y - v.x * u.y;
+        }
+        poly_or = (s2 > 0) - (s2 < 0);
+        if (poly_or == 0) poly_or = 1;                    /* degenerate: fan still closes */
+    }
 
     /* Clip only STRICTLY-convex ears. A flat (collinear) vertex is never clipped
      * as an ear -- doing so would create a chord skipping it, along the straight
@@ -458,6 +466,16 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
      * diagonals instead. */
     int guard = 0, guard_max = 3 * n + 4;
     while (m > 3 && guard++ < guard_max) {
+        /* Drop zero-length ring edges: clipping around a keyhole bridge
+         * eventually makes the two copies of a bridge endpoint adjacent. */
+        for (int i = 0; i < m && m > 3; ) {
+            int a = V[i], b = V[(i+1)%m];
+            if (P[a].x == P[b].x && P[a].y == P[b].y) {
+                for (int k = (i+1)%m; k < m - 1; k++) V[k] = V[k+1];
+                m--; i = 0;                   /* removal can create a new pair */
+            } else i++;
+        }
+        if (m == 3) break;
         int clipped = 0;
         for (int i = 0; i < m; i++) {
             int a = V[(i+m-1)%m], b = V[i], c = V[(i+1)%m];
@@ -467,6 +485,9 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
             for (int j = 0; j < m && ok; j++) {
                 int vj = V[j];
                 if (vj == a || vj == b || vj == c) continue;
+                if ((P[vj].x == P[a].x && P[vj].y == P[a].y) ||
+                    (P[vj].x == P[b].x && P[vj].y == P[b].y) ||
+                    (P[vj].x == P[c].x && P[vj].y == P[c].y)) continue;  /* corner's bridge twin */
                 int o1 = test_orientation_2d((s_point2d[]){ P[a], P[b] }, P[vj]);
                 int o2 = test_orientation_2d((s_point2d[]){ P[b], P[c] }, P[vj]);
                 int o3 = test_orientation_2d((s_point2d[]){ P[c], P[a] }, P[vj]);
@@ -486,6 +507,13 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
         tris[3*nt + 0] = V[0]; tris[3*nt + 1] = V[1]; tris[3*nt + 2] = V[2];
         nt++;
     } else {
+        for (int i = 0; i < m; i++)          /* fanning across a bridge is unsafe: report */
+            for (int j = i + 1; j < m; j++)
+                if (P[V[i]].x == P[V[j]].x && P[V[i]].y == P[V[j]].y) {
+                    fprintf(stderr, "surf_earclip: fan fallback on a bridged ring "
+                                    "(facet with hole; report)\n");
+                    j = m; i = m;
+                }
         for (int i = 1; i + 1 < m; i++) {                 /* fan fallback (Steiner-free) */
             tris[3*nt + 0] = V[0]; tris[3*nt + 1] = V[i]; tris[3*nt + 2] = V[i+1];
             nt++;
@@ -497,10 +525,261 @@ static inline int surf_earclip(const s_point *coords, const int *loop, int n,
 
     for (int t = 0; t < nt; t++) {
         int tri[3] = { loop[tris[3*t]], loop[tris[3*t + 1]], loop[tris[3*t + 2]] };
+        if (tri[0] == tri[1] || tri[1] == tri[2] || tri[2] == tri[0]) continue; /* bridge-twin sliver */
         if (!dynarray_push(faces_out, tri)) { rc = -1; break; }
     }
 
     free(P); free(V); free(tris);
+    return rc;
+}
+
+/* ---- polygon-with-holes assembly (annular cut facets) ----------------------
+ * A facet pierced by a tunnel of the cell traces into more than one loop on
+ * its plane: the outer boundary plus one loop per hole, holes wound OPPOSITE
+ * to the outer (the XOR hands every loop with the facet region on the same
+ * side).  Ear-clipping each loop independently double-covers every hole (a
+ * full outer disk plus a reversed hole disk: two coincident opposite sheets
+ * that break any downstream CDT), so nested loops are first merged into ONE
+ * weakly-simple ring per outer loop with keyhole bridges:
+ *   ring = ... w, h, hole..., h, w, ...
+ * (w outer / h hole vertex, mutually visible, each appearing twice; the hole
+ * is spliced in its stored winding, which is already the reverse of the
+ * outer's).  surf_earclip handles the duplicated bridge vertices. */
+
+/* w strictly inside segment (u,v); all three collinear (checked by caller). */
+static inline int sv_between2d(s_point2d u, s_point2d v, s_point2d w)
+{
+    if (fabs(v.x - u.x) >= fabs(v.y - u.y))
+        return (u.x < w.x && w.x < v.x) || (v.x < w.x && w.x < u.x);
+    return (u.y < w.y && w.y < v.y) || (v.y < w.y && w.y < u.y);
+}
+
+/* Does segment (p,q) cross edge (a,b) properly, or touch its interior / have
+ * an endpoint inside it?  Exact orient2d; endpoint-to-endpoint contact is NOT
+ * a hit (the caller skips edges incident to the bridge endpoints by id). */
+static inline int sv_seg_hits_edge(s_point2d p, s_point2d q, s_point2d a, s_point2d b)
+{
+    int o1 = test_orientation_2d((s_point2d[]){ p, q }, a);
+    int o2 = test_orientation_2d((s_point2d[]){ p, q }, b);
+    int o3 = test_orientation_2d((s_point2d[]){ a, b }, p);
+    int o4 = test_orientation_2d((s_point2d[]){ a, b }, q);
+    if (o1*o2 < 0 && o3*o4 < 0) return 1;             /* proper crossing */
+    if (o1 == 0 && sv_between2d(p, q, a)) return 1;   /* grazing contacts */
+    if (o2 == 0 && sv_between2d(p, q, b)) return 1;
+    if (o3 == 0 && sv_between2d(a, b, p)) return 1;
+    if (o4 == 0 && sv_between2d(a, b, q)) return 1;
+    return 0;
+}
+
+/* Signed double-area of a loop in the drop-projection (float shoelace: only
+ * the SIGN is consumed, and real facet loops have macroscopic area). */
+static inline double sv_loop_area2(const s_point *coords, const int *loop, int n, int drop)
+{
+    double s2 = 0;
+    s_point2d u = surf_proj2d(coords[loop[n-1]], drop);
+    for (int i = 0; i < n; i++) {
+        s_point2d v = surf_proj2d(coords[loop[i]], drop);
+        s2 += u.x * v.y - v.x * u.y;
+        u = v;
+    }
+    return s2;
+}
+
+/* Is p strictly inside the loop?  Crossing parity of the +x ray, with the
+ * side test exact (orient2d); p exactly on the boundary counts as outside. */
+static inline int sv_point_in_loop(s_point2d p, const s_point *coords,
+                                   const int *loop, int n, int drop)
+{
+    int cross = 0;
+    for (int i = 0; i < n; i++) {
+        s_point2d a = surf_proj2d(coords[loop[i]], drop);
+        s_point2d b = surf_proj2d(coords[loop[(i+1)%n]], drop);
+        if ((a.y > p.y) == (b.y > p.y)) continue;        /* no y-straddle */
+        int o = test_orientation_2d((s_point2d[]){ a, b }, p);
+        if (o == 0) return 0;                            /* on the boundary */
+        if ((b.y > a.y) ? (o > 0) : (o < 0)) cross ^= 1; /* hit right of p */
+    }
+    return cross;
+}
+
+/* Candidate keyhole bridge, sorted nearest-first (deterministic tiebreak). */
+typedef struct sv_bpair { double d2; int hi, wi; } s_sv_bpair;
+static inline int sv_bpair_cmp(const void *A, const void *B)
+{
+    const s_sv_bpair *a = (const s_sv_bpair *)A, *b = (const s_sv_bpair *)B;
+    if (a->d2 != b->d2) return a->d2 < b->d2 ? -1 : 1;
+    if (a->hi != b->hi) return a->hi - b->hi;
+    return a->wi - b->wi;
+}
+
+/* Bridge admissibility: (p,q) = projected (hole vtx hid, ring vtx wid).  It
+ * must hit no blocking edge (every loop edge of the plane + earlier bridges,
+ * minus edges incident to hid/wid) and pass through no other loop vertex. */
+static inline int sv_bridge_ok(int hid, int wid, s_point2d p, s_point2d q,
+                               const int *eu, const int *ev, int ne,
+                               const int *plb, int total,
+                               const s_point *coords, int drop)
+{
+    for (int e = 0; e < ne; e++) {
+        if (eu[e] == hid || ev[e] == hid || eu[e] == wid || ev[e] == wid) continue;
+        if (sv_seg_hits_edge(p, q, surf_proj2d(coords[eu[e]], drop),
+                                   surf_proj2d(coords[ev[e]], drop))) return 0;
+    }
+    for (int j = 0; j < total; j++) {                /* no vertex ON the bridge */
+        int x = plb[j];
+        if (x == hid || x == wid) continue;
+        s_point2d X = surf_proj2d(coords[x], drop);
+        if ((X.x == p.x && X.y == p.y) || (X.x == q.x && X.y == q.y)) continue;
+        if (test_orientation_2d((s_point2d[]){ p, q }, X) == 0 &&
+            sv_between2d(p, q, X)) return 0;
+    }
+    return 1;
+}
+
+static inline int sv_id_count(const int *arr, int n, int id)
+{
+    int c = 0;
+    for (int i = 0; i < n; i++) if (arr[i] == id) c++;
+    return c;
+}
+
+/* Append one final (ear-clippable) loop to the global loop buffers. */
+static inline int sv_append_loop(const int *loop, int n, s_dynarray *lbuf_da,
+                                 s_dynarray *loff_da, int *nloops)
+{
+    for (int j = 0; j < n; j++) if (!dynarray_push(lbuf_da, &loop[j])) return -1;
+    int off = (int)lbuf_da->N;
+    if (!dynarray_push(loff_da, &off)) return -1;
+    (*nloops)++;
+    return 0;
+}
+
+/* Classify one plane's traced loops by nesting and emit ear-clippable rings:
+ * loops wound WITH the net region orientation are outers, opposite ones are
+ * holes; each hole is keyhole-merged into its smallest containing outer.  A
+ * hole with no containing outer or no admissible bridge is emitted verbatim
+ * (the pre-fix behaviour: it double-covers) with a warning.  plb/plo hold
+ * the plane's loops (plo[0] = 0, loop i = plb[plo[i]..plo[i+1])), pn >= 1.
+ * Returns 0 OK, -1 alloc error. */
+static inline int sv_emit_plane_loops(const s_point *coords, int drop,
+                                      const int *plb, const int *plo, int pn,
+                                      s_dynarray *lbuf_da, s_dynarray *loff_da,
+                                      int *nloops, int cell_seed)
+{
+    if (pn <= 0) return 0;
+    if (pn == 1)                                     /* the common case */
+        return sv_append_loop(plb, plo[1], lbuf_da, loff_da, nloops);
+
+    int total = plo[pn];
+    double *a2 = (double *)malloc(sizeof(double) * pn);
+    int *parent = (int *)malloc(sizeof(int) * pn);
+    if (!a2 || !parent) { free(a2); free(parent); return -1; }
+    double asum = 0;
+    for (int i = 0; i < pn; i++) {
+        a2[i] = sv_loop_area2(coords, plb + plo[i], plo[i+1] - plo[i], drop);
+        asum += a2[i];
+    }
+    int S = (asum > 0) - (asum < 0);
+    int nholes = 0;
+    for (int i = 0; i < pn; i++) {
+        parent[i] = -1;
+        if (S && a2[i] * S < 0) nholes++;
+    }
+    if (nholes == 0) {                               /* disjoint facets only */
+        int rc = 0;
+        for (int i = 0; i < pn && rc == 0; i++)
+            rc = sv_append_loop(plb + plo[i], plo[i+1] - plo[i], lbuf_da, loff_da, nloops);
+        free(a2); free(parent);
+        return rc;
+    }
+
+    /* parent of each hole = smallest-|area| outer loop containing it */
+    for (int i = 0; i < pn; i++) {
+        if (a2[i] * S >= 0) continue;
+        s_point2d p = surf_proj2d(coords[plb[plo[i]]], drop);
+        for (int o = 0; o < pn; o++) {
+            if (o == i || a2[o] * S <= 0) continue;
+            if (!sv_point_in_loop(p, coords, plb + plo[o], plo[o+1] - plo[o], drop)) continue;
+            if (parent[i] < 0 || fabs(a2[o]) < fabs(a2[parent[i]])) parent[i] = o;
+        }
+        if (parent[i] < 0)
+            fprintf(stderr, "sv_emit_plane_loops: cell %d hole loop without a "
+                            "containing outer loop (emitted uncut)\n", cell_seed);
+    }
+
+    int *eu = (int *)malloc(sizeof(int) * (total + nholes));   /* blocking edges */
+    int *ev = (int *)malloc(sizeof(int) * (total + nholes));
+    int *ring = (int *)malloc(sizeof(int) * (total + 2 * nholes));
+    if (!eu || !ev || !ring) {
+        free(a2); free(parent); free(eu); free(ev); free(ring); return -1;
+    }
+    int ne = 0;
+    for (int i = 0; i < pn; i++)
+        for (int j = plo[i]; j < plo[i+1]; j++) {
+            eu[ne] = plb[j];
+            ev[ne] = plb[(j + 1 < plo[i+1]) ? j + 1 : plo[i]];
+            ne++;
+        }
+
+    int rc = 0;
+    for (int o = 0; o < pn && rc == 0; o++) {        /* holes ride with their outer */
+        if (a2[o] * S < 0) continue;
+        int rn = plo[o+1] - plo[o];
+        memcpy(ring, plb + plo[o], sizeof(int) * rn);
+        for (int h = 0; h < pn && rc == 0; h++) {
+            if (parent[h] != o) continue;
+            const int *hl = plb + plo[h];
+            int hn = plo[h+1] - plo[h];
+            /* nearest admissible (hole vtx, ring vtx) pair; previously used
+             * bridge endpoints (duplicated in ring) and pinch-repeated
+             * vertices are skipped so the splice position is unambiguous */
+            s_sv_bpair *pair = (s_sv_bpair *)malloc(sizeof(s_sv_bpair) * (size_t)hn * rn);
+            if (!pair) { rc = -1; break; }
+            int np = 0;
+            for (int i = 0; i < hn; i++) {
+                if (sv_id_count(hl, hn, hl[i]) > 1) continue;
+                s_point2d p = surf_proj2d(coords[hl[i]], drop);
+                for (int j = 0; j < rn; j++) {
+                    if (ring[j] == hl[i] || sv_id_count(ring, rn, ring[j]) > 1) continue;
+                    s_point2d q = surf_proj2d(coords[ring[j]], drop);
+                    if (p.x == q.x && p.y == q.y) continue;
+                    double dx = q.x - p.x, dy = q.y - p.y;
+                    pair[np++] = (s_sv_bpair){ dx*dx + dy*dy, i, j };
+                }
+            }
+            qsort(pair, np, sizeof(s_sv_bpair), sv_bpair_cmp);
+            int found = -1;
+            for (int k = 0; k < np; k++) {
+                s_point2d p = surf_proj2d(coords[hl[pair[k].hi]], drop);
+                s_point2d q = surf_proj2d(coords[ring[pair[k].wi]], drop);
+                if (sv_bridge_ok(hl[pair[k].hi], ring[pair[k].wi], p, q,
+                                 eu, ev, ne, plb, total, coords, drop)) { found = k; break; }
+            }
+            if (found < 0) {
+                fprintf(stderr, "sv_emit_plane_loops: cell %d no admissible bridge "
+                                "for a hole loop (emitted uncut)\n", cell_seed);
+                rc = sv_append_loop(hl, hn, lbuf_da, loff_da, nloops);
+                free(pair);
+                continue;
+            }
+            int hpos = pair[found].hi, iw = pair[found].wi;
+            int hid = hl[hpos], wid = ring[iw];
+            free(pair);
+            /* splice: ... w, h, hole in stored (reverse) winding, h, w, ... */
+            memmove(ring + iw + hn + 3, ring + iw + 1, sizeof(int) * (rn - iw - 1));
+            for (int k = 0; k < hn; k++) ring[iw + 1 + k] = hl[(hpos + k) % hn];
+            ring[iw + 1 + hn] = hid;
+            ring[iw + 2 + hn] = wid;
+            rn += hn + 2;
+            eu[ne] = hid; ev[ne] = wid; ne++;        /* later bridges must clear it */
+        }
+        if (rc == 0) rc = sv_append_loop(ring, rn, lbuf_da, loff_da, nloops);
+    }
+    for (int h = 0; h < pn && rc == 0; h++)          /* orphan holes: verbatim */
+        if (a2[h] * S < 0 && parent[h] < 0)
+            rc = sv_append_loop(plb + plo[h], plo[h+1] - plo[h], lbuf_da, loff_da, nloops);
+
+    free(a2); free(parent); free(eu); free(ev); free(ring);
     return rc;
 }
 
@@ -1000,12 +1279,16 @@ weld_done: ;
     for (size_t i = 0; i < nsurv; i++) mtot += (size_t)(edges[i].net > 0 ? edges[i].net : -edges[i].net);
     s_dynarray lbuf_da = dynarray_initialize(sizeof(int), 256);
     s_dynarray loff_da = dynarray_initialize(sizeof(int), 64);
+    s_dynarray plb_da  = dynarray_initialize(sizeof(int), 256);   /* one plane's raw loops */
+    s_dynarray plo_da  = dynarray_initialize(sizeof(int), 16);
     int  *deu   = (int *)malloc(sizeof(int) * (mtot ? mtot : 1));
     int  *dev   = (int *)malloc(sizeof(int) * (mtot ? mtot : 1));
     char *dused = (char *)calloc(mtot ? mtot : 1, 1);
     int  *tmp   = (int *)malloc(sizeof(int) * (mtot + 1));
-    if (!lbuf_da.items || !loff_da.items || !deu || !dev || !dused || !tmp) {
+    if (!lbuf_da.items || !loff_da.items || !plb_da.items || !plo_da.items ||
+        !deu || !dev || !dused || !tmp) {
         dynarray_free(&lbuf_da); dynarray_free(&loff_da);
+        dynarray_free(&plb_da); dynarray_free(&plo_da);
         free(deu); free(dev); free(dused); free(tmp); free(edges); free(coords); return -1;
     }
     int nloops = 0, zero = 0;
@@ -1025,6 +1308,9 @@ weld_done: ;
         }
         s_point nrm = sv_plane_nrm(edges[b].plane, seeds, cverts);
         int drop = coord_with_largest_component_3D(nrm);
+        dynarray_clear(&plb_da); dynarray_clear(&plo_da);
+        int pl_n = 0;
+        if (!dynarray_push(&plo_da, &zero)) err = 1;
         for (size_t st = m0; st < md && !err; st++) {
             if (dused[st]) continue;
             int len = 0, closed = 0;
@@ -1053,14 +1339,21 @@ weld_done: ;
                 cur = best;
             }
             if (!closed || len < 3) continue;             /* len<3: degenerate sliver */
-            for (int j = 0; j < len && !err; j++) if (!dynarray_push(&lbuf_da, &tmp[j])) err = 1;
-            int off = (int)lbuf_da.N;
-            if (!err && !dynarray_push(&loff_da, &off)) err = 1;
-            if (!err) nloops++;
+            for (int j = 0; j < len && !err; j++) if (!dynarray_push(&plb_da, &tmp[j])) err = 1;
+            int off = (int)plb_da.N;
+            if (!err && !dynarray_push(&plo_da, &off)) err = 1;
+            if (!err) pl_n++;
         }
+        /* Nested loops (a facet with holes) become keyhole-merged rings here;
+         * the single-loop common case passes through untouched. */
+        if (!err && pl_n > 0 &&
+            sv_emit_plane_loops(coords, drop, (const int *)plb_da.items,
+                                (const int *)plo_da.items, pl_n,
+                                &lbuf_da, &loff_da, &nloops, cell_seed) < 0) err = 1;
         b = e;
     }
     free(deu); free(dev); free(dused); free(tmp); free(edges);
+    dynarray_free(&plb_da); dynarray_free(&plo_da);
     if (err) { dynarray_free(&lbuf_da); dynarray_free(&loff_da); free(coords); return -1; }
 
     int *lbuf = (int *)lbuf_da.items;
