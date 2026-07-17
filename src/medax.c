@@ -65,7 +65,8 @@
 static const double MEDAX_SQRT3 = 1.7320508075688772;
 
 /* ----- internal surface-sample bundle (Step 2 output) --------------------- */
-/* samples: mesh vertices [0..Nv) ++ scattered face points [Nv..N).
+/* samples: mesh vertices [0..Nv) ++ scattered face points [Nv..N); the scatter
+ * range is Morton-sorted at generation time (see build_samples).
  * un_off/un: CSR of per-sample UNIT umbrella normals.
  * R_uniform: local size (== r_sample) for the uniform-scatter case;
  * R: per-sample local size, non-NULL only in the r_sample<=0 (vertices-only)
@@ -224,6 +225,33 @@ static s_medax_samples build_samples(const s_trimesh *mesh, double r_sample,
     int Nscat = (int)scat.N;
     int N = Nv + Nscat;
 
+    /* Morton-sort the scatter round BEFORE anything derives from its order, so
+     * the whole bundle (coords, umbrella CSR) is assembled in sorted order by
+     * construction -- consecutive DT insertions are then spatially adjacent
+     * and the walk hint locates them in O(1) (MEDAX_SPEEDUP_PLAN.md Fix 2).
+     * Only the scatter round is sorted: the mesh vertices [0..Nv) stay first
+     * as a coarse scaffold of the whole surface (BRIO rounds).  Sorting ALL
+     * samples globally measurably REGRESSED the sample DT (0.36s -> 0.65s on
+     * the lobe): clustered insertion leaves giant tets over unvisited regions
+     * and later clusters pay large flip cascades there.  Deterministic (pure
+     * function of coordinates); on allocation failure the scatter keeps its
+     * face-by-face order, which is valid (just less local). */
+    if (Nscat > 1) {
+        s_scatpt *sp   = (s_scatpt *)scat.items;
+        int      *perm = malloc(sizeof(int) * (size_t)Nscat);
+        s_point  *crd  = malloc(sizeof(s_point) * (size_t)Nscat);
+        s_scatpt *srt  = malloc(sizeof(s_scatpt) * (size_t)Nscat);
+        if (perm && crd && srt) {
+            for (int j = 0; j < Nscat; j++) crd[j] = sp[j].p;
+            s_points cloud = { .N = Nscat, .p = crd };
+            if (points_morton_permutation(&cloud, perm)) {
+                for (int j = 0; j < Nscat; j++) srt[j] = sp[perm[j]];
+                memcpy(sp, srt, sizeof(s_scatpt) * (size_t)Nscat);
+            }
+        }
+        free(perm); free(crd); free(srt);
+    }
+
     /* per-vertex incident-face count (valid faces only), for the umbrella CSR */
     int *deg = calloc((size_t)Nv, sizeof(int));
     out.un_off = malloc(sizeof(int) * (size_t)(N + 1));
@@ -309,8 +337,13 @@ fail:
  * closed trimesh; benchmarked at 20000/20000 agreement with the CDT oracle
  * wherever the latter builds, at comparable total cost for medax-scale query
  * counts (tests/bench_inside.c). */
-static int mesh_inside(const s_trimesh *mesh, s_point p)
+/* grid: inside-classification cache over the winding number (exact agreement
+ * by construction; surface-adjacent voxels fall back to the winding sum).
+ * NULL = plain winding (build failure, or MEDAX_NOGRID=1 for A/B timing). */
+static int mesh_inside(const s_trimesh *mesh, const s_trimesh_inside_grid *grid,
+                       s_point p)
 {
+    if (grid) return point_in_trimesh_grid(grid, mesh, p);
     return point_in_trimesh_winding(mesh, p);
 }
 
@@ -363,7 +396,9 @@ typedef struct edge_counts {
  * the edge midpoint against the cell surface (winding number). Returns 0 on
  * error. */
 static int build_selected_edges(const s_scplx *dt, const s_medax_samples *S,
-                                const s_trimesh *mesh, double theta0, double rho0,
+                                const s_trimesh *mesh,
+                                const s_trimesh_inside_grid *grid,
+                                double theta0, double rho0,
                                 s_hash_table *out, s_edge_counts *cnt)
 {
     size_t expected = (size_t)7 * (size_t)S->samples.N + 16;   /* ~7 edges/vert */
@@ -399,7 +434,7 @@ static int build_selected_edges(const s_scplx *dt, const s_medax_samples *S,
                     s_point m = {{{ (P.x + Q.x) * 0.5,
                                     (P.y + Q.y) * 0.5,
                                     (P.z + Q.z) * 0.5 }}};
-                    if (mesh_inside(mesh, m) == 1) {
+                    if (mesh_inside(mesh, grid, m) == 1) {
                         selected = 1;
                         cnt->selected++;
                     }
@@ -489,6 +524,7 @@ static s_medial_graph *build_medgraph(const s_scplx *dt, s_hash_table *tet2node,
  * point per tet, auto-deduplicated). If build_graph, also build the medial
  * graph over the emitted points. */
 static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
+                          const s_trimesh_inside_grid *grid,
                           s_hash_table *sel, double EPS_DEG, int inside_filter,
                           int build_graph, s_emit_counts *cnt)
 {
@@ -523,7 +559,7 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
         s_point verts[4]; extract_vertices_ncell(dt, c, verts);
         s_point cc;
         if (!circumcentre_tetrahedron(verts, EPS_DEG, &cc)) { cnt->degenerate++; continue; }
-        if (inside_filter && mesh_inside(mesh, cc) != 1) { cnt->outside++; continue; }
+        if (inside_filter && mesh_inside(mesh, grid, cc) != 1) { cnt->outside++; continue; }
 
         double r = vnorm(vsub(cc, verts[0]));   /* all 4 verts equidistant */
         int node = (int)pts.N;
@@ -599,14 +635,23 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     MEDAX_TICK("sample-DT");
 
     /* Inside/outside oracle: generalized winding number against the input
-     * surface itself (see mesh_inside).  No construction step, no failure
-     * mode -- works for arbitrarily degenerate valid cell surfaces where the
-     * former domain-CDT oracle could fail. */
+     * surface itself (see mesh_inside), cached in a classification grid --
+     * O(1) per query away from the surface, exact winding fallback in
+     * surface-adjacent voxels.  No construction step that can fail: if the
+     * grid build fails (or MEDAX_NOGRID is set) every query just runs the
+     * plain winding sum. */
+    s_trimesh_inside_grid grid;
+    const s_trimesh_inside_grid *gp = NULL;
+    if (!getenv("MEDAX_NOGRID") &&
+        trimesh_inside_grid_build(mesh, 128, &grid))
+        gp = &grid;
+    MEDAX_TICK("grid");
 
     /* Step 3: enumerate + filter Delaunay edges (angle/ratio/inner) */
     s_hash_table sel_edges;
     s_edge_counts cnt;
-    if (!build_selected_edges(&dt, &S, mesh, theta0, rho0, &sel_edges, &cnt)) {
+    if (!build_selected_edges(&dt, &S, mesh, gp, theta0, rho0, &sel_edges, &cnt)) {
+        if (gp) trimesh_inside_grid_free(&grid);
         free_complex(&dt);
         free_samples(&S);
         return medax_NAN;
@@ -619,8 +664,9 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     /* Step 4 (+5): emit circumcenters of tets touching a selected edge, and
      * optionally the medial graph over them. */
     s_emit_counts ec;
-    s_medax ma = emit_medax(&dt, mesh, &sel_edges, EPS_DEG, /*inside_filter=*/1,
+    s_medax ma = emit_medax(&dt, mesh, gp, &sel_edges, EPS_DEG, /*inside_filter=*/1,
                             build_graph, &ec);
+    if (gp) trimesh_inside_grid_free(&grid);
     if (build_graph)
         fprintf(stderr, "[medax] Step 4-5 OK: points=%ld edges=%ld (skipped "
                         "degenerate=%ld, outside=%ld).\n",

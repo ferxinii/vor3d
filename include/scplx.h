@@ -12,6 +12,11 @@ typedef struct simplical_complex {  // May in stack
     int mark_stamp;
     int walk_stamp;      // in_ncell_walk loop-detection stamp; independent of mark_stamp
                          // so the walk never collides with CDT/other mark_token users.
+    int walk_hint_vid;   // vertex id near the last successful walk's result; the next
+                         // walk starts at point2tet[walk_hint_vid] instead of a random
+                         // tet (O(1) hops for spatially coherent insertions/queries).
+                         // Any start tet is valid, so a stale hint (post-compaction id
+                         // reuse) is harmless; out-of-range/NULL falls back to random.
     struct ncell **point2tet;  // [v] = one tet containing vertex v; NULL if unused
     int exact_ids;  // 0 = coordinate predicates (default); 1 = cdt_predicates by vertex id.
                     // Set only for CDT builds (see dt_predseam.h); must be zero for weighted.

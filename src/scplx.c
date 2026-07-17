@@ -484,13 +484,17 @@ static void random_order_04(int out[4])
  * and uses coordinate orientation (Voronoi callers, always exact_ids==0).  The
  * two are bit-identical when scplx->exact_ids == 0.  The o1 (opposite-vertex)
  * test is always a vertex, so it always goes through the seam by id. */
-static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id)
+static s_ncell *in_ncell_walk_core(const s_scplx *scplx, s_point p, int query_id)
 {
     // return bruteforce_find_ncell_containing(scplx, p);
 
     assert(scplx->N_ncells >= 1 && "N_ncells < 1");
     s_ncell *current = scplx->head;
-    if (scplx->point2tet) {
+    int hint = scplx->walk_hint_vid;
+    if (scplx->point2tet && hint >= 0 && hint < scplx->points.N &&
+        scplx->point2tet[hint]) {
+        current = scplx->point2tet[hint];
+    } else if (scplx->point2tet) {
         int randi = rand() % scplx->points.N;
         for (int ii = 0; ii < scplx->points.N; ii++) {
             int idx = (randi + ii) % scplx->points.N;
@@ -575,6 +579,20 @@ static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id
     }
 
     return current;
+}
+
+/* Wrapper: run the walk, then remember where it ended (by VERTEX id, never by
+ * tet pointer -- flips free tets, but point2tet is maintained through every
+ * flip) so the next walk starts there.  Consecutive spatially coherent queries
+ * (BRIO-style insertion, per-vertex owner scans) then walk O(1) tets instead
+ * of O(n^1/3) from a random start.  The stamp is mutable scratch on a
+ * logically-const complex, same pattern as walk_stamp above. */
+static s_ncell *in_ncell_walk_impl(const s_scplx *scplx, s_point p, int query_id)
+{
+    s_ncell *res = in_ncell_walk_core(scplx, p, query_id);
+    if (res)
+        ((s_scplx *)scplx)->walk_hint_vid = res->vertex_id[0];
+    return res;
 }
 
 s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p)
