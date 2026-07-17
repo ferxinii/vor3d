@@ -83,6 +83,12 @@ static double cayley_menger_det(s_tetra_lengths in)
 static s_tetra_dihedral dihedral_angles_from_lengths(s_tetra_lengths in)
 {
     double M_2 = 2 * cayley_menger_det(in);
+    /* M is >= 0 for realizable tetrahedra; near-degenerate configs (e.g. a
+     * barely-intersecting ball triple) can round it to a tiny negative, and
+     * sqrt(M_2*...) would then poison every angle (and the whole contribution
+     * vector) with NaN.  Clamp: the exact limit of the angles is atan2(0, Mij)
+     * = 0 or pi, which the clamped value reproduces. */
+    if (M_2 < 0) M_2 = 0;
     double M12 = abs_cayley_menger_minor(in, CM_M12);
     double M13 = abs_cayley_menger_minor(in, CM_M13);
     double M14 = abs_cayley_menger_minor(in, CM_M14);
@@ -291,6 +297,148 @@ static void caps_intersection_3_spheres(double rA, double rB, double rC,
     out_cap[2] = 1.0/3.0 * (rC*sC - lCA*D_CA - lCB*D_CB);
 }
 
+/* RADICAL-STRUCTURE PRIMITIVES (first-order conditioned) -----------------
+ * Used by the quad-form K-tet split and the coordinate-based 3-ball caps.
+ * The lengths/Cayley-Menger route squares the conditioning: two centers at
+ * relative distance d/r cost (r/d)^2 amplification, so near-duplicate medial
+ * balls (d/r ~ 1e-6) hit the double-precision floor.  Working from center
+ * COORDINATES with the bases below keeps everything first order (r/d).
+ * See VOLSPH_SPLIT_PLAN.md. */
+
+/* In-plane radical center of three balls (the equal-power point in the plane
+ * of the centers; w = r^2).  Solved in the basis {offset of the CLOSEST
+ * center pair, a well-separated difference}; the close pair's rhs uses
+ * |c|^2 - |b|^2 = (c-b).(c+b) to avoid the large cancellation.  Returns false
+ * only for (near-)collinear centers. */
+static bool radical_center_face(s_point A, s_point B, s_point C,
+                                double wA, double wB, double wC,
+                                s_point *out)
+{
+    s_point b = subtract_points(B, A);
+    s_point c = subtract_points(C, A);
+    s_point e = subtract_points(c, b);          /* C - B */
+    double d2ab = dot_prod(b, b);
+    double d2ac = dot_prod(c, c);
+    double d2bc = dot_prod(e, e);
+
+    s_point u, v; double gu, gv;
+    if (d2bc <= d2ab && d2bc <= d2ac) {          /* B,C closest */
+        u = e;  gu = 0.5*(dot_prod(u, sum_points(b, c)) - (wC - wB));
+        v = b;  gv = 0.5*(d2ab - (wB - wA));
+    } else if (d2ab <= d2ac) {                   /* A,B closest */
+        u = b;  gu = 0.5*(d2ab - (wB - wA));
+        v = c;  gv = 0.5*(d2ac - (wC - wA));
+    } else {                                     /* A,C closest */
+        u = c;  gu = 0.5*(d2ac - (wC - wA));
+        v = b;  gv = 0.5*(d2ab - (wB - wA));
+    }
+    double uu = dot_prod(u,u), uv = dot_prod(u,v), vv = dot_prod(v,v);
+    double det = uu*vv - uv*uv;
+    if (det <= 0.0) return false;
+    double al = (gu*vv - gv*uv)/det;
+    double be = (gv*uu - gu*uv)/det;
+    *out = sum_points(A, sum_points(scale_point(u, al), scale_point(v, be)));
+    return true;
+}
+
+/* Radical center (equal-power point) of four balls: 3x3 solve with rows
+ * 2(c_k - c_0), rhs (c_k - c_0).(c_k + c_0) - (w_k - w_0); rows scaled to
+ * unit norm before partial pivoting.  For K-tets |Y - c_i| <= r_i (the in-K
+ * condition), so Y is always local to the balls.  Returns false for
+ * (near-)coplanar centers. */
+static bool radical_center_tet(const s_point c[4], const double w[4], s_point *out)
+{
+    double A[3][4];
+    for (int k = 1; k <= 3; k++) {
+        s_point dk = subtract_points(c[k], c[0]);
+        s_point sk = sum_points(c[k], c[0]);
+        A[k-1][0] = 2*dk.x; A[k-1][1] = 2*dk.y; A[k-1][2] = 2*dk.z;
+        A[k-1][3] = dot_prod(dk, sk) - (w[k] - w[0]);
+        double n = sqrt(A[k-1][0]*A[k-1][0] + A[k-1][1]*A[k-1][1] + A[k-1][2]*A[k-1][2]);
+        if (n == 0.0) return false;
+        for (int j = 0; j < 4; j++) A[k-1][j] /= n;
+    }
+    for (int col = 0; col < 3; col++) {
+        int piv = col;
+        for (int r_ = col+1; r_ < 3; r_++)
+            if (fabs(A[r_][col]) > fabs(A[piv][col])) piv = r_;
+        if (piv != col)
+            for (int j = 0; j < 4; j++) { double t = A[col][j]; A[col][j] = A[piv][j]; A[piv][j] = t; }
+        if (A[col][col] == 0.0) return false;
+        for (int r_ = 0; r_ < 3; r_++) {
+            if (r_ == col) continue;
+            double f = A[r_][col]/A[col][col];
+            for (int j = col; j < 4; j++) A[r_][j] -= f*A[col][j];
+        }
+    }
+    out->x = A[0][3]/A[0][0];
+    out->y = A[1][3]/A[1][1];
+    out->z = A[2][3]/A[2][2];
+    return true;
+}
+
+/* Triple-intersection point P of three spheres (above the centers plane).
+ * Returns false if the centers are (near-)collinear. */
+static bool triple_point_xyz(s_point A, s_point B, s_point C,
+                             double rA, double rB, double rC, s_point *out_P)
+{
+    double wA = rA*rA, wB = rB*rB, wC = rC*rC;
+    s_point X;
+    if (!radical_center_face(A, B, C, wA, wB, wC, &X)) return false;
+    s_point b = subtract_points(B, A), c = subtract_points(C, A);
+    s_point n = cross_prod(b, c);
+    double nn = norm(n);
+    if (nn == 0.0) return false;
+    s_point xa = subtract_points(X, A);
+    double h2 = wA - dot_prod(xa, xa);
+    double h = h2 > 0.0 ? sqrt(h2) : 0.0;
+    *out_P = sum_points(X, scale_point(n, h/nn));
+    return true;
+}
+
+/* Per-ball caps of the triple intersection from center COORDINATES: same
+ * assembly as caps_intersection_3_spheres, but the virtual tetrahedron
+ * {A, B, C, P} is built explicitly and its dihedrals taken from vertices
+ * (projection route): first-order conditioning.  Falls back to the lengths
+ * route on collinear centers. */
+static void caps_intersection_3_spheres_xyz(s_point A, s_point B, s_point C,
+                                            double rA, double rB, double rC,
+                                            double EPS_DEGEN, double out_cap[3])
+{
+    double dAB = distance(A, B), dAC = distance(A, C), dBC = distance(B, C);
+    s_point P;
+    if (!triple_point_xyz(A, B, C, rA, rB, rC, &P)) {
+        caps_intersection_3_spheres(rA, rB, rC, dAB, dAC, dBC, out_cap);
+        return;
+    }
+    s_point tet[4] = {A, B, C, P};
+    s_tetra_dihedral th = dihedral_angles_from_vertices(tet, EPS_DEGEN);
+
+    double rA_2 = rA*rA, rB_2 = rB*rB, rC_2 = rC*rC;
+    double lAB = distance_radical_plane(rA_2, rB_2, dAB);
+    double lAC = distance_radical_plane(rA_2, rC_2, dAC);
+    double lBC = distance_radical_plane(rB_2, rC_2, dBC);
+    double lBA = dAB - lAB;
+    double lCA = dAC - lAC;
+    double lCB = dBC - lBC;
+
+    double sA = vol3_area_si(rA, lAB, lAC, th.th12, th.th13, th.th14);
+    double D_AB = vol3_area_Dij(rA_2, lAB*lAB, th.th12);
+    double D_AC = vol3_area_Dij(rA_2, lAC*lAC, th.th13);
+    out_cap[0] = 1.0/3.0 * (rA*sA - lAB*D_AB - lAC*D_AC);
+
+    double sB = vol3_area_si(rB, lBA, lBC, th.th12, th.th23, th.th24);
+    double D_BA = vol3_area_Dij(rB_2, lBA*lBA, th.th12);
+    double D_BC = vol3_area_Dij(rB_2, lBC*lBC, th.th23);
+    out_cap[1] = 1.0/3.0 * (rB*sB - lBA*D_BA - lBC*D_BC);
+
+    double sC = vol3_area_si(rC, lCA, lCB, th.th13, th.th23, th.th34);
+    double D_CA = vol3_area_Dij(rC_2, lCA*lCA, th.th13);
+    double D_CB = vol3_area_Dij(rC_2, lCB*lCB, th.th23);
+    out_cap[2] = 1.0/3.0 * (rC*sC - lCA*D_CA - lCB*D_CB);
+}
+
+
 double volume_intersection_3_spheres(double rA, double rB, double rC, double dAB, double dAC, double dBC,
                                      bool check_intersection, double EPS_DEGEN)
 {
@@ -397,55 +545,87 @@ static inline void sort2(int *a)
 
 /* PER-BALL K-TET SPLIT (power / Laguerre partition of a tetrahedron) */
 
-/* Virtual dihedral at edge (i,m) of the 3-ball tet {c[i],c[m],c[e],P}, where P
- * is either point of the (S_i cap S_m cap S_e) intersection -- the SAME angle
- * the 3-ball intersection volume uses (distinct from the real center-tet
- * dihedral phi).  d[.][.] are center distances. */
-static double virtual_dihedral_edge(const double r[4], double d[4][4],
-                                    int i, int m, int e)
-{
-    s_tetra_lengths L = tetra_lengths_from_3_spheres(r[i], r[m], r[e],
-                            d[i][m], d[i][e], d[m][e]);
-    return dihedral_angles_from_lengths(L).th12;   /* th12 == edge (i,m) */
-}
-
-/* Split a K-tetrahedron's volume among its 4 balls by the power partition:
- * out_F[i] = vol F_{i;jkl} (Mach 2011 A.16 / SI Koehl S.16).  Within ball i's
- * term for neighbour m, all angles are on edge (i,m): the two VIRTUAL dihedrals
- * theta[i][m][a], theta[i][m][b] (a,b the other two vertices) and the REAL
- * dihedral phi[i][m].  Guarantees sum_i out_F[i] == fabs(signed_volume_tetra(c))
- * (identity A.26).  Individual out_F[i] MAY be negative (orthocenter outside the
- * tet) -- do NOT clamp; only the sum is guaranteed positive.  sin(phi) is safe
- * for non-degenerate tets (dihedral in (0,pi)); the caller guards
- * nc_vol > EPS_DEGEN. */
+/* Split a K-tetrahedron's volume among its 4 balls by the power partition
+ * (Mach 2011 A.16 / SI Koehl S.16), in the trig-free "QUAD FORM" (derivation:
+ * VOLSPH_SPLIT_PLAN.md).  A.16's pair term is exactly a pyramid over the
+ * planar quadrilateral (E, X1, Y, X2) of radical points in the (i,m) radical
+ * plane:
+ *
+ *   F_i = sum_m (1/3) * lam_im * S_im
+ *   S_im = sgn * 1/2 * [ (X1-E) x (Y-E) + (Y-E) x (X2-E) ] . ehat
+ *
+ * with E = c_i + lam*ehat (edge radical point), X1/X2 = radical centers of
+ * the two faces through edge (i,m), Y = radical center of the four balls,
+ * and sgn = orientation of the tet's interior wedge at the edge.  This is
+ * algebraically identical to the trigonometric A.16 (verified to 1e-51 in
+ * 50-digit arithmetic) but has NO 1/sin(phi) division and NO Cayley-Menger
+ * angles, so it stays first-order stable on needle tets over near-duplicate
+ * balls (float64 errors ~1e-9 where the trig form lost everything) -- which
+ * is what allows the caller to split EVERY K-tet, including near-flat ones
+ * whose signed pieces are large and load-bearing.
+ *
+ * Guarantees sum_i out_F[i] == fabs(signed_volume_tetra(c)) (identity A.26).
+ * Individual out_F[i] MAY be negative and may exceed vol(tet): they are a
+ * signed decomposition, not per-tet cell volumes -- do NOT clamp; only the
+ * per-ball totals across the whole complex are volumes.  Degenerate radical
+ * solves (exactly collinear/coplanar centers, measure zero) fall back to an
+ * even split of the tet volume. */
 static void tet_volume_split_power(const s_point c[4], const double r[4],
                                    double EPS_DEGEN, double out_F[4])
 {
-    double d[4][4] = {{0}};
-    for (int a = 0; a < 4; a++)
-        for (int b = a+1; b < 4; b++) {
-            double dab = distance(c[a], c[b]);
-            d[a][b] = dab; d[b][a] = dab;
-        }
+    (void)EPS_DEGEN;
+    double w[4];
+    for (int i = 0; i < 4; i++) w[i] = r[i]*r[i];
 
-    s_tetra_dihedral phi = dihedral_angles_from_vertices(c, EPS_DEGEN);
+    s_point Y;
+    s_point X[4];   /* X[k] = radical center of the face OMITTING vertex k */
+    bool ok = radical_center_tet(c, w, &Y);
+    for (int k = 0; ok && k < 4; k++) {
+        int f[3], n = 0;
+        for (int t = 0; t < 4; t++) if (t != k) f[n++] = t;
+        ok = radical_center_face(c[f[0]], c[f[1]], c[f[2]],
+                                 w[f[0]], w[f[1]], w[f[2]], &X[k]);
+    }
+    for (int a = 0; ok && a < 4; a++)
+        for (int b = a+1; b < 4; b++)
+            if (distance(c[a], c[b]) <= 0.0) ok = false;
+    if (!ok) {
+        double vol = fabs(signed_volume_tetra(c));
+        for (int i = 0; i < 4; i++) out_F[i] = 0.25*vol;
+        return;
+    }
 
+    for (int i = 0; i < 4; i++) out_F[i] = 0.0;
     for (int i = 0; i < 4; i++) {
-        double Fi = 0.0;
         for (int m = 0; m < 4; m++) {
             if (m == i) continue;
             int rest[2], k = 0;
             for (int t = 0; t < 4; t++) if (t != i && t != m) rest[k++] = t;
+            int e1 = rest[0], e2 = rest[1];
 
-            double lam = distance_radical_plane(r[i]*r[i], r[m]*r[m], d[i][m]);
-            double rdisk2 = r[i]*r[i] - lam*lam;
-            double ca = cos(virtual_dihedral_edge(r, d, i, m, rest[0]));
-            double cb = cos(virtual_dihedral_edge(r, d, i, m, rest[1]));
-            double ph = dihedral_from_edge_ids(&phi, i, m);
-            Fi += (1.0/6.0) * lam * rdisk2
-                  * (2*ca*cb - (ca*ca + cb*cb)*cos(ph)) / sin(ph);
+            s_point dv = subtract_points(c[m], c[i]);
+            double d = norm(dv);
+            s_point eh = scale_point(dv, 1.0/d);
+            double lam = distance_radical_plane(w[i], w[m], d);
+            s_point E = sum_points(c[i], scale_point(eh, lam));
+
+            /* interior trace directions: in-plane components of c_e - E
+             * (only their orientation is used; no normalization needed) */
+            s_point t1 = subtract_points(c[e1], E);
+            t1 = subtract_points(t1, scale_point(eh, dot_prod(t1, eh)));
+            s_point t2 = subtract_points(c[e2], E);
+            t2 = subtract_points(t2, scale_point(eh, dot_prod(t2, eh)));
+            double sg = dot_prod(cross_prod(t1, t2), eh);
+            double sgn = (sg > 0.0) ? 1.0 : (sg < 0.0) ? -1.0 : 0.0;
+
+            /* face (i,m,e1) omits e2 -> its radical center is X[e2]; likewise */
+            s_point q1 = subtract_points(X[e2], E);
+            s_point q2 = subtract_points(X[e1], E);
+            s_point yy = subtract_points(Y, E);
+            double S = 0.5 * sgn * ( dot_prod(cross_prod(q1, yy), eh)
+                                   + dot_prod(cross_prod(yy, q2), eh) );
+            out_F[i] += lam * S / 3.0;
         }
-        out_F[i] = Fi;
     }
 }
 
@@ -487,12 +667,21 @@ static double union_core(const s_points *centers, const double radii[],
     extract_alpha_complex(&dt, true, 0, buff_ncellPTR,
                           &ht_faces, &ht_edges, vertex_mark);
 
-    /* Compute volume of union */
+    /* Compute volume of union.  Degenerate (near-zero-volume) tets MUST be
+     * processed IN FULL: the formula distributes each lens/ball among incident
+     * tets by dihedral/solid angle, and on coplanar-heavy inputs (e.g.
+     * medial-ball centers) flat tets carry real angle shares -- skipping them
+     * breaks the 2*pi/4*pi closure and once produced a NEGATIVE union volume
+     * (repro_volsph_negative/, bug 1).  The same holds for the per-ball power
+     * SPLIT of flat K-tets: their signed A.16 pieces do NOT vanish with the
+     * tet volume (for nested/near-duplicate ball pairs they are O(lam*rdisk^2)
+     * and load-bearing; skipping them produced negative per-ball contributions,
+     * bug 3).  The quad-form split is stable on such tets, so nothing is
+     * guarded by EPS_DEGEN here anymore. */
     double vol = 0.0;
     for (s_ncell *nc = dt.head; nc; nc = nc->next) {
         s_point p[4];  extract_vertices_ncell(&dt, nc, p);
         double nc_vol = fabs(signed_volume_tetra(p));
-        if (nc_vol <= EPS_DEGEN) continue;
 
         /* FIRST SUM: tets in K.  Their 4 vertices are all real balls (a tet
          * touching a sentinel has a huge orthoradius and is never in K). */
@@ -527,10 +716,9 @@ static double union_core(const s_points *centers, const double radii[],
             int ba = ball_of_vid[face[0]], bb = ball_of_vid[face[1]], bc = ball_of_vid[face[2]];
             assert(ba >= 0 && bb >= 0 && bc >= 0);
             double cap3[3];
-            caps_intersection_3_spheres(radii[ba], radii[bb], radii[bc],
-                            distance(dt.points.p[face[0]], dt.points.p[face[1]]),
-                            distance(dt.points.p[face[0]], dt.points.p[face[2]]),
-                            distance(dt.points.p[face[1]], dt.points.p[face[2]]), cap3);
+            caps_intersection_3_spheres_xyz(dt.points.p[face[0]], dt.points.p[face[1]],
+                            dt.points.p[face[2]], radii[ba], radii[bb], radii[bc],
+                            EPS_DEGEN, cap3);
             vol += 0.5 * (cap3[0] + cap3[1] + cap3[2]);
             if (out_contrib) {
                 out_contrib[ba] += 0.5 * cap3[0];
@@ -686,4 +874,3 @@ void volume_contribution_spheres(const s_points *centers, const double radii[cen
      * sum_i out_contrib[i] == volume_union_spheres total. */
     union_core(centers, radii, EPS_DEGEN, TOL_dup, buff_ncellPTR, out_contrib);
 }
-

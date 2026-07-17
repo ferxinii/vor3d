@@ -68,6 +68,7 @@
 #include "trimesh.h"
 #include "points.h"
 #include "medax.h"
+#include "volsph.h"
 #include "random.h"
 
 static double EPS_DEG = 1e-9;
@@ -264,8 +265,10 @@ static int ex_components(const s_medial_graph *g, int *comp, int *queue, int *la
         if(sz>best){best=sz;root=s;} nc++; }
     *largest=best; return comp[root];
 }
-/* parallel exact center over component lc: argmin_i sum_j r_j^3 d(i,j)^2 */
-static int parallel_exact(const s_medial_graph *g, const double *radius,
+/* parallel exact center over component lc: argmin_i sum_j w_j d(i,j)^2, where
+ * w_j = mass[j] is the same governed-volume weight the library uses (so this
+ * brute force validates the library's descent on the SAME energy). */
+static int parallel_exact(const s_medial_graph *g, const double *mass,
                           const int *comp, int lc, double *out_E)
 {
     int N=g->N, gbest=-1; double gE=INFINITY;
@@ -281,7 +284,7 @@ static int parallel_exact(const s_medial_graph *g, const double *radius,
                 ex_dijkstra(g,i,dist,heap);
                 double e=0.0;
                 for(int j=0;j<N;j++){ if(comp[j]!=lc||dist[j]==INFINITY)continue;
-                    double m=radius[j]; m=m*m*m; e+=m*dist[j]*dist[j]; }
+                    e+=mass[j]*dist[j]*dist[j]; }
                 if(e<lE){ lE=e; lbest=i; }
             }
         }
@@ -318,15 +321,23 @@ static void measure(const s_medax *ma, s_row *row, int validate)
 
     if (validate) {
         int *comp = malloc(sizeof(int)*(size_t)N), *queue = malloc(sizeof(int)*(size_t)N);
-        if (comp && queue && cd >= 0) {
+        /* same governed-volume weight the library uses (see cen_weights): the
+         * per-ball union contribution vol(B_j INTERSECT L_j). NULL buffer ok. */
+        double *mass = malloc(sizeof(double)*(size_t)N);
+        if (comp && queue && mass && cd >= 0) {
+            volume_contribution_spheres(&ma->verts, ma->radius, 1e-10, 1e-9, NULL, mass);
+            /* Use the RAW governed volume (no clamp): now that volsph emits no
+             * negative per-ball contributions, these are exactly the weights the
+             * library's cen_weights uses, so ratio == 1 is a genuine accuracy
+             * check (a leak would resurface as ratio != 1, not be masked). */
             int largest, lc = ex_components(g, comp, queue, &largest);
             double Ex, t0 = omp_get_wtime();
-            int cx = parallel_exact(g, ma->radius, comp, lc, &Ex);
+            int cx = parallel_exact(g, mass, comp, lc, &Ex);
             row->t_exact = omp_get_wtime() - t0;
             row->same    = (cx == cd);
             row->ratio   = (Ex > 0) ? Ed / Ex : 1.0;
         }
-        free(comp); free(queue);
+        free(comp); free(queue); free(mass);
     }
     printf("  [%-6s %-8s] N=%-7d extract=%7.2fs center=%7.3fs exact=%8.2fs  "
            "same=%s ratio=%.6f\n", row->scale, row->shape, row->N, row->t_extract,

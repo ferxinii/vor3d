@@ -75,11 +75,16 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
 void free_medax(s_medax *ma);
 
 /* Canonical center of the medial axis: the volume-weighted geodesic Frechet mean
- * over the medial graph -- argmin_i sum_j r_j^3 * d(i,j)^2 -- restricted to the
- * largest connected component (d = graph shortest-path distance, mass ~ ball
- * volume r_j^3). The result is a medial node, hence interior with clearance
- * ma->radius[node]. Requires ma->graph (build_medial_graph = true). Returns the
- * node index into ma->verts / ma->radius, or -1 on error.
+ * over the medial graph -- argmin_i sum_j w_j * d(i,j)^2 -- restricted to the
+ * largest connected component (d = graph shortest-path distance). The node mass
+ * w_j is the GOVERNED VOLUME of ball j: its per-ball contribution
+ * vol(B_j INTERSECT L_j) to the union of all medial balls (the Laguerre/power
+ * partition, via volume_contribution_spheres), so sum_j w_j == vol(Omega) and
+ * ball overlaps are counted once (MEDIAL_AXIS_BT.md sec.3). If the union
+ * decomposition degenerates, falls back to the ball-volume proxy w_j = r_j^3.
+ * The result is a medial node, hence interior with clearance ma->radius[node].
+ * Requires ma->graph (build_medial_graph = true). Returns the node index into
+ * ma->verts / ma->radius, or -1 on error.
  *
  * Every knob takes -1 (or <=0) to use its default; out_energy may be NULL:
  *   exact_below (<0 -> 2500): largest-component size below which the exact
@@ -94,7 +99,7 @@ void free_medax(s_medax *ma);
  *     this many hops out for a lower-energy node and, if found, restart the
  *     descent there (escapes flat-basin ties; the H-ball is ~O(H^2) on the
  *     sheet-like graph, evaluated only at convergence). 0 disables it.
- *   out_energy: if non-NULL, receives sum_j r_j^3 d(center,j)^2. */
+ *   out_energy: if non-NULL, receives sum_j w_j d(center,j)^2. */
 int medax_center(const s_medax *ma, int exact_below, int K, double beta,
                  int polish_hops, double *out_energy);
 

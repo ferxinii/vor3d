@@ -30,7 +30,10 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
  * per-ball unit is the Laguerre/power partition Vol(union INTERSECT
  * power-cell(i)).  Redundant/fully-contained balls (dropped by the RT) get 0.
  * An individual contribution is always >= 0; the K-tet power split may produce
- * negative intermediate pieces that cancel, but the total per ball is a volume. */
+ * negative intermediate pieces that cancel, but the total per ball is a volume.
+ * (The split uses the trig-free "quad form" of Mach A.16 and is applied to
+ * EVERY K-tet, including near-flat ones, whose signed pieces are load-bearing;
+ * see VOLSPH_SPLIT_PLAN.md.) */
 void volume_contribution_spheres(const s_points *centers, const double radii[centers->N],
                                  double EPS_DEGEN, double TOL_dup,
                                  struct dynarray *buff_ncellPTR,
