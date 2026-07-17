@@ -1068,6 +1068,20 @@ static int build_half_cavities(s_scplx *dt,
     if (!find_region_R(dt, va_dt, vb_dt, vc_dt, ring, &sc->in_R, sc))
         return 0;
 
+    if (g_dbg_this_face) {
+        CDT_DBG("region R has %u tets:\n", sc->in_R.N);
+        for (unsigned i = 0; i < sc->in_R.N; i++) {
+            s_ncell *nc; dynarray_get_value(&sc->in_R, i, &nc);
+            fprintf(stderr, "[cdt]   R tet (%d,%d,%d,%d) orients:",
+                    nc->vertex_id[0], nc->vertex_id[1],
+                    nc->vertex_id[2], nc->vertex_id[3]);
+            for (int j = 0; j < 4; j++)
+                fprintf(stderr, " %d", nc->vertex_id[j] < 4 ? 9 :
+                        cdt_orient3d(va_dt, vb_dt, vc_dt, nc->vertex_id[j]));
+            fprintf(stderr, "\n");
+        }
+    }
+
     C1->tets     = dynarray_initialize(sizeof(s_ncell *), 32);
     C1->verts    = dynarray_initialize(sizeof(int), 32);
     C1->boundary = dynarray_initialize(sizeof(int[4]), 32);
@@ -1153,9 +1167,17 @@ static int build_half_cavities(s_scplx *dt,
                 if      (oi > 0) { if (!dynarray_push(&C1->boundary, fids4)) goto err; }
                 else if (oi < 0) { if (!dynarray_push(&C2->boundary, fids4)) goto err; }
                 /* oi == 0: all 4 verts coplanar -- degenerate, skip. */
+                if (oi == 0 && g_dbg_this_face)
+                    CDT_DBG("build_half_cavities: DEGENERATE plane face "
+                            "(%d,%d,%d) w=%d dropped\n",
+                            fids[0], fids[1], fids[2], nc->vertex_id[fi]);
             } else {
                 if (all_ge0) if (!dynarray_push(&C1->boundary, fids4)) goto err;
                 if (all_le0) if (!dynarray_push(&C2->boundary, fids4)) goto err;
+                if (!all_ge0 && !all_le0 && g_dbg_this_face)
+                    CDT_DBG("build_half_cavities: MIXED boundary face "
+                            "(%d,%d,%d) o=(%d,%d,%d) w=%d dropped\n",
+                            fids[0], fids[1], fids[2], o0, o1, o2, nc->vertex_id[fi]);
             }
         }
     }
@@ -1478,6 +1500,13 @@ static int try_cavity_expansion(s_scplx *dt,
                 hash_insert(&g2l, &l2g[i], &i);
             if (!dynarray_push(&C->verts, &new_v)) goto done;
         }
+        if (g_dbg_this_face) {
+            CDT_DBG("expand side=%d iter=%d: wall (%d,%d,%d) missing in ldt; "
+                    "pulling tet (%d,%d,%d,%d) new_v=%d o(new_v)=%d\n",
+                    side, dbg_iter, expand_face[0], expand_face[1], expand_face[2],
+                    expand_nb->vertex_id[0], expand_nb->vertex_id[1],
+                    expand_nb->vertex_id[2], expand_nb->vertex_id[3], new_v, o);
+        }
         if (!dynarray_push(&C->tets, &expand_nb)) goto done;
         hash_insert(&removal_set, &expand_nb, &dummy);
 
@@ -1611,10 +1640,26 @@ static int link_new_tets(s_scplx *dt, s_dynarray *new_tets, s_hash_table *adj_ma
             if (fadj) {
                 nc->opposite[fi]                  = fadj->nb;
                 fadj->nb->opposite[fadj->opp_lid] = nc;
+            } else if (g_dbg_this_face) {
+                CDT_DBG("link_new_tets: face (%d,%d,%d) of new tet UNMATCHED "
+                        "(left NULL)\n", fids[0], fids[1], fids[2]);
             }
         }
     }
     hash_free(&face_nc_map);
+
+    if (g_dbg_this_face) {
+        for (size_t b = 0; b < adj_map->nbuckets; b++)
+            for (s_hash_entry *e = adj_map->buckets[b]; e; e = e->next) {
+                s_face_adj_entry *fadj = (s_face_adj_entry *)entry_value(adj_map, e);
+                if (fadj->nb->opposite[fadj->opp_lid] == NULL) {
+                    const int *k = (const int *)entry_key(e);
+                    CDT_DBG("link_new_tets: EXTERNAL wall (%d,%d,%d) never "
+                            "reattached (retained tet face left NULL)\n",
+                            k[0], k[1], k[2]);
+                }
+            }
+    }
 
     for (s_ncell *nc = dt->head; nc; nc = nc->next)
         for (int j = 0; j < 4; j++)
@@ -1653,15 +1698,24 @@ static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
         hash_insert(&bnd, key, &iv);
     }
 
-    /* Seed: an ldt tet incident to a wall face on the wall's interior side. */
+    /* Seeds: EVERY ldt tet incident to a wall face on the wall's interior
+     * side.  The cavity's intersection with this half-space can be
+     * DISCONNECTED (e.g. a blocker fan whose above-plane part is a pocket
+     * bounded by walls + the plane, disjoint from the rest of the cavity);
+     * a single seed then fills only its own component and the commit leaves
+     * a geometric hole (observed on hang_0005 fi=1040).  Every component is
+     * bounded by at least one wall (a 3D region cannot be bounded by the
+     * plane alone), and any local tet seated on a wall's interior side lies
+     * inside the cavity, so seeding from all walls reaches all components. */
     ldt->mark_stamp++;
     const int stamp = ldt->mark_stamp;
-    s_ncell *seed = NULL;
-    for (s_ncell *nc = ldt->head; nc && !seed; nc = nc->next) {
+    int nseeds = 0;
+    for (s_ncell *nc = ldt->head; nc; nc = nc->next) {
+        if (nc->mark_token == stamp) continue;
         bool sent = false;
         for (int j = 0; j < 4; j++) if (nc->vertex_id[j] < 4) { sent = true; break; }
         if (sent) continue;
-        for (int fi = 0; fi < 4 && !seed; fi++) {
+        for (int fi = 0; fi < 4; fi++) {
             int fids[3]; FACE_IDS(nc, fi, fids);
             int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
             sort3(&g[0], &g[1], &g[2]);
@@ -1670,10 +1724,15 @@ static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
             int s_int = cdt_orient3d(g[0], g[1], g[2], *iv);
             if (s_int == 0) continue;             /* degenerate wall: try others */
             int w = l2g[nc->vertex_id[fi] - 4];
-            if (cdt_orient3d(g[0], g[1], g[2], w) == s_int) seed = nc;
+            if (cdt_orient3d(g[0], g[1], g[2], w) == s_int) {
+                nc->mark_token = stamp;
+                if (!dynarray_push(out, &nc)) { hash_free(&bnd); return 0; }
+                nseeds++;
+                break;
+            }
         }
     }
-    if (!seed) {
+    if (nseeds == 0) {
         int nreal = 0;
         for (s_ncell *nc = ldt->head; nc; nc = nc->next) {
             bool snt = false;
@@ -1684,9 +1743,6 @@ static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
                 C->boundary.N, nreal);
         hash_free(&bnd); return 0;
     }
-
-    seed->mark_token = stamp;
-    if (!dynarray_push(out, &seed)) { hash_free(&bnd); return 0; }
     for (unsigned k = 0; k < out->N; k++) {
         s_ncell *cur; dynarray_get_value(out, k, &cur);
         for (int fi = 0; fi < 4; fi++) {
