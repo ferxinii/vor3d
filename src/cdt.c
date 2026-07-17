@@ -1597,7 +1597,7 @@ static int remove_cavity_tets(s_scplx *dt,
             if (nc->prev) nc->prev->next = nc->next; else dt->head = nc->next;
             if (nc->next) nc->next->prev = nc->prev;
             dt->N_ncells--;
-            free_ncell(nc);
+            free_ncell(dt, nc);
         }
     }
     hash_free(&removal_set);
@@ -1861,7 +1861,7 @@ static int commit_cavity_expansion(s_scplx *dt,
         for (unsigned ti = 0; ti < fl->N; ti++) {
             s_ncell *lnc; dynarray_get_value(fl, ti, &lnc);
 
-            s_ncell *nc = malloc_ncell();
+            s_ncell *nc = malloc_ncell(dt);
             if (!nc) { hash_free(&adj_map); return 0; }
             memset(nc, 0, sizeof(s_ncell));
             for (int j = 0; j < 4; j++) nc->vertex_id[j] = l2g[lnc->vertex_id[j] - 4];
@@ -2314,7 +2314,7 @@ static int gw_half(s_scplx *dt,
                         comm_out != NULL, int_sign);
 
             /* Create tet and link into dt. */
-            s_ncell *nc = malloc_ncell();
+            s_ncell *nc = malloc_ncell(dt);
             if (!nc) return 0;
             memset(nc, 0, sizeof(s_ncell));
             nc->vertex_id[0] = sigma[0]; nc->vertex_id[1] = sigma[1];
@@ -2556,7 +2556,7 @@ static int commit_mixed(s_scplx *dt,
     /* Insert the kept half's INSIDE tets (same pruning as commit). */
     for (unsigned ti = 0; ti < flkeep->N; ti++) {
         s_ncell *lnc; dynarray_get_value(flkeep, ti, &lnc);
-        s_ncell *nc = malloc_ncell();
+        s_ncell *nc = malloc_ncell(dt);
         if (!nc) { dynarray_free(&comm); hash_free(&adj_map); return 0; }
         memset(nc, 0, sizeof(s_ncell));
         for (int j = 0; j < 4; j++) nc->vertex_id[j] = l2g[lnc->vertex_id[j] - 4];
@@ -2690,7 +2690,7 @@ static void classify_interior_exterior(s_scplx *dt, s_hash_table *constrained,
             if (nc->prev) nc->prev->next = nc->next; else dt->head = nc->next;
             if (nc->next) nc->next->prev = nc->prev;
             dt->N_ncells--;
-            free_ncell(nc);
+            free_ncell(dt, nc);
         }
         nc = next;
     }

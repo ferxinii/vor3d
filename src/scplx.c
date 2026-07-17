@@ -27,19 +27,101 @@ static int inarray(const int *arr1, int N, int a)
 
 
 
-s_ncell *malloc_ncell(void)
+/* ---- ncell slab pool (see the pool field in scplx.h) ---------------------
+ * Bump allocation from fixed-size blocks + a freelist threaded through the
+ * `next` field of dead cells.  Blocks never move, so every s_ncell* stays
+ * stable for the complex's lifetime; free_complex releases whole blocks.
+ * Cells allocated consecutively are memory-adjacent, so insertion-order
+ * traversals (the head->next walks all over dt/cdt/medax) get cache locality
+ * that per-cell malloc cannot provide. */
+#ifndef NCELL_NO_POOL
+
+#define NCELL_BLOCK 1024
+
+typedef struct ncell_block {
+    struct ncell_block *next;
+    int used;                      /* bump cursor into cells[] */
+    s_ncell cells[NCELL_BLOCK];
+} s_ncell_block;
+
+typedef struct ncell_pool {
+    s_ncell_block *blocks;         /* newest block first */
+    s_ncell       *free_head;      /* freelist of returned cells */
+} s_ncell_pool;
+
+s_ncell *malloc_ncell(s_scplx *scplx)
 {
+    s_ncell_pool *P = scplx->pool;
+    if (!P) {
+        P = calloc(1, sizeof *P);
+        assert(P && "Could not malloc ncell pool");
+        scplx->pool = P;
+    }
+    s_ncell *out;
+    if (P->free_head) {
+        out = P->free_head;
+        P->free_head = out->next;
+    } else {
+        if (!P->blocks || P->blocks->used == NCELL_BLOCK) {
+            s_ncell_block *b = malloc(sizeof *b);
+            assert(b && "Could not malloc ncell block");
+            b->used = 0;
+            b->next = P->blocks;
+            P->blocks = b;
+        }
+        out = &P->blocks->cells[P->blocks->used++];
+    }
+    memset(out, 0, sizeof(s_ncell));
+    return out;
+}
+
+void free_ncell(s_scplx *scplx, s_ncell *ncell)
+{
+    s_ncell_pool *P = scplx->pool;
+    ncell->next = P->free_head;
+    P->free_head = ncell;
+}
+
+static void free_ncell_storage(s_scplx *scplx)
+{
+    if (!scplx->pool) return;
+    s_ncell_block *b = scplx->pool->blocks;
+    while (b) {
+        s_ncell_block *next = b->next;
+        free(b);
+        b = next;
+    }
+    free(scplx->pool);
+}
+
+#else  /* NCELL_NO_POOL: plain per-cell malloc, ASAN/leaks-friendly */
+
+s_ncell *malloc_ncell(s_scplx *scplx)
+{
+    (void)scplx;
     s_ncell *out = malloc(sizeof(s_ncell));
     assert(out && "Could not malloc ncell");
     memset(out, 0, sizeof(s_ncell));
     return out;
 }
 
-
-void free_ncell(s_ncell *ncell)
+void free_ncell(s_scplx *scplx, s_ncell *ncell)
 {
+    (void)scplx;
     free(ncell);
 }
+
+static void free_ncell_storage(s_scplx *scplx)
+{   /* only the still-live cells are in the list; freed ones are already gone */
+    s_ncell *current = scplx->head;
+    while (current) {
+        s_ncell *next = current->next;
+        free(current);
+        current = next;
+    }
+}
+
+#endif
 
 
 void free_complex(s_scplx *scplx)
@@ -48,12 +130,7 @@ void free_complex(s_scplx *scplx)
     if (scplx->weights) free(scplx->weights);
     if (scplx->point2tet) free(scplx->point2tet);
 
-    s_ncell *current = scplx->head;
-    while (current) {
-        s_ncell *next = current->next;
-        free_ncell(current);
-        current = next;
-    }
+    free_ncell_storage(scplx);
 
     memset(scplx, 0, sizeof(s_scplx));
 }
@@ -407,21 +484,23 @@ int vertex_neighbors(s_scplx *scplx, int v_global,
     if (!ncells_incident_face(scplx, start_cell, 0, opp_localids, scratch_cells))
         return -1;
 
-    bool seen[scplx->points.N];
-    memset(seen, 0, scplx->points.N * sizeof(bool));
-    seen[v_global] = true;
-    for (int i = 0; i < skip_below && i < scplx->points.N; i++) seen[i] = true;
-
+    /* Dedup by scanning the output list itself: a vertex star is a few tens
+     * of entries, so O(k) per candidate beats clearing any O(points.N) seen
+     * structure per call (callers loop this over many vertices).  Anything
+     * already in out_ids (callers may pre-seed it) is also never repeated. */
     int count = 0;
     s_ncell **cells = (s_ncell **)scratch_cells->items;
     for (unsigned ci = 0; ci < scratch_cells->N; ci++)
         for (int vi = 0; vi < 4; vi++) {
             int gid = cells[ci]->vertex_id[vi];
-            if (!seen[gid]) {
-                seen[gid] = true;
-                if (!dynarray_push(out_ids, &gid)) return -1;
-                count++;
-            }
+            if (gid == v_global || gid < skip_below) continue;
+            const int *ids = (const int *)out_ids->items;
+            bool dup = false;
+            for (unsigned q = 0; q < out_ids->N && !dup; q++)
+                dup = (ids[q] == gid);
+            if (dup) continue;
+            if (!dynarray_push(out_ids, &gid)) return -1;
+            count++;
         }
     return count;
 }

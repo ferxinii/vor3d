@@ -23,6 +23,14 @@ typedef struct simplical_complex {  // May in stack
     const int *l2g_ids;  // exact mode only: translate this scplx's local vertex id ->
                          // cdt_predicates registry id.  NULL = identity (the global CDT DT).
                          // Non-NULL for Phase B local cavity DTs (their ids are local).
+    struct ncell_pool *pool;  // slab allocator for this complex's ncells (scplx.c).
+                              // Lazily created by malloc_ncell, so (s_scplx){0} stays a
+                              // valid empty complex and by-value transfers keep working.
+                              // Cells live in stable blocks: pointers never move, and
+                              // free_complex releases whole blocks (no per-cell free).
+                              // Compile with -DNCELL_NO_POOL for plain per-cell malloc
+                              // (ASAN-friendly: use-after-free of a flipped tet stays
+                              // detectable instead of silently reading a recycled cell).
 } s_scplx;
 
 
@@ -64,8 +72,8 @@ void plot_dt_3d_differentviews(const s_scplx *scplx, char *f_name, s_point range
 
 
 /* HELPERS */
-s_ncell *malloc_ncell();
-void free_ncell(s_ncell *ncell);
+s_ncell *malloc_ncell(s_scplx *scplx);            /* zeroed cell from scplx's pool */
+void free_ncell(s_scplx *scplx, s_ncell *ncell);  /* return cell to scplx's pool */
 
 int ncells_incident_face(s_scplx *scplx, s_ncell *ncell, int dim_face,
                          const int *v_localid, s_dynarray *out);

@@ -429,7 +429,7 @@ static inline void p2t_update(s_scplx *sc, s_ncell *nc)
 static int flip14(s_scplx *scplx, s_ncell *nc1, int point_id, s_dstack *stack)
 {   
     scplx->N_ncells += 3;
-    s_ncell *nc2 = malloc_ncell(), *nc3 = malloc_ncell(), *nc4 = malloc_ncell();
+    s_ncell *nc2 = malloc_ncell(scplx), *nc3 = malloc_ncell(scplx), *nc4 = malloc_ncell(scplx);
     if (!nc2 || !nc3 || !nc4) return 0;
 
     s_ncell *opp_aux[4]; opposite_pointers_ncell(nc1, opp_aux);
@@ -498,7 +498,7 @@ static inline void map_vid_lid(s_ncell *ncell, int v1, int *l1, int v2, int *l2,
 static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell *OUT_PTRS[3])
 {   
     scplx->N_ncells += 1;
-    s_ncell *nc2 = nc1->opposite[opp_cell_id], *nc3 = malloc_ncell();
+    s_ncell *nc2 = nc1->opposite[opp_cell_id], *nc3 = malloc_ncell(scplx);
     if (!nc2) return 0;
 
     s_ncell *nc1_opp_old[4]; opposite_pointers_ncell(nc1, nc1_opp_old);
@@ -665,7 +665,7 @@ static int flip32(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
     }
 
     if (stack) stack_remove_ncell(stack, nc3);
-    free_ncell(nc3);
+    free_ncell(scplx, nc3);
     p2t_update(scplx, nc1);
     p2t_update(scplx, nc2);
     if (stack) {
@@ -977,9 +977,9 @@ static int flip41(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int r_localid
         if (!stack_push(stack, star[0])) return 0;
     }
 
-    free_ncell(star[1]);
-    free_ncell(star[2]);
-    free_ncell(star[3]);
+    free_ncell(scplx, star[1]);
+    free_ncell(scplx, star[2]);
+    free_ncell(scplx, star[3]);
     if (scplx->point2tet) scplx->point2tet[r_vid] = NULL;
     p2t_update(scplx, star[0]);
 
@@ -1078,7 +1078,7 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
 
     out->points.N = points->N + 4;
     out->points = scplx_points;
-    s_ncell *big_ncell = malloc_ncell();
+    s_ncell *big_ncell = malloc_ncell(out);
     if (!big_ncell) { free_points(&scplx_points); return 0; }
     for (int ii=0; ii<4; ii++) {
         big_ncell->vertex_id[ii] = ii;
@@ -1088,13 +1088,13 @@ static int initialize_scplx(const s_points *points, const double *weights, s_scp
     out->N_ncells = 1;
     if (weights) {
         out->weights = malloc(sizeof(double) * scplx_points.N);
-        if (!out->weights) {free_ncell(big_ncell); free_points(&scplx_points); return 0; }
+        if (!out->weights) {free_ncell(out, big_ncell); free_points(&scplx_points); return 0; }
         for (int ii=0; ii<4; ii++) out->weights[ii] = 0;
         for (int ii=4, jj=0; ii<points->N+4; ii++) out->weights[ii] = weights[jj++];
     } else out->weights = NULL;
 
     out->point2tet = calloc((size_t)scplx_points.N, sizeof(s_ncell *));
-    if (!out->point2tet) { free_ncell(big_ncell); free_points(&scplx_points); return 0; }
+    if (!out->point2tet) { free_ncell(out, big_ncell); free_points(&scplx_points); return 0; }
     for (int k = 0; k < 4; k++)
         out->point2tet[k] = big_ncell;
 
@@ -1385,7 +1385,7 @@ static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_t
                     }
                 }
 
-                free_ncell(current);
+                free_ncell(scplx, current);
                 scplx->N_ncells--;
                 break;
             }
