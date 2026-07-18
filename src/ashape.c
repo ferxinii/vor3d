@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 
 /* ------------------------------------------------------------------ */
@@ -291,9 +292,9 @@ static int repair_manifold(s_scplx *dt)
 
 static int count_components(s_scplx *dt)
 {
-    s_hash_table seen;
-    if (!hash_init(&seen, sizeof(s_ncell *), sizeof(bool), 256, 0,
-                   hash_ptr, eq_ptr, NULL))
+    s_hash_table seen;   /* hash.h tables never grow: size for one entry per tet */
+    if (!hash_init(&seen, sizeof(s_ncell *), sizeof(bool),
+                   (size_t)dt->N_ncells + 16, 0, hash_ptr, eq_ptr, NULL))
         return -1;
     s_dynarray stack = dynarray_initialize(sizeof(s_ncell *), 64);
     int comps = 0;
@@ -350,13 +351,20 @@ static int cmp_double(const void *a, const void *b)
 }
 
 /* True iff, at threshold alpha, every point that is a vertex of some real tet
- * is also a vertex of at least one in-tet. */
-static bool covers_all(s_scplx *dt, double alpha, const bool *coverable,
-                       bool *cov, int Npts)
+ * is also a vertex of at least one in-tet.  r2cache is aligned with the tet
+ * list iteration order (DBL_MAX for sentinel/degenerate tets); comparing the
+ * cached circumradii keeps the binary search consistent with the thresholds,
+ * which are those same cached values -- and avoids re-running the orthosphere
+ * predicate over every tet at every search step (on lattice-like inputs the
+ * threshold IS a tet circumradius, so the predicate ties exactly and falls
+ * through to exact arithmetic each time). */
+static bool covers_all(s_scplx *dt, double alpha, const double *r2cache,
+                       const bool *coverable, bool *cov, int Npts)
 {
     for (int i = 0; i < Npts; i++) cov[i] = false;
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
-        if (!tet_in_complex(dt, nc, alpha)) continue;
+    int idx = 0;
+    for (s_ncell *nc = dt->head; nc; nc = nc->next, idx++) {
+        if (r2cache[idx] > alpha) continue;
         for (int i = 0; i < 4; i++) cov[nc->vertex_id[i]] = true;
     }
     for (int i = 0; i < Npts; i++) if (coverable[i] && !cov[i]) return false;
@@ -370,19 +378,24 @@ static double auto_alpha(s_scplx *dt)
     int Npts = dt->points.N;
     bool *coverable = calloc(Npts, sizeof(bool));
     bool *cov = malloc(Npts * sizeof(bool));
+    double *r2cache = malloc((size_t)dt->N_ncells * sizeof(double));
     s_dynarray vals = dynarray_initialize(sizeof(double), 256);
-    if (!coverable || !cov || !vals.items) {
-        free(coverable); free(cov); dynarray_free(&vals); return -1.0;
+    if (!coverable || !cov || !r2cache || !vals.items) {
+        free(coverable); free(cov); free(r2cache); dynarray_free(&vals);
+        return -1.0;
     }
 
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
+    int idx = 0;
+    for (s_ncell *nc = dt->head; nc; nc = nc->next, idx++) {
+        r2cache[idx] = DBL_MAX;
         if (tet_touches_sentinel(nc)) continue;
         for (int i = 0; i < 4; i++) coverable[nc->vertex_id[i]] = true;
         double r2 = tet_circumradius2(dt, nc);
-        if (r2 < DBL_MAX) dynarray_push(&vals, &r2);
+        if (r2 < DBL_MAX) { dynarray_push(&vals, &r2); r2cache[idx] = r2; }
     }
     if (vals.N == 0) {
-        free(coverable); free(cov); dynarray_free(&vals); return -1.0;
+        free(coverable); free(cov); free(r2cache); dynarray_free(&vals);
+        return -1.0;
     }
 
     qsort(vals.items, vals.N, sizeof(double), cmp_double);
@@ -391,12 +404,12 @@ static double auto_alpha(s_scplx *dt)
     int lo = 0, hi = (int)vals.N - 1, ans = (int)vals.N - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        if (covers_all(dt, v[mid], coverable, cov, Npts)) { ans = mid; hi = mid - 1; }
+        if (covers_all(dt, v[mid], r2cache, coverable, cov, Npts)) { ans = mid; hi = mid - 1; }
         else lo = mid + 1;
     }
     double alpha = v[ans] * (1.0 + 1e-9);
 
-    free(coverable); free(cov); dynarray_free(&vals);
+    free(coverable); free(cov); free(r2cache); dynarray_free(&vals);
     return alpha;
 }
 
@@ -473,30 +486,50 @@ s_trimesh alpha_shape_3d(const s_points *pts, double alpha, double TOL_dup,
     if (info) *info = (s_ashape_info){0};
     if (!pts || pts->N < 4) return trimesh_NAN;
 
+    struct timespec _at; clock_gettime(CLOCK_MONOTONIC, &_at);
+    double _t0 = _at.tv_sec + 1e-9 * _at.tv_nsec, _t1;
+#define ASHAPE_TICK(msg) do { \
+        clock_gettime(CLOCK_MONOTONIC, &_at); \
+        _t1 = _at.tv_sec + 1e-9 * _at.tv_nsec; \
+        if (getenv("ASHAPE_PROFILE")) \
+            fprintf(stderr, "[ashape][t] %-10s %.3fs\n", msg, _t1 - _t0); \
+        _t0 = _t1; \
+    } while (0)
+
     s_scplx dt = construct_dt_3d(pts, NULL, true, TOL_dup, NULL);
     if (dt.N_ncells == 0) return trimesh_NAN;   /* degenerate / coplanar */
+    ASHAPE_TICK("dt");
 
     double alpha_used = alpha;
     if (alpha_used <= 0.0) {
         alpha_used = auto_alpha(&dt);
         if (alpha_used <= 0.0) { free_complex(&dt); return trimesh_NAN; }
     }
+    ASHAPE_TICK("auto_alpha");
 
     int n_in = mark_by_alpha(&dt, alpha_used);
     if (n_in == 0) { free_complex(&dt); return trimesh_NAN; }
+    ASHAPE_TICK("mark");
 
     int promoted = repair_manifold(&dt);
+    ASHAPE_TICK("repair");
 
     s_trimesh mesh = boundary_to_trimesh(&dt);
+    ASHAPE_TICK("boundary");
 
     if (info) {
         info->alpha_used    = alpha_used;
         info->N_promoted    = promoted;
         info->N_tets_in     = count_in(&dt);
+        ASHAPE_TICK("count_in");
         info->N_components  = count_components(&dt);
+        ASHAPE_TICK("components");
         info->N_pts_dropped = count_dropped_points(&dt);
+        ASHAPE_TICK("dropped");
         info->volume        = in_set_volume(&dt);
+        ASHAPE_TICK("volume");
     }
+#undef ASHAPE_TICK
 
     free_complex(&dt);
     return mesh;

@@ -72,6 +72,14 @@ typedef struct ashape_info {
  * at a single vertex, not along an edge) are NOT split and remain in the
  * output; the underlying trimesh validity check is edge-based and accepts them.
  *
+ * PERFORMANCE -- input order matters: points are inserted into the DT in the
+ * given order, and a spatially structured order over degenerate positions
+ * (e.g. a regular lattice listed in raster order) makes every insertion land
+ * on the coplanar/cospherical frontier of the previous ones, forcing the
+ * exact-arithmetic predicate stage throughout (measured ~10x slower on a 74k
+ * lattice).  Shuffling the input is the CALLER's responsibility; jittering
+ * lattice positions by a tiny fraction of the spacing helps further.
+ *
  * Returns trimesh_NAN if the points are degenerate (fewer than 4 after
  * deduplication, or coplanar so that no real tetrahedron exists), if the
  * in-set is empty at this alpha, or on allocation failure. */
