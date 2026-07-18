@@ -74,17 +74,42 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
 
 void free_medax(s_medax *ma);
 
-/* Canonical center of the medial axis: the volume-weighted geodesic Frechet mean
- * over the medial graph -- argmin_i sum_j w_j * d(i,j)^2 -- restricted to the
- * largest connected component (d = graph shortest-path distance). The node mass
- * w_j is the GOVERNED VOLUME of ball j: its per-ball contribution
- * vol(B_j INTERSECT L_j) to the union of all medial balls (the Laguerre/power
- * partition, via volume_contribution_spheres), so sum_j w_j == vol(Omega) and
- * ball overlaps are counted once (MEDIAL_AXIS_BT.md sec.3). If the union
- * decomposition degenerates, falls back to the ball-volume proxy w_j = r_j^3.
- * The result is a medial node, hence interior with clearance ma->radius[node].
- * Requires ma->graph (build_medial_graph = true). Returns the node index into
+/* Which notion of "center" medax_center computes (the node mass / objective). The
+ * first three are geodesic Frechet means over the medial graph -- argmin_i
+ * sum_j w_j * d(i,j)^2, restricted to the largest connected component (d = graph
+ * shortest-path distance) -- differing only in the node mass w_j. They all return
+ * a medial node, hence interior with clearance ma->radius[node]. Cost is
+ * dominated by computing w_j: CONTRIB builds a power (Laguerre) volume partition
+ * over all balls (volume_contribution_spheres) and is by far the most expensive;
+ * R3 and UNIFORM are O(N) and skip it, so they run several times faster (the
+ * partition, not the descent, is the bottleneck -- see MEDIAL_AXIS_BT.md). */
+typedef enum {
+    /* w_j = GOVERNED VOLUME of ball j: its per-ball contribution
+     * vol(B_j INTERSECT L_j) to the union of all medial balls (the Laguerre/power
+     * partition), so sum_j w_j == vol(Omega) and overlaps are counted once. The
+     * canonical, most accurate center; also the slowest. If the union
+     * decomposition degenerates, falls back internally to R3. */
+    MEDAX_CENTER_CONTRIB   = 0,
+    /* w_j = r_j^3 (ball volume, overlaps double-counted). A cheap O(N) proxy for
+     * CONTRIB; the center typically lands within a few percent of it. */
+    MEDAX_CENTER_R3        = 1,
+    /* w_j = 1 (unweighted). The pure geodesic center of the medial graph itself,
+     * independent of ball sizes -- the "shape midpoint". O(N). */
+    MEDAX_CENTER_UNIFORM   = 2,
+    /* Not a Frechet mean: the node of LARGEST medial radius in the largest
+     * component (center of the deepest inscribed ball). Needs no graph traversal
+     * beyond component labeling; effectively free. out_energy receives that
+     * radius (the clearance), not an energy. */
+    MEDAX_CENTER_MAXRADIUS = 3,
+} e_medax_center;
+
+/* Canonical center of the medial axis; see e_medax_center for the mode/objective.
+ * The result is a medial node (interior, clearance ma->radius[node]). Requires
+ * ma->graph (build_medial_graph = true). Returns the node index into
  * ma->verts / ma->radius, or -1 on error.
+ *
+ * mode: which center to compute (see e_medax_center). MEDAX_CENTER_MAXRADIUS
+ *   ignores the descent knobs below.
  *
  * Every knob takes -1 (or <=0) to use its default; out_energy may be NULL:
  *   exact_below (<0 -> 2500): largest-component size below which the exact
@@ -99,18 +124,20 @@ void free_medax(s_medax *ma);
  *     this many hops out for a lower-energy node and, if found, restart the
  *     descent there (escapes flat-basin ties; the H-ball is ~O(H^2) on the
  *     sheet-like graph, evaluated only at convergence). 0 disables it.
- *   out_energy: if non-NULL, receives sum_j w_j d(center,j)^2. */
-int medax_center(const s_medax *ma, int exact_below, int K, double beta,
-                 int polish_hops, double *out_energy);
+ *   out_energy: if non-NULL, receives sum_j w_j d(center,j)^2 for the Frechet
+ *     modes, or the node clearance for MEDAX_CENTER_MAXRADIUS. */
+int medax_center(const s_medax *ma, e_medax_center mode, int exact_below, int K,
+                 double beta, int polish_hops, double *out_energy);
 
-/* Diagnostic: expose the descent seeds and where each converges. Fills seeds[]
- * with the (<=K) seed node indices (deep local-radius maxima after NMS) and
- * results[] with each seed's gradient-descent result node index; both are caller
- * arrays of size >= K. Knobs default as in medax_center (K, beta, polish_hops
- * take -1/<=0 for defaults). Returns the seed count, or -1 on error;
- * medax_center keeps the lowest-energy result. */
-int medax_center_seeds(const s_medax *ma, int K, double beta, int polish_hops,
-                       int *seeds, int *results);
+/* Diagnostic: expose the descent seeds and where each converges, for a Frechet
+ * mode. Fills seeds[] with the (<=K) seed node indices (deep local-radius maxima
+ * after NMS) and results[] with each seed's gradient-descent result node index;
+ * both are caller arrays of size >= K. mode selects the node mass as in
+ * medax_center (MEDAX_CENTER_MAXRADIUS is not a Frechet mode and is treated as
+ * MEDAX_CENTER_CONTRIB here). Knobs default as in medax_center. Returns the seed
+ * count, or -1 on error; medax_center keeps the lowest-energy result. */
+int medax_center_seeds(const s_medax *ma, e_medax_center mode, int K, double beta,
+                       int polish_hops, int *seeds, int *results);
 
 /* Step 2 introspection (debug): return just the surface sample set that
  * medax_from_trimesh would build internally -- mesh vertices followed by the

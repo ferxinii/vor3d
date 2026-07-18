@@ -316,7 +316,7 @@ static void measure(const s_medax *ma, s_row *row, int validate)
     int N = g->N; graph_stats(g, &row->nE); row->N = N;
 
     double Ed, t1 = omp_get_wtime();
-    int cd = medax_center(ma, 0, 3, 2.0, -1, &Ed);     /* forced descent (exact_below=0) */
+    int cd = medax_center(ma, MEDAX_CENTER_CONTRIB, 0, 3, 2.0, -1, &Ed);  /* forced descent (exact_below=0) */
     row->t_center = omp_get_wtime() - t1;
 
     if (validate) {

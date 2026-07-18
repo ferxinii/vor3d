@@ -991,25 +991,38 @@ static int cen_components(const s_medial_graph *g, int *comp, int *queue, int *o
     return comp[root];
 }
 
-/* Node masses w_j for the Frechet energy: the governed volume of each medial
- * ball -- its per-ball contribution vol(B_j INTERSECT L_j) to the union of all
- * medial balls (the Laguerre/power partition), so sum_j w_j == vol(Omega) with
- * ball overlaps counted once (MEDIAL_AXIS_BT.md sec.3). Computed over the FULL
- * ball set (verts/radius); the caller uses only the entries in its component.
- *
- * Returns a freshly malloc'd array of size ma->verts.N, or NULL on allocation
- * failure. If the union decomposition degenerates (non-finite or non-positive
- * total -- e.g. a pathological ball set), falls back to the ball-volume proxy
- * w_j = r_j^3 (the previous, overlap-double-counting weight), which is a safe
- * approximation of the same quantity. */
+/* Node masses w_j for the Frechet energy, per weighting mode:
+ *   MEDAX_CENTER_CONTRIB : the governed volume of each medial ball -- its per-ball
+ *     contribution vol(B_j INTERSECT L_j) to the union of all medial balls (the
+ *     Laguerre/power partition), so sum_j w_j == vol(Omega) with ball overlaps
+ *     counted once (MEDIAL_AXIS_BT.md sec.3). This is the expensive path (it
+ *     builds a regular DT + alpha complex over all balls); if the union
+ *     decomposition degenerates (non-finite or non-positive total), it falls back
+ *     to the r^3 proxy below, which approximates the same quantity.
+ *   MEDAX_CENTER_R3      : w_j = r_j^3 (ball volume, overlaps double-counted). O(N).
+ *   MEDAX_CENTER_UNIFORM : w_j = 1. O(N).
+ * (MEDAX_CENTER_MAXRADIUS never reaches here -- it needs no weights.)
+ * Computed over the FULL ball set (verts/radius); the caller uses only the
+ * entries in its component. Returns a freshly malloc'd array of size
+ * ma->verts.N, or NULL on allocation failure. */
 #define MEDAX_VOL_EPS    1e-10        /* volsph degeneracy epsilon */
 #define MEDAX_VOL_TOLDUP 1e-9         /* volsph duplicate-center tolerance */
-static double *cen_weights(const s_medax *ma)
+static double *cen_weights(const s_medax *ma, e_medax_center mode)
 {
     int N = ma->verts.N;
     double *w = malloc(sizeof(double) * (size_t)N);
     if (!w) return NULL;
 
+    if (mode == MEDAX_CENTER_UNIFORM) {
+        for (int j = 0; j < N; j++) w[j] = 1.0;
+        return w;
+    }
+    if (mode == MEDAX_CENTER_R3) {
+        for (int j = 0; j < N; j++) { double r = ma->radius[j]; w[j] = r*r*r; }
+        return w;
+    }
+
+    /* MEDAX_CENTER_CONTRIB: governed-volume (power) partition. */
     s_dynarray buff = dynarray_initialize(sizeof(s_ncell *), 64);
     volume_contribution_spheres(&ma->verts, ma->radius, MEDAX_VOL_EPS,
                                 MEDAX_VOL_TOLDUP, &buff, w);
@@ -1029,8 +1042,21 @@ static double *cen_weights(const s_medax *ma)
     return w;
 }
 
-int medax_center(const s_medax *ma, int exact_below, int K, double beta,
-                 int polish_hops, double *out_energy)
+/* Node of largest medial radius within component lc (the deepest inscribed ball).
+ * Sets *out_r to that radius. Returns the node index, or -1 if lc is empty. */
+static int cen_maxradius(const s_medax *ma, const int *comp, int lc, double *out_r)
+{
+    int N = ma->verts.N, best = -1; double br = -INFINITY;
+    for (int i = 0; i < N; i++) {
+        if (comp[i] != lc) continue;
+        if (ma->radius[i] > br) { br = ma->radius[i]; best = i; }
+    }
+    if (out_r) *out_r = br;
+    return best;
+}
+
+int medax_center(const s_medax *ma, e_medax_center mode, int exact_below, int K,
+                 double beta, int polish_hops, double *out_energy)
 {
     if (out_energy) *out_energy = INFINITY;
     if (!ma || !ma->graph || ma->verts.N == 0 || !ma->radius) return -1;
@@ -1042,10 +1068,23 @@ int medax_center(const s_medax *ma, int exact_below, int K, double beta,
     if (beta <= 0.0) beta = 2.0;
     if (polish_hops < 0) polish_hops = 8;
 
+    /* MEDAX_CENTER_MAXRADIUS: no weights, no distance field -- just the deepest
+     * ball in the largest component. Component labeling only. */
+    if (mode == MEDAX_CENTER_MAXRADIUS) {
+        int *comp = malloc(sizeof(int) * (size_t)N);
+        int *queue = malloc(sizeof(int) * (size_t)N);
+        if (!comp || !queue) { free(comp); free(queue); return -1; }
+        int largest, lc = cen_components(g, comp, queue, &largest);
+        double r; int result = cen_maxradius(ma, comp, lc, &r);
+        free(comp); free(queue);
+        if (out_energy) *out_energy = (result >= 0) ? r : INFINITY;
+        return result;
+    }
+
     int    *comp  = malloc(sizeof(int)    * (size_t)N);
     int    *queue = malloc(sizeof(int)    * (size_t)N);
     double *dist  = malloc(sizeof(double) * (size_t)N);
-    double *mass  = cen_weights(ma);      /* node masses w_j = governed volume */
+    double *mass  = cen_weights(ma, mode);   /* node masses w_j for the chosen mode */
     s_cen_hn *heap = malloc(sizeof(s_cen_hn) * (size_t)(g->adj_off[N] + 8));
     if (!comp || !queue || !dist || !mass || !heap) {
         free(comp); free(queue); free(dist); free(mass); free(heap); return -1;
@@ -1079,8 +1118,8 @@ int medax_center(const s_medax *ma, int exact_below, int K, double beta,
     return result;
 }
 
-int medax_center_seeds(const s_medax *ma, int K, double beta, int polish_hops,
-                       int *seeds, int *results)
+int medax_center_seeds(const s_medax *ma, e_medax_center mode, int K, double beta,
+                       int polish_hops, int *seeds, int *results)
 {
     if (!ma || !ma->graph || ma->verts.N == 0 || !ma->radius || !seeds || !results)
         return -1;
@@ -1090,12 +1129,14 @@ int medax_center_seeds(const s_medax *ma, int K, double beta, int polish_hops,
     if (K <= 0) K = 3;
     if (beta <= 0.0) beta = 2.0;
     if (polish_hops < 0) polish_hops = 8;
+    /* MAXRADIUS is not a Frechet mode (no seeds/descent); weight it as CONTRIB. */
+    if (mode == MEDAX_CENTER_MAXRADIUS) mode = MEDAX_CENTER_CONTRIB;
 
     int    *comp  = malloc(sizeof(int)    * (size_t)N);
     int    *queue = malloc(sizeof(int)    * (size_t)N);
     double *dist  = malloc(sizeof(double) * (size_t)N);
     double *dmin  = malloc(sizeof(double) * (size_t)N);
-    double *mass  = cen_weights(ma);      /* node masses w_j = governed volume */
+    double *mass  = cen_weights(ma, mode);   /* node masses w_j for the chosen mode */
     s_cen_hn *heap = malloc(sizeof(s_cen_hn) * (size_t)(g->adj_off[N] + 8));
     if (!comp || !queue || !dist || !dmin || !mass || !heap) {
         free(comp); free(queue); free(dist); free(dmin); free(mass); free(heap); return -1;
