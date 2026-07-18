@@ -120,6 +120,26 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
     s_points seeds = f_seeds(bp, ud, out_kept_idx);
     int Nreal = seeds.N;
 
+    /* Mirror-free convex route (IMPROVE_CONVEX.md Idea C), the default. It never
+     * builds mirrors or the seed-DT-with-mirrors, so it cannot supply out_dt
+     * (only Stage C's mirror path does); callers that request out_dt fall back to
+     * the mirror path. Set VOR3D_MIRRORS=1 to force the legacy mirror path (A/B). */
+    if (!out_dt && seeds.N > 0 && !getenv("VOR3D_MIRRORS")) {
+        s_vdiagram vd = vor3d_convex_clip(&seeds, bp, ud.EPS_DEG, ud.TOL,
+                                          out_kept_idx,
+                                          out_kept_idx ? ud.generator.seeds.N : 0);
+        free_points(&seeds);
+        if (vd.seeds.N == 0) {
+            fprintf(stderr, "vor3d: mirror-free convex build failed.\n");
+            return (s_vdiagram){0};
+        }
+        if (!valid_volumes(bp, &vd, vol_max_rel_diff)) {
+            free_vdiagram(&vd);
+            return (s_vdiagram){0};
+        }
+        return vd;
+    }
+
     /* Phase 1: build initial DT from seeds only, keeping big tetra in place.
      * Pass bp AABB as hint so the big tetra is large enough even with 1 seed. */
     s_dt_builder builder = dt_builder_begin(&seeds, NULL, ud.TOL, &bp->min, &bp->max);

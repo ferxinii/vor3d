@@ -345,17 +345,17 @@ static int nearest_seed(s_scplx *seed_dt, const s_points *rs,
  * per-bisector loop. A float greedy descent (nearest_seed) seeds an EXACT
  * monotone descent over the Voronoi adjacency using lp_feasible_T0_T1_S (the
  * very predicate category (b) uses), so owner[]/tie[] reproduce (b) bit-for-bit. */
-static int compute_vertex_owners(const s_ncvx_domain *domain, const s_points *rs,
+static int compute_vertex_owners(const s_points *qpts, const s_points *rs,
                                  s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
                                  int N, int **out_owner, char **out_tie)
 {
-    int P = domain->cdt.points.N;
+    int P = qpts->N;
     int  *owner = malloc(sizeof(int)  * (size_t)P);
     char *tie   = calloc((size_t)P, 1);
     if (!owner || !tie) { free(owner); free(tie); return 0; }
 
     for (int v = 0; v < P; v++) {
-        s_point V = domain->cdt.points.p[v];
+        s_point V = qpts->p[v];
         int m = nearest_seed(seed_dt, rs, adj, N, V);      /* float nearest as start */
         if (m < 0) m = 0;
         for (;;) {                                          /* exact monotone descent */
@@ -884,6 +884,963 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     return r;
 }
 
+/* ====================== CONVEX MIRROR-FREE ROUTE =========================
+ * IMPROVE_CONVEX.md Idea C. Builds the convex Voronoi diagram with the same
+ * exact LP-feasibility clip the non-convex route uses, and NO mirror points.
+ * The convex bounding polytope bp is fan-tetrahedralized from an interior
+ * center (bp->CM -- the vertex centroid of the hull points, strictly interior
+ * to a convex hull): one tet {center, f0, f1, f2} per bp triangular face.
+ * These tets partition bp exactly, so the per-tet clip machinery applies
+ * verbatim. The 3 internal faces of each fan tet produce only vertices that
+ * lie inside bp; pooling every fan tet's clip vertices for one cell and hulling
+ * ONCE discards them, yielding the single convex piece cell ^ bp (N_pieces==1).
+ * ------------------------------------------------------------------------- */
+
+/* Append the exact vertices of (Voronoi cell of seed_id) ^ tet into `pts`.
+ * Lean, label-free twin of clip_vcell_clip_tet_lp: the same four vertex
+ * categories with the same exact keep/drop predicates, but no per-tet hull and
+ * no vlabel (the caller pools across fan tets and hulls once). Category (b) uses
+ * the exact per-bisector LP (no owner[] memo -- fan-tet vertices are bp hull
+ * points / the center, not seeds, so they carry no precomputed owner). tet_id
+ * must be nonzero and unique per fan tet (resolved_vtx memo, category a).
+ * Returns 1 OK, 0 allocation error. */
+static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
+                                    const struct ncvx_cell_adjacency *adj,
+                                    const int *vor_vtx, int n_vtx,
+                                    const int *vor_edge, int n_edge,
+                                    const s_point tet[4],
+                                    int *resolved_vtx, int tet_id,
+                                    double EPS_DEG, s_dynarray *pts)
+{
+    s_point s = seeds->p[seed_id];
+    int NB = adj->offset[seed_id + 1] - adj->offset[seed_id];
+    const int *nbr = NB ? adj->neighbor + adj->offset[seed_id] : NULL;
+
+    int sigma_f[4];
+    lp3_tet_face_orient(tet, sigma_f);
+
+    s_cid3 FC[4];
+    for (int f = 0; f < 4; f++) { FC[f].type = CT_TET; FC[f].idx = f; }
+
+    /* ---- (b) tet vertices inside the cell (exact per-bisector LP) ---- */
+    for (int j = 0; j < 4; j++) {
+        int keep = 1;
+        s_cid3 tri[3]; int n = 0;
+        for (int f = 0; f < 4; f++) if (f != j) tri[n++] = FC[f];  /* 3 faces meeting at j */
+        for (int k = 0; k < NB && keep; k++) {
+            s_cid3 q = { CT_SEED, nbr[k] };
+            if (lp3_feasible(tet, sigma_f, s, seeds, tri[0], tri[1], tri[2], q) < 0) keep = 0;
+        }
+        if (keep && !dynarray_push(pts, &tet[j])) return 0;
+    }
+
+    /* ---- (d) tet edge ^ bisector: 1D LP on each of the 6 edges ---- */
+    for (int f = 0; f < 4; f++) for (int g = f + 1; g < 4; g++) {
+        int e[2]; lp3_shared_edge(f, g, e);
+        s_point A = tet[e[0]], B = tet[e[1]];
+        int lo_k = -1, hi_k = -1, empty = 0;
+        for (int k = 0; k < NB && !empty; k++) {
+            s_point t = seeds->p[nbr[k]];
+            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            if (sA <= 0 && sB <= 0) continue;
+            if (sA >= 0 && sB >= 0) { empty = 1; continue; }
+            int slope = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            if (slope > 0) {
+                if (lo_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[lo_k]]) > 0) lo_k = k;
+            } else if (slope < 0) {
+                if (hi_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[hi_k]]) < 0) hi_k = k;
+            }
+        }
+        if (empty) continue;
+        if (lo_k >= 0 && hi_k >= 0 &&
+            lp_cmp_lambda(A,B,s, seeds->p[nbr[lo_k]], seeds->p[nbr[hi_k]]) > 0) continue;
+        for (int side = 0; side < 2; side++) {
+            int kk = side ? hi_k : lo_k;
+            if (kk < 0) continue;
+            s_point t = seeds->p[nbr[kk]];
+            double gA = lp_bisval(A, s, t), gB = lp_bisval(B, s, t);
+            double lam = gA / (gA - gB);
+            s_point Pt = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y), .z = A.z + lam*(B.z-A.z) };
+            if (!dynarray_push(pts, &Pt)) return 0;
+        }
+    }
+
+    /* ---- (a) Voronoi vertices (circumcentres) inside the tet ---- */
+    for (int vi = 0; vi < n_vtx; vi++) {
+        int j1 = vor_vtx[3*vi+0], j2 = vor_vtx[3*vi+1], j3 = vor_vtx[3*vi+2];
+        s_cid3 a = { CT_SEED, j1 }, b = { CT_SEED, j2 }, c = { CT_SEED, j3 };
+        int R = resolved_vtx[vi];
+        if (R && R != tet_id) continue;                 /* strictly inside another fan tet */
+        int keep = 1;
+        if (R != tet_id) {
+            int strict = 1;
+            for (int f = 0; f < 4 && keep; f++) {
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[f]);
+                if (fe < 0) keep = 0;
+                else if (fe == 0) strict = 0;
+            }
+            if (keep && strict) resolved_vtx[vi] = tet_id;
+        }
+        if (keep) {
+            s_point tetc[4] = { s, seeds->p[j1], seeds->p[j2], seeds->p[j3] };
+            s_point Pt;
+            if (circumcentre_tetrahedron(tetc, EPS_DEG, &Pt))
+                if (!dynarray_push(pts, &Pt)) return 0;
+        }
+    }
+
+    /* ---- (c) Voronoi edge ^ tet face ---- */
+    for (int ei = 0; ei < n_edge; ei++) {
+        int j1 = vor_edge[4*ei+0], j2 = vor_edge[4*ei+1];
+        int cap[2] = { vor_edge[4*ei+2], vor_edge[4*ei+3] };
+        s_point t1 = seeds->p[j1], t2 = seeds->p[j2];
+        s_point n1 = subtract_points(t1, s); double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s));
+        s_point n2 = subtract_points(t2, s); double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s));
+        for (int f = 0; f < 4; f++) {
+            s_cid3 a = FC[f], b = { CT_SEED, j1 }, c = { CT_SEED, j2 };
+            int keep = 1;
+            for (int g = 0; g < 4 && keep; g++) {
+                if (g == f) continue;
+                if (lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[g]) < 0) keep = 0;
+            }
+            for (int ci2 = 0; ci2 < 2 && keep; ci2++) {
+                if (cap[ci2] < 0) continue;
+                s_cid3 q = { CT_SEED, cap[ci2] };
+                if (lp3_feasible(tet, sigma_f, s, seeds, a, b, c, q) < 0) keep = 0;
+            }
+            if (!keep) continue;
+            int fv[3]; lp3_face_idx(f, fv);
+            s_point A = tet[fv[0]], Q = tet[fv[1]], R = tet[fv[2]];
+            if (lp3_D_TSS(A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z,
+                          s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) == 0)
+                continue;
+            s_point nf = cross_prod(subtract_points(Q,A), subtract_points(R,A));
+            double df = dot_prod(nf, A);
+            double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
+            double rhs[3] = { d1, d2, df }, x[3];
+            if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
+                s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
+                if (!dynarray_push(pts, &Pt)) return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* Edge-adjacency of the bp hull faces: out_fadj[3*f + k] = the face sharing the
+ * k-th edge of face f (vertices faces[3f+k], faces[3f+(k+1)%3]), or -1 if that
+ * edge is on a border (never, for a closed convex hull). Two fan tets are
+ * adjacent (share an internal face {center, edge}) iff their bp faces share that
+ * edge, so this doubles as the fan-tet adjacency the boundary flood walks.
+ * Built once per bp by sorting the 3*Nf directed edges and pairing opposites.
+ * If out_edges is non-NULL it also receives the unique undirected bp edges as
+ * {va, vb, f1, f2} quads (count in *out_ne) -- the N-face clip's edge-walk
+ * input. Returns 1 OK (outputs malloc'd, caller frees), 0 allocation error. */
+static int build_face_adjacency(const s_convh *ch, int **out_fadj,
+                                int **out_edges, int *out_ne)
+{
+    int Nf = ch->Nf;
+    int (*E)[3] = malloc(sizeof(int[3]) * (size_t)(3 * Nf > 0 ? 3 * Nf : 1)); /* {a,b,face} */
+    int *fadj   = malloc(sizeof(int) * (size_t)(3 * Nf > 0 ? 3 * Nf : 1));
+    int *cnt    = calloc((size_t)(Nf > 0 ? Nf : 1), sizeof(int));
+    int *edges  = out_edges ? malloc(sizeof(int) * 4 * (size_t)(3 * Nf > 0 ? 3 * Nf : 1) / 2)
+                            : NULL;
+    int ne = 0;
+    if (!E || !fadj || !cnt || (out_edges && !edges))
+        { free(E); free(fadj); free(cnt); free(edges); return 0; }
+    for (int f = 0; f < Nf; f++) {
+        int k = 3 * f;
+        fadj[k] = fadj[k+1] = fadj[k+2] = -1;
+        for (int e = 0; e < 3; e++) {
+            int u = ch->faces[3*f+e], v = ch->faces[3*f+(e+1)%3];
+            if (u > v) { int t = u; u = v; v = t; }
+            E[3*f+e][0] = u; E[3*f+e][1] = v; E[3*f+e][2] = f;
+        }
+    }
+    qsort(E, (size_t)(3 * Nf), sizeof(int[3]), cmp_edge_ab);   /* by (a,b) */
+    for (int i = 0; i + 1 < 3 * Nf; ) {
+        if (E[i][0] == E[i+1][0] && E[i][1] == E[i+1][1]) {
+            int f1 = E[i][2], f2 = E[i+1][2];
+            if (cnt[f1] < 3) fadj[3*f1 + cnt[f1]++] = f2;
+            if (cnt[f2] < 3) fadj[3*f2 + cnt[f2]++] = f1;
+            if (edges) {
+                edges[4*ne+0] = E[i][0]; edges[4*ne+1] = E[i][1];
+                edges[4*ne+2] = f1;      edges[4*ne+3] = f2;
+                ne++;
+            }
+            i += 2;
+        } else i++;
+    }
+    free(E); free(cnt);
+    *out_fadj = fadj;
+    if (out_edges) { *out_edges = edges; *out_ne = ne; }
+    return 1;
+}
+
+/* Fan tet (pyramid center->face) containing the strictly-interior point p: the
+ * face where the ray from center through p exits bp (min positive t among faces
+ * the ray leaves through). O(Nf) cheap dot products; exact enough as a flood
+ * seed (an edge/vertex-grazing ray just picks one incident face, and the flood
+ * covers its neighbours). Returns the face index, or -1 if none (degenerate). */
+static int fan_tet_of_point(const s_convh *ch, s_point center, s_point p)
+{
+    s_point d = subtract_points(p, center);
+    double best_t = 1e300; int best = -1;
+    for (int f = 0; f < ch->Nf; f++) {
+        s_point nrm = ch->fnormals[f];
+        s_point fp  = ch->points.p[ch->faces[3*f]];
+        /* Orient the (unnormalized, possibly inward) face normal outward using the
+         * strictly-interior center: outward => dot(n, fp-center) > 0. */
+        double so  = dot_prod(nrm, subtract_points(fp, center));
+        double sgn = (so >= 0) ? 1.0 : -1.0;
+        double nd  = sgn * dot_prod(nrm, d);            /* outward_n . d */
+        if (nd <= 0) continue;                          /* ray not leaving through face f */
+        double t = (sgn * so) / nd;                     /* (outward_n . (fp-center)) / (outward_n . d) */
+        if (t > 0 && t < best_t) { best_t = t; best = f; }
+    }
+    return best;
+}
+
+/* ---- N-face clip helpers (boundary cells without the fan detour) ---------
+ * The boundary vertices of cell ^ bp are built directly ON the bp surface:
+ *   type 1: bp vertices owned by the cell           (global exact owner descent)
+ *   type 2: bp edge ^ bisector crossings            (global 1D Voronoi edge-walk)
+ *   type 3: Voronoi edge ^ face-triangle crossings  (per cell, per hit face)
+ *   type 4: Voronoi vertices (duals) inside bp      (clearance prescreen + exact
+ *                                                    ray-exit test)
+ * Types 1-3 are confined to the surface by construction, so no candidate can
+ * land outside bp -- this replaces the fan partition's containment guarantee
+ * and never tests a candidate against a non-local face. */
+
+struct cvx_prec { int cell; s_point p; };   /* pooled boundary vertex record */
+struct cvx_frec { int cell; int face; };    /* patch-flood seed record */
+
+/* CSR-bucket records (any struct whose FIRST member is the int cell) by cell.
+ * out_off: N+1 offsets; out_idx: record indices grouped per cell. 1 OK, 0 err. */
+static int csr_bucket_recs(int N, const void *recs, int nrec, size_t stride,
+                           int **out_off, int **out_idx)
+{
+    int *off = calloc((size_t)N + 1, sizeof(int));
+    int *idx = malloc(sizeof(int) * (size_t)(nrec > 0 ? nrec : 1));
+    int *cur = malloc(sizeof(int) * (size_t)(N > 0 ? N : 1));
+    if (!off || !idx || !cur) { free(off); free(idx); free(cur); return 0; }
+    for (int r = 0; r < nrec; r++) {
+        int c = *(const int *)((const char *)recs + (size_t)r * stride);
+        if (c >= 0 && c < N) off[c + 1]++;
+    }
+    for (int c = 0; c < N; c++) off[c + 1] += off[c];
+    memcpy(cur, off, sizeof(int) * (size_t)N);
+    for (int r = 0; r < nrec; r++) {
+        int c = *(const int *)((const char *)recs + (size_t)r * stride);
+        if (c >= 0 && c < N) idx[cur[c]++] = r;
+    }
+    free(cur);
+    *out_off = off; *out_idx = idx;
+    return 1;
+}
+
+/* CSR of faces incident to each hull point (3*Nf entries). 1 OK, 0 err. */
+static int build_vertex_faces(const s_convh *ch, int **out_off, int **out_lst)
+{
+    int nv = ch->points.N, Nf = ch->Nf;
+    int *off = calloc((size_t)nv + 1, sizeof(int));
+    int *lst = malloc(sizeof(int) * (size_t)(3 * Nf > 0 ? 3 * Nf : 1));
+    int *cur = malloc(sizeof(int) * (size_t)(nv > 0 ? nv : 1));
+    if (!off || !lst || !cur) { free(off); free(lst); free(cur); return 0; }
+    for (int f = 0; f < 3 * Nf; f++) off[ch->faces[f] + 1]++;
+    for (int v = 0; v < nv; v++) off[v + 1] += off[v];
+    memcpy(cur, off, sizeof(int) * (size_t)nv);
+    for (int f = 0; f < Nf; f++)
+        for (int k = 0; k < 3; k++)
+            lst[cur[ch->faces[3*f+k]]++] = f;
+    free(cur);
+    *out_off = off; *out_lst = lst;
+    return 1;
+}
+
+/* Emit a type-1/2 vertex to cell c: pool point + patch seeds for faces fa/fb
+ * (fb may be -1). 1 OK, 0 allocation error. */
+static int nface_emit(int c, s_point P, int fa, int fb,
+                      s_dynarray *precs, s_dynarray *frecs)
+{
+    struct cvx_prec pr = { c, P };
+    if (!dynarray_push(precs, &pr)) return 0;
+    struct cvx_frec fr = { c, fa };
+    if (fa >= 0 && !dynarray_push(frecs, &fr)) return 0;
+    fr.face = fb;
+    if (fb >= 0 && !dynarray_push(frecs, &fr)) return 0;
+    return 1;
+}
+
+/* March bp edge A->B (shared by faces f1,f2) through the seeds' Voronoi
+ * diagram. The restriction to the segment is a 1D Voronoi partition; each
+ * crossing (the binding bisector at the current cell's interval high end) is a
+ * vertex of BOTH incident cells' cell^bp and is emitted to each -- and to any
+ * exactly-cocrossing tie partner, so degenerate multi-cell crossing points are
+ * never lost. Same exact 1D-LP predicates as clip category (d). Returns 1 OK,
+ * 0 allocation error, -1 walk anomaly (degenerate start/cycle; caller falls
+ * back to the fan clip for the whole diagram). */
+static int convex_edge_walk(const s_points *seeds, const struct ncvx_cell_adjacency *adj,
+                            int N, s_point A, s_point B, int owner_a, int f1, int f2,
+                            s_dynarray *precs, s_dynarray *frecs)
+{
+    int m = owner_a;
+    for (int steps = 0; steps <= N + 8; steps++) {
+        int NB = adj->offset[m+1] - adj->offset[m];
+        const int *nbr = NB ? adj->neighbor + adj->offset[m] : NULL;
+        s_point sm = seeds->p[m];
+        int hi_k = -1;
+        for (int k = 0; k < NB; k++) {
+            s_point t = seeds->p[nbr[k]];
+            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
+            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
+            if (sA <= 0 && sB <= 0) continue;            /* edge inside this bisector */
+            if (sA >= 0 && sB >= 0) return -1;           /* m does not meet the edge interior */
+            int slope = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
+            if (slope < 0) {                             /* leaving crossing (HI bound) */
+                if (hi_k < 0 || lp_cmp_lambda(A,B,sm, t, seeds->p[nbr[hi_k]]) < 0) hi_k = k;
+            }
+        }
+        if (hi_k < 0) return 1;                          /* interval reaches B: done */
+        s_point t = seeds->p[nbr[hi_k]];
+        double gA = lp_bisval(A, sm, t), gB = lp_bisval(B, sm, t);
+        double lam = gA / (gA - gB);
+        s_point X = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y),
+                      .z = A.z + lam*(B.z-A.z) };
+        if (!nface_emit(m, X, f1, f2, precs, frecs)) return 0;
+        if (!nface_emit(nbr[hi_k], X, f1, f2, precs, frecs)) return 0;
+        for (int k = 0; k < NB; k++) {                   /* exact co-crossing tie partners */
+            if (k == hi_k) continue;
+            s_point tk = seeds->p[nbr[k]];
+            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z);
+            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z);
+            if (!((sA > 0 && sB < 0) || (sA < 0 && sB > 0))) continue;
+            if (lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z) >= 0)
+                continue;
+            if (lp_cmp_lambda(A,B,sm, tk, t) == 0)
+                if (!nface_emit(nbr[k], X, f1, f2, precs, frecs)) return 0;
+        }
+        m = nbr[hi_k];
+    }
+    return -1;                                           /* cycle guard tripped */
+}
+
+/* Type 3: crossings of the cell's dual Voronoi edges with face fi's plane,
+ * confined to the face triangle by the exact in-plane TRI constraints (Tier-A
+ * lp_feasible_S_S_T*) and to the true Voronoi edge segment by its <=2 caps
+ * (lp3_feasible_TSS_S). Every accepted crossing lies ON face fi, hence in bp:
+ * no test against any other bp face is needed. Appends the float solves to
+ * pts. Returns 1 OK, 0 allocation error. */
+static int nface_face_crossings(const s_convh *ch, int fi, int seed_id,
+                                const s_points *seeds, const int *ve, int n_edge,
+                                double EPS_DEG, s_dynarray *pts)
+{
+    s_point fc[3]; convh_get_face(ch, fi, fc);
+    s_point Aq = fc[0], Qq = fc[1], Rq = fc[2];
+    s_point s = seeds->p[seed_id];
+    s_point nf = cross_prod(subtract_points(Qq,Aq), subtract_points(Rq,Aq));
+    double df = dot_prod(nf, Aq);
+    for (int ei = 0; ei < n_edge; ei++) {
+        int j1 = ve[4*ei+0], j2 = ve[4*ei+1];
+        int cap[2] = { ve[4*ei+2], ve[4*ei+3] };
+        s_point t1 = seeds->p[j1], t2 = seeds->p[j2];
+        if (lp3_D_TSS(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                      s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) == 0)
+            continue;                                    /* Voronoi edge parallel to face */
+        int keep = 1;
+        for (int c2 = 0; c2 < 2 && keep; c2++) {         /* on the real edge segment */
+            if (cap[c2] < 0) continue;
+            s_point u = seeds->p[cap[c2]];
+            if (lp3_feasible_TSS_S(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                   s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                   u.x,u.y,u.z) < 0) keep = 0;
+        }
+        if (!keep) continue;
+        if (lp_feasible_S_S_T0(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                               s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
+        if (lp_feasible_S_S_T1(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                               s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
+        if (lp_feasible_S_S_T2(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                               s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
+        s_point n1 = subtract_points(t1, s); double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s));
+        s_point n2 = subtract_points(t2, s); double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s));
+        double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
+        double rhs[3] = { d1, d2, df }, x[3];
+        if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
+            s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
+            if (!dynarray_push(pts, &Pt)) return 0;
+        }
+    }
+    return 1;
+}
+
+/* Per-diagram float geometry cache for the surface locators: outward-oriented
+ * face normals fno[3f..] and plane offsets fgo[f] (X inside face f iff
+ * dot(fno_f, X) <= fgo_f), plus the squared circumscribed (R2max, over hull
+ * points) and inscribed (r2ins, min center-plane distance) radii around the
+ * interior center. Pure prescreen data -- no exact decision consumes it. */
+struct nface_geom {
+    double *fno;    /* 3*Nf outward normals (unnormalized) */
+    double *fgo;    /* Nf plane offsets */
+    double  R2max, r2ins;
+    s_point center;
+};
+
+static int nface_geom_build(const s_convh *ch, s_point center, struct nface_geom *g)
+{
+    int Nf = ch->Nf;
+    g->center = center;
+    g->fno = malloc(sizeof(double) * 3 * (size_t)(Nf > 0 ? Nf : 1));
+    g->fgo = malloc(sizeof(double) * (size_t)(Nf > 0 ? Nf : 1));
+    if (!g->fno || !g->fgo) { free(g->fno); free(g->fgo); return 0; }
+    double r2ins = 1e300;
+    for (int f = 0; f < Nf; f++) {
+        s_point nrm = ch->fnormals[f];
+        s_point fp  = ch->points.p[ch->faces[3*f]];
+        double so  = dot_prod(nrm, subtract_points(fp, center));
+        double sgn = (so >= 0) ? 1.0 : -1.0;
+        g->fno[3*f+0] = sgn * nrm.x;
+        g->fno[3*f+1] = sgn * nrm.y;
+        g->fno[3*f+2] = sgn * nrm.z;
+        g->fgo[f] = g->fno[3*f]*fp.x + g->fno[3*f+1]*fp.y + g->fno[3*f+2]*fp.z;
+        double n2 = norm_squared(nrm);
+        if (n2 > 0) { double d2 = (sgn*so)*(sgn*so)/n2; if (d2 < r2ins) r2ins = d2; }
+    }
+    double R2max = 0.0;
+    for (int v = 0; v < ch->points.N; v++) {
+        double d2 = norm_squared(subtract_points(ch->points.p[v], center));
+        if (d2 > R2max) R2max = d2;
+    }
+    g->R2max = R2max; g->r2ins = r2ins;
+    return 1;
+}
+
+static void nface_geom_free(struct nface_geom *g) { free(g->fno); free(g->fgo); }
+
+/* Type 4 straggler test: is the Voronoi vertex dual to {s,t1,t2,t3} inside bp?
+ * Convexity: a point is inside bp iff it is inside the plane of the face where
+ * the ray center->point exits (the last plane the ray crosses). The float
+ * circumcentre cc only LOCATES candidate exit faces (all faces within a
+ * relative band of the minimal crossing t, plus the minimal face's edge
+ * neighbours); each candidate is then decided by the implicit exact
+ * lp3_feasible_SSS_T -- an inside point is inside EVERY plane, so testing a
+ * superset that contains the true exit face is exact in both directions.
+ * Returns 1 inside (or on), 0 outside. */
+static int nface_dual_in_bp(const s_convh *ch, const int *fadj,
+                            const struct nface_geom *G, s_point center,
+                            s_point cc, s_point s, s_point t1, s_point t2, s_point t3)
+{
+    s_point d = subtract_points(cc, center);
+    /* Sphere prescreens: bp lies between its inscribed and circumscribed
+     * spheres around the interior center, so these verdicts are certain (with
+     * a float safety margin); they kill the many far aux-cap duals cheaply. */
+    double d2 = norm_squared(d);
+    if (d2 > G->R2max * (1.0 + 1e-9)) return 0;
+    if (d2 < G->r2ins * (1.0 - 1e-9)) return 1;
+    const double *no = G->fno, *go = G->fgo;
+    double best_t = 1e300; int best = -1;
+    for (int f = 0; f < ch->Nf; f++) {
+        double nd = no[3*f]*d.x + no[3*f+1]*d.y + no[3*f+2]*d.z;
+        if (nd <= 0) continue;
+        double so = go[f] - (no[3*f]*center.x + no[3*f+1]*center.y + no[3*f+2]*center.z);
+        double t = so / nd;
+        if (t > 0 && t < best_t) { best_t = t; best = f; }
+    }
+    if (best < 0) return 1;                     /* cc == center: strictly inside */
+    if (best_t > 1.0 + 1e-6) return 1;          /* exit well beyond cc */
+    if (best_t < 1.0 - 1e-6) return 0;          /* cc well beyond the exit face */
+
+    /* Borderline: exact-test cc against every candidate exit face. */
+    for (int f = 0; f < ch->Nf; f++) {
+        int cand = (f == best) ||
+                   (fadj[3*best] == f || fadj[3*best+1] == f || fadj[3*best+2] == f);
+        if (!cand) {
+            double nd = no[3*f]*d.x + no[3*f+1]*d.y + no[3*f+2]*d.z;
+            if (nd <= 0) continue;
+            double so = go[f] - (no[3*f]*center.x + no[3*f+1]*center.y + no[3*f+2]*center.z);
+            double t = so / nd;
+            cand = (t > 0 && fabs(t - best_t) <= 1e-6 * (1.0 + fabs(best_t)));
+        }
+        if (!cand) continue;
+        s_point A, Q, R;
+        { s_point fc3[3]; convh_get_face(ch, f, fc3); A = fc3[0]; Q = fc3[1]; R = fc3[2]; }
+        int sigma = orient3d(A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z,
+                             center.x, center.y, center.z);
+        int r = lp3_feasible_SSS_T(s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                   t3.x,t3.y,t3.z, A.x,A.y,A.z, Q.x,Q.y,Q.z,
+                                   R.x,R.y,R.z);
+        if (sigma * r < 0) return 0;
+    }
+    return 1;
+}
+
+/* Seed patch faces where the line p + t*u (t in [t0,t1]) crosses the bp
+ * surface. Float locator over the cached oriented planes; convexity gives the
+ * inside interval [max entering t, min exiting t]. Seeds EVERY face tying with
+ * an interval end within a float band (a triangulated flat facet stores
+ * coplanar triangles with IDENTICAL crossing t; the crossing may lie in a tied
+ * sibling's triangle) -- tracked single-pass in small tie lists, with a full
+ * rescan only on overflow. Seeding is a completeness heuristic only: the
+ * type-3 enumeration on every seeded face is exact, and the flood spreads from
+ * each seed across its footprint component. Pushes unseen faces onto fqueue
+ * (stamp-deduped); *ok is cleared on allocation failure. */
+#define NSL_MAX 8
+static void nface_seed_line(const s_convh *ch, const struct nface_geom *G,
+                            s_point p, s_point u,
+                            double t0, double t1, int fstamp, int *face_stamp,
+                            s_dynarray *fqueue, int *ok)
+{
+    int Nf = ch->Nf;
+    double te = -1e300, tx = 1e300;
+    struct { double t; int f; } le[NSL_MAX], lx[NSL_MAX];
+    int ne = 0, nx = 0, ovf_e = 0, ovf_x = 0;
+    const double *no = G->fno, *go = G->fgo;
+    double px = p.x, py = p.y, pz = p.z, ux = u.x, uy = u.y, uz = u.z;
+    for (int f = 0; f < Nf; f++) {
+        double nd = no[3*f]*ux + no[3*f+1]*uy + no[3*f+2]*uz;
+        double g0 = go[f] - (no[3*f]*px + no[3*f+1]*py + no[3*f+2]*pz);
+        if (nd == 0.0) {
+            if (g0 < 0) return;                              /* line outside this face */
+            continue;
+        }
+        double t = g0 / nd;
+        if (nd > 0) {                                        /* exiting: track min + ties */
+            double band = 1e-9 * (1.0 + fabs(t < tx ? t : tx));
+            if (t < tx) {
+                tx = t;
+                int m = 0;
+                for (int q = 0; q < nx; q++) if (lx[q].t <= tx + band) lx[m++] = lx[q];
+                nx = m;
+            }
+            if (t <= tx + band) {
+                if (nx < NSL_MAX) { lx[nx].t = t; lx[nx].f = f; nx++; }
+                else ovf_x = 1;
+            }
+        } else {                                             /* entering: track max + ties */
+            double band = 1e-9 * (1.0 + fabs(t > te ? t : te));
+            if (t > te) {
+                te = t;
+                int m = 0;
+                for (int q = 0; q < ne; q++) if (le[q].t >= te - band) le[m++] = le[q];
+                ne = m;
+            }
+            if (t >= te - band) {
+                if (ne < NSL_MAX) { le[ne].t = t; le[ne].f = f; ne++; }
+                else ovf_e = 1;
+            }
+        }
+    }
+    double lo = te > t0 ? te : t0, hi = tx < t1 ? tx : t1;
+    if (lo > hi) return;                                     /* misses bp in range */
+    int want_e = ne > 0 && te > t0 && te < t1;
+    int want_x = nx > 0 && tx > t0 && tx < t1;
+    if (want_x)
+        for (int q = 0; q < nx; q++)
+            if (fabs(lx[q].t - tx) <= 1e-9 * (1.0 + fabs(tx)) &&
+                face_stamp[lx[q].f] != fstamp) {
+                face_stamp[lx[q].f] = fstamp;
+                if (!dynarray_push(fqueue, &lx[q].f)) { *ok = 0; return; }
+            }
+    if (want_e)
+        for (int q = 0; q < ne; q++)
+            if (fabs(le[q].t - te) <= 1e-9 * (1.0 + fabs(te)) &&
+                face_stamp[le[q].f] != fstamp) {
+                face_stamp[le[q].f] = fstamp;
+                if (!dynarray_push(fqueue, &le[q].f)) { *ok = 0; return; }
+            }
+    if ((want_x && ovf_x) || (want_e && ovf_e)) {            /* rare: > NSL_MAX ties */
+        for (int f = 0; f < Nf; f++) {
+            double nd = no[3*f]*ux + no[3*f+1]*uy + no[3*f+2]*uz;
+            double g0 = go[f] - (no[3*f]*px + no[3*f+1]*py + no[3*f+2]*pz);
+            if (nd == 0.0) continue;
+            double t = g0 / nd;
+            int hit = 0;
+            if (nd > 0 && want_x) hit = fabs(t - tx) <= 1e-9 * (1.0 + fabs(tx));
+            if (nd < 0 && want_e) hit = fabs(t - te) <= 1e-9 * (1.0 + fabs(te));
+            if (hit && face_stamp[f] != fstamp) {
+                face_stamp[f] = fstamp;
+                if (!dynarray_push(fqueue, &f)) { *ok = 0; return; }
+            }
+        }
+    }
+}
+
+/* Fan-clip fallback: pool the boundary vertices of cell i via the fan-tet
+ * flood (locate the seed's fan tet, BFS through overlapping tets) with an
+ * exhaustive Nf scan as safety net. Complete for any cell; used when the
+ * N-face path has no surface evidence for the cell, its hull fails, or the
+ * edge-walk hit a degeneracy. Returns 1 OK, 0 error. */
+static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
+                         const struct ncvx_cell_adjacency *adj, int i,
+                         const int *vv, int n_vtx, const int *ve, int n_edge,
+                         const int *nbr, int NB, s_point center,
+                         const int *fadj, int *face_stamp, int *fstamp,
+                         s_dynarray *fqueue, int *resolved,
+                         double EPS_DEG, s_dynarray *pts)
+{
+    int Nf = bp->convh.Nf;
+    s_point s = real_seeds->p[i];
+    if (n_vtx > 0) memset(resolved, 0, sizeof(int) * (size_t)n_vtx);
+    pts->N = 0;
+    int start = fan_tet_of_point(&bp->convh, center, s);
+    if (start >= 0) {
+        (*fstamp)++;
+        fqueue->N = 0;
+        face_stamp[start] = *fstamp;
+        if (!dynarray_push(fqueue, &start)) return 0;
+        for (unsigned qh = 0; qh < fqueue->N; qh++) {
+            int fi; dynarray_get_value(fqueue, qh, &fi);
+            s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
+            s_point tet[4] = { center, fc[0], fc[1], fc[2] };
+            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, nbr, NB)) continue;  /* frontier */
+            if (!clip_cell_tet_accumulate(i, real_seeds, adj, vv, n_vtx, ve, n_edge,
+                                          tet, resolved, fi + 1, EPS_DEG, pts))
+                return 0;
+            for (int k = 0; k < 3; k++) {
+                int g = fadj[3*fi + k];
+                if (g >= 0 && face_stamp[g] != *fstamp) {
+                    face_stamp[g] = *fstamp;
+                    if (!dynarray_push(fqueue, &g)) return 0;
+                }
+            }
+        }
+    }
+    /* Safety net: location failed or the flood seed missed the overlap set. */
+    if (pts->N == 0) {
+        if (n_vtx > 0) memset(resolved, 0, sizeof(int) * (size_t)n_vtx);
+        for (int fi = 0; fi < Nf; fi++) {
+            s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
+            s_point tet[4] = { center, fc[0], fc[1], fc[2] };
+            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, nbr, NB)) continue;
+            if (!clip_cell_tet_accumulate(i, real_seeds, adj, vv, n_vtx, ve, n_edge,
+                                          tet, resolved, fi + 1, EPS_DEG, pts))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+/* Fill vcells[0..N-1] for the convex bp, mirror-free. Per cell: classify
+ * INTERIOR (bounded, every dual circumcentre within the seed's exact clearance
+ * to the bp planes) vs BOUNDARY. Interior cells hull their circumcentres
+ * directly. Boundary cells take the N-face clip: pool the surface-built
+ * type-1/2 vertices (global owner descent + edge-walk), the type-3 face
+ * crossings over the cell's hit-face patch (flooded from its type-1/2
+ * evidence), and the inside-bp duals -- then hull once. Cells without surface
+ * evidence (footprint interior to a single face), cells whose N-face hull
+ * fails, and all cells after an edge-walk anomaly fall back to the fan clip
+ * (fan_clip_pool). VOR3D_FANCLIP=1 forces the fan path for A/B. Returns 1 on
+ * success, 0 on failure. */
+static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
+                          s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
+                          double EPS_DEG, s_vcell *vcells)
+{
+    int N = real_seeds->N;
+    int Nf = bp->convh.Nf;
+    s_point center = bp->CM;
+    int rc = 0;
+
+    /* Hull seeds (unbounded Voronoi cells): a seed sharing a DT tet with any far
+     * auxiliary point (id >= N). Their cells are bounded only by bp -> boundary. */
+    char *hull_seed = calloc((size_t)(N > 0 ? N : 1), 1);
+    /* per-cell resolved-vtx memo (fan category a); sized to the max dual count */
+    int max_nvtx = 0;
+    for (int i = 0; i < N; i++) {
+        int nv = adj->vtx_off[i+1] - adj->vtx_off[i];
+        if (nv > max_nvtx) max_nvtx = nv;
+    }
+    int *resolved = calloc((size_t)(max_nvtx > 0 ? max_nvtx : 1), sizeof(int));
+    s_dynarray ccbuf = dynarray_initialize(sizeof(s_point), 64);   /* interior dual cache */
+    s_dynarray pts   = dynarray_initialize(sizeof(s_point), 64);   /* boundary vertex pool */
+    /* bp combinatorics + N-face record streams */
+    int *fadj = NULL, *bp_edges = NULL, *vf_off = NULL, *vf_lst = NULL;
+    int  n_bp_edges = 0;
+    int *owner = NULL; char *tie = NULL;
+    int *p_off = NULL, *p_idx = NULL, *f_off = NULL, *f_idx = NULL;
+    int *face_stamp = calloc((size_t)(Nf > 0 ? Nf : 1), sizeof(int));   /* per-face visit stamp */
+    int  fstamp = 0;
+    s_dynarray fqueue = dynarray_initialize(sizeof(int), 64);
+    s_dynarray precs  = dynarray_initialize(sizeof(struct cvx_prec), 128);
+    s_dynarray frecs  = dynarray_initialize(sizeof(struct cvx_frec), 128);
+    struct nface_geom geom = {0};
+    if (!hull_seed || !resolved || !ccbuf.items || !pts.items || !face_stamp ||
+        !fqueue.items || !precs.items || !frecs.items ||
+        !build_face_adjacency(&bp->convh, &fadj, &bp_edges, &n_bp_edges) ||
+        !build_vertex_faces(&bp->convh, &vf_off, &vf_lst) ||
+        !nface_geom_build(&bp->convh, center, &geom))
+        goto err;
+
+    for (s_ncell *t = seed_dt->head; t; t = t->next) {
+        int has_aux = 0;
+        for (int k = 0; k < 4; k++) if (t->vertex_id[k] >= N) { has_aux = 1; break; }
+        if (!has_aux) continue;
+        for (int k = 0; k < 4; k++) { int v = t->vertex_id[k]; if (v >= 0 && v < N) hull_seed[v] = 1; }
+    }
+
+    /* ---- N-face global passes: bp-vertex owners (type 1) + edge-walk (type 2).
+     * force_fan drops the whole diagram to the fan path on any walk anomaly. */
+    int force_fan = getenv("VOR3D_FANCLIP") != NULL;
+    if (!force_fan) {
+        if (!compute_vertex_owners(&bp->convh.points, real_seeds, seed_dt, adj, N,
+                                   &owner, &tie))
+            goto err;
+        int nv = bp->convh.points.N;
+        for (int v = 0; v < nv && !force_fan; v++) {
+            int m = owner[v];
+            if (m < 0 || m >= N) continue;
+            s_point V = bp->convh.points.p[v];
+            /* pool V + seed every incident face; a hull point unused by any face
+             * (interior of the point cloud) has no faces and only pools -- its
+             * point lies inside bp, harmless for the hull. */
+            struct cvx_prec pr = { m, V };
+            if (!dynarray_push(&precs, &pr)) goto err;
+            for (int q = vf_off[v]; q < vf_off[v+1]; q++) {
+                struct cvx_frec fr = { m, vf_lst[q] };
+                if (!dynarray_push(&frecs, &fr)) goto err;
+            }
+            if (tie[v]) {                       /* emit to every exactly-tied cell too */
+                s_point sm = real_seeds->p[m];
+                for (int k = adj->offset[m]; k < adj->offset[m+1]; k++) {
+                    int j = adj->neighbor[k];
+                    if (j < 0 || j >= N) continue;
+                    s_point sj = real_seeds->p[j];
+                    if (lp_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z,
+                                            sj.x,sj.y,sj.z) != 0) continue;
+                    pr.cell = j;
+                    if (!dynarray_push(&precs, &pr)) goto err;
+                    for (int q = vf_off[v]; q < vf_off[v+1]; q++) {
+                        struct cvx_frec fr = { j, vf_lst[q] };
+                        if (!dynarray_push(&frecs, &fr)) goto err;
+                    }
+                }
+            }
+        }
+        for (int e = 0; e < n_bp_edges && !force_fan; e++) {
+            int va = bp_edges[4*e+0], vb = bp_edges[4*e+1];
+            int ef1 = bp_edges[4*e+2], ef2 = bp_edges[4*e+3];
+            int r = convex_edge_walk(real_seeds, adj, N,
+                                     bp->convh.points.p[va], bp->convh.points.p[vb],
+                                     owner[va], ef1, ef2, &precs, &frecs);
+            if (r == 0) goto err;
+            if (r == -1) {
+                fprintf(stderr, "clip_convex_bp: edge-walk anomaly on bp edge %d "
+                        "(degenerate tie); using fan clip for this diagram\n", e);
+                force_fan = 1;
+            }
+        }
+        if (!force_fan) {
+            if (!csr_bucket_recs(N, precs.items, (int)precs.N,
+                                 sizeof(struct cvx_prec), &p_off, &p_idx) ||
+                !csr_bucket_recs(N, frecs.items, (int)frecs.N,
+                                 sizeof(struct cvx_frec), &f_off, &f_idx))
+                goto err;
+        }
+    }
+
+    for (int i = 0; i < N; i++) {
+        int n_vtx  = adj->vtx_off[i+1]  - adj->vtx_off[i];
+        int n_edge = adj->edge_off[i+1] - adj->edge_off[i];
+        const int *vv = n_vtx  ? adj->vtx  + 3 * adj->vtx_off[i]  : NULL;
+        const int *ve = n_edge ? adj->edge + 4 * adj->edge_off[i] : NULL;
+        int NB = adj->offset[i+1] - adj->offset[i];
+        const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
+        s_point s = real_seeds->p[i];
+
+        /* ---- classify + (if interior) collect duals for a direct hull ----
+         * A bounded (non-hull) cell is INTERIOR iff its whole convex Voronoi
+         * cell lies inside bp. Cheap sufficient test: every dual circumradius
+         * (seed->dual distance) is below the seed's clearance to the nearest
+         * bp face plane -- then every vertex is inside every half-space, so the
+         * cell is inside bp. The clearance is a lower bound on the true boundary
+         * distance (exact for a convex polytope's supporting planes), so it
+         * never misclassifies a boundary cell as interior; a cleared cell that
+         * is actually interior only takes the (correct) clip path -- safe.
+         * clear2 is also the boundary branch's dual prescreen, so it is
+         * computed for every cell. */
+        double clear2 = 1e300;   /* squared clearance to nearest bp face plane */
+        for (int fi = 0; fi < Nf; fi++) {
+            s_point nrm = bp->convh.fnormals[fi];
+            s_point fp  = bp->convh.points.p[bp->convh.faces[3*fi]];
+            double g = dot_prod(nrm, subtract_points(fp, s));
+            double n2 = norm_squared(nrm);
+            if (n2 <= 0) continue;
+            double d2 = (g > 0) ? (g * g / n2) : 0.0;
+            if (d2 < clear2) clear2 = d2;
+        }
+        int boundary = hull_seed[i];
+        ccbuf.N = 0;
+        if (!boundary) {
+            for (int vi = 0; vi < n_vtx; vi++) {
+                s_point tetc[4] = { s, real_seeds->p[vv[3*vi]], real_seeds->p[vv[3*vi+1]],
+                                    real_seeds->p[vv[3*vi+2]] };
+                s_point cc;
+                if (!circumcentre_tetrahedron(tetc, EPS_DEG, &cc)) { boundary = 1; break; }
+                if (norm_squared(subtract_points(cc, s)) >= clear2) { boundary = 1; break; }
+                if (!dynarray_push(&ccbuf, &cc)) goto err;
+            }
+        }
+
+        s_convh hull; double hv;
+        if (!boundary) {                                 /* INTERIOR: hull the cached duals */
+            s_points P = { (int)ccbuf.N, (s_point *)ccbuf.items };
+            int r = convhull_from_points(&P, EPS_DEG, &hull);
+            if (r == -1) goto err;
+            if (r == 1) hv = volume_convhull(&hull);
+            else boundary = 1;                           /* degenerate -> fall through to clip */
+        }
+
+        if (boundary) {                                  /* BOUNDARY: pool + hull once */
+            /* N-face path: pool types 1-4 and hull once. Patch seeds come from
+             * BOTH the cell's surface records (owned bp vertices / bp-edge
+             * crossings) and the faces where its Voronoi edges cross the bp
+             * surface -- the footprint of a big cell can have SEVERAL
+             * disconnected components (e.g. poking through opposite faces of a
+             * thin domain), and every component's polygon corners lie on
+             * Voronoi-edge crossings, so the edge seeds reach components the
+             * evidence faces cannot. */
+            int pooled = 0;
+            if (!force_fan) {
+                pts.N = 0;
+                /* type 4: duals inside bp (clearance prescreen; exact ray-exit
+                 * test only for the borderline band) */
+                for (int vi = 0; vi < n_vtx; vi++) {
+                    s_point tetc[4] = { s, real_seeds->p[vv[3*vi]],
+                                        real_seeds->p[vv[3*vi+1]],
+                                        real_seeds->p[vv[3*vi+2]] };
+                    s_point cc;
+                    if (!circumcentre_tetrahedron(tetc, EPS_DEG, &cc)) continue;
+                    double r2 = norm_squared(subtract_points(cc, s));
+                    if (r2 >= clear2 * (1.0 - 1e-9) &&
+                        !nface_dual_in_bp(&bp->convh, fadj, &geom, center, cc, s,
+                                          tetc[1], tetc[2], tetc[3]))
+                        continue;
+                    if (!dynarray_push(&pts, &cc)) goto err;
+                }
+                /* types 1+2: bucketed surface records */
+                for (int q = p_off[i]; q < p_off[i+1]; q++) {
+                    const struct cvx_prec *pr =
+                        (const struct cvx_prec *)precs.items + p_idx[q];
+                    if (!dynarray_push(&pts, &pr->p)) goto err;
+                }
+                /* patch seeds: evidence faces + Voronoi-edge ^ surface faces */
+                fstamp++;
+                fqueue.N = 0;
+                for (int q = f_off[i]; q < f_off[i+1]; q++) {
+                    int f0 = ((const struct cvx_frec *)frecs.items + f_idx[q])->face;
+                    if (f0 >= 0 && face_stamp[f0] != fstamp) {
+                        face_stamp[f0] = fstamp;
+                        if (!dynarray_push(&fqueue, &f0)) goto err;
+                    }
+                }
+                int seed_ok = 1;
+                double clear2m = clear2 * (1.0 - 1e-9);
+                for (int ei = 0; ei < n_edge && seed_ok; ei++) {
+                    int j1 = ve[4*ei+0], j2 = ve[4*ei+1];
+                    int c1 = ve[4*ei+2], c2 = ve[4*ei+3];
+                    s_point t1 = real_seeds->p[j1], t2 = real_seeds->p[j2];
+                    if (c1 >= 0 && c2 >= 0) {
+                        s_point cc1, cc2;
+                        s_point e1[4] = { s, t1, t2, real_seeds->p[c1] };
+                        s_point e2[4] = { s, t1, t2, real_seeds->p[c2] };
+                        if (!circumcentre_tetrahedron(e1, EPS_DEG, &cc1) ||
+                            !circumcentre_tetrahedron(e2, EPS_DEG, &cc2)) continue;
+                        if (norm_squared(subtract_points(cc1, s)) < clear2m &&
+                            norm_squared(subtract_points(cc2, s)) < clear2m)
+                            continue;                        /* whole edge inside bp */
+                        nface_seed_line(&bp->convh, &geom, cc1,
+                                        subtract_points(cc2, cc1), 0.0, 1.0,
+                                        fstamp, face_stamp, &fqueue, &seed_ok);
+                    } else if (c1 >= 0 || c2 >= 0) {         /* half-infinite edge */
+                        int a = c1 >= 0 ? c1 : c2;
+                        s_point cc1;
+                        s_point e1[4] = { s, t1, t2, real_seeds->p[a] };
+                        if (!circumcentre_tetrahedron(e1, EPS_DEG, &cc1)) continue;
+                        s_point u = cross_prod(subtract_points(t1, s),
+                                               subtract_points(t2, s));
+                        if (dot_prod(u, subtract_points(real_seeds->p[a], s)) > 0)
+                            u = (s_point){ .x = -u.x, .y = -u.y, .z = -u.z };
+                        nface_seed_line(&bp->convh, &geom, cc1, u, 0.0, 1e30,
+                                        fstamp, face_stamp, &fqueue, &seed_ok);
+                    } else {                                 /* full line (tiny N) */
+                        s_point u = cross_prod(subtract_points(t1, s),
+                                               subtract_points(t2, s));
+                        s_point n1 = subtract_points(t1, s), n2 = subtract_points(t2, s);
+                        double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{u.x,u.y,u.z}};
+                        double rhs[3] = { 0.5*(dot_prod(t1,t1) - dot_prod(s,s)),
+                                          0.5*(dot_prod(t2,t2) - dot_prod(s,s)),
+                                          dot_prod(u, s) }, x[3];
+                        if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) != 3) continue;
+                        s_point p0 = { .x = x[0], .y = x[1], .z = x[2] };
+                        nface_seed_line(&bp->convh, &geom, p0, u, -1e30, 1e30,
+                                        fstamp, face_stamp, &fqueue, &seed_ok);
+                    }
+                }
+                if (!seed_ok) goto err;
+                unsigned n_seed_faces = fqueue.N;   /* seeds expand unconditionally */
+                /* type 3: flood the hit-face patch from all seeds. Seed faces
+                 * expand to their neighbours even when the filter rejects them
+                 * (a float-located seed can land one face off the footprint);
+                 * flooded faces expand only when they may truly hit the cell. */
+                for (unsigned qh = 0; qh < fqueue.N; qh++) {
+                    int fi; dynarray_get_value(&fqueue, qh, &fi);
+                    s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
+                    int may = lp3_cell_maybe_hits_tri(fc, s, real_seeds, nbr, NB);
+                    if (may && !nface_face_crossings(&bp->convh, fi, i, real_seeds,
+                                                     ve, n_edge, EPS_DEG, &pts)) goto err;
+                    if (!may && qh >= n_seed_faces) continue;
+                    for (int k = 0; k < 3; k++) {
+                        int g = fadj[3*fi + k];
+                        if (g >= 0 && face_stamp[g] != fstamp) {
+                            face_stamp[g] = fstamp;
+                            if (!dynarray_push(&fqueue, &g)) goto err;
+                        }
+                    }
+                }
+                pooled = (pts.N >= 4);
+            }
+            int r = 0;
+            if (pooled) {
+                s_points P = { (int)pts.N, (s_point *)pts.items };
+                r = convhull_from_points(&P, EPS_DEG, &hull);
+                if (r == -1) goto err;
+            }
+            if (r != 1) {          /* no evidence, or degenerate N-face pool: fan */
+                if (!fan_clip_pool(bp, real_seeds, adj, i, vv, n_vtx, ve, n_edge,
+                                   nbr, NB, center, fadj, face_stamp, &fstamp,
+                                   &fqueue, resolved, EPS_DEG, &pts)) goto err;
+                s_points P = { (int)pts.N, (s_point *)pts.items };
+                r = convhull_from_points(&P, EPS_DEG, &hull);
+                if (r != 1) {
+                    fprintf(stderr, "clip_convex_bp: boundary cell %d failed to hull "
+                            "(%d pooled vertices, rc=%d)\n", i, (int)pts.N, r);
+                    goto err;
+                }
+            }
+            hv = volume_convhull(&hull);
+        }
+
+        vcells[i] = (s_vcell){0};
+        vcells[i].seed_id  = i;
+        vcells[i].pieces   = malloc(sizeof(s_convh));
+        if (!vcells[i].pieces) { free_convhull(&hull); goto err; }
+        vcells[i].pieces[0] = hull;
+        vcells[i].N_pieces  = 1;
+        vcells[i].volume    = hv;
+    }
+
+    rc = 1;
+err:
+    nface_geom_free(&geom);
+    free(hull_seed); free(resolved); free(fadj); free(face_stamp);
+    free(bp_edges); free(vf_off); free(vf_lst);
+    free(owner); free(tie);
+    free(p_off); free(p_idx); free(f_off); free(f_idx);
+    dynarray_free(&ccbuf); dynarray_free(&pts); dynarray_free(&fqueue);
+    dynarray_free(&precs); dynarray_free(&frecs);
+    return rc;
+}
+
 /* A face f of interior tet nc is on the domain boundary iff it faces outside the
  * domain: either no tet lies across it (interior-only CDT) or the tet across it
  * is an exterior pocket (flagged CDT). Makes the clip accept either CDT form. */
@@ -1319,7 +2276,8 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         if (merge_orphans) piece_tri_off[i] = dynarray_initialize(sizeof(int), 4);
     }
 
-    if (!compute_vertex_owners(domain, real_seeds, seed_dt, adj, N, &owner, &tie))
+    if (!compute_vertex_owners(&domain->cdt.points, real_seeds, seed_dt, adj, N,
+                               &owner, &tie))
         goto err;
     int NVD = adj->vtx_off[N];                            /* total Voronoi-vertex duals */
     if (NVD > 0 && !(resolved = calloc((size_t)NVD, sizeof(int)))) goto err;
@@ -1715,5 +2673,92 @@ s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
                                            buff_points, out_kept_idx,
                                            want_surface, merge_orphans);
     free_ncvx_domain(&domain);  /* result owns its own copy */
+    return out;
+}
+
+
+/* Mirror-free convex Voronoi diagram (IMPROVE_CONVEX.md Idea C). Same seed DT +
+ * far-aux setup as vor3d_in_ncvx_domain (a lean seeds-only DT: no mirrors), then
+ * clip_convex_bp fills the cells against the fan tetrahedralization of bp. Drops
+ * seeds that dedup away in the DT; out_kept_idx (nullable, length n_kept_idx =
+ * count of the caller's pre-filter input seeds) is composed in place by
+ * dt_builder_end exactly as the mirror path does. Returns a zeroed s_vdiagram on
+ * failure. `seeds` are the (already geometry-filtered) interior seeds. */
+s_vdiagram vor3d_convex_clip(const s_points *seeds, const s_bpoly *bp,
+                             double EPS_DEG, double TOL,
+                             int *out_kept_idx, int n_kept_idx)
+{
+    if (!seeds || seeds->N <= 0 || !convhull_is_valid(&bp->convh))
+        return (s_vdiagram){0};
+
+    /* Far auxiliary box (see vor3d_in_ncvx_domain): 8 points many times the
+     * domain size, guaranteeing a non-degenerate DT for any seed count without
+     * corrupting the real Voronoi structure (unlike mirrors). */
+    s_point mn = bp->min, mx = bp->max;
+    s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
+    double  hx = 0.5*(mx.x-mn.x), hy = 0.5*(mx.y-mn.y), hz = 0.5*(mx.z-mn.z);
+    double  h  = hx > hy ? (hx > hz ? hx : hz) : (hy > hz ? hy : hz);
+    if (h <= 0) h = 1.0;
+    const double FAR = 1000.0;
+    s_point aux[8];
+    for (int k = 0; k < 8; k++)
+        aux[k] = (s_point){ .x = c.x + ((k&1)?FAR:-FAR)*h,
+                            .y = c.y + ((k&2)?FAR:-FAR)*h,
+                            .z = c.z + ((k&4)?FAR:-FAR)*h };
+    s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
+    s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
+
+    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max);
+    if (!builder._stack) {
+        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
+        return (s_vdiagram){0};
+    }
+    s_points aux_pts = { .N = 8, .p = aux };
+    if (!dt_builder_extend(&builder, &aux_pts, TOL)) {
+        s_scplx tmp = dt_builder_end(&builder, false, NULL, NULL, 0);
+        free_complex(&tmp);
+        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
+        return (s_vdiagram){0};
+    }
+    int Nreal = seeds->N;
+    s_scplx seed_dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
+                                     out_kept_idx ? n_kept_idx : 0);
+    if (!seed_dt.head || Nreal <= 0) {
+        free_complex(&seed_dt);
+        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
+        return (s_vdiagram){0};
+    }
+
+    int N = Nreal;
+    s_points real_seeds = { .N = N, .p = seed_dt.points.p };   /* real seeds packed first */
+
+    struct ncvx_cell_adjacency adj;
+    if (!build_cell_adjacency(&seed_dt, N, &adj)) {
+        free_complex(&seed_dt);
+        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
+        return (s_vdiagram){0};
+    }
+
+    s_vcell *vcells = calloc((size_t)N, sizeof(s_vcell));
+    if (!vcells || !clip_convex_bp(bp, &real_seeds, &seed_dt, &adj, EPS_DEG, vcells)) {
+        if (vcells) for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
+        free(vcells); free_cell_adjacency(&adj); free_complex(&seed_dt);
+        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
+        return (s_vdiagram){0};
+    }
+
+    s_vdiagram out;
+    out.seeds  = copy_points(&real_seeds);
+    out.bpoly  = bpoly_copy(bp);
+    out.vcells = vcells;
+
+    free_cell_adjacency(&adj);
+    free_complex(&seed_dt);
+
+    if (!out.seeds.p) {
+        free_vdiagram(&out);
+        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
+        return (s_vdiagram){0};
+    }
     return out;
 }
