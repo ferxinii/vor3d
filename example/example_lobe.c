@@ -161,7 +161,7 @@ static s_ncvx_vdiagram run_voronoi(const s_ncvx_domain *domain, double mesh_volu
     s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
     clock_t t0 = clock();
     s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, domain, VOL_REL_DIFF,
-                                              EPS_DEG, TOL, randint_fn, &rctx,
+                                              EPS_DEG, TOL, &rctx,
                                               &buff, NULL, false, false);
     clock_t t1 = clock();
     dynarray_free(&buff);

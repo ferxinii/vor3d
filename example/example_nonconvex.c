@@ -330,7 +330,7 @@ static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
 
         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
         s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, domain, VOL_REL_DIFF,
-                                                   EPS_DEG, TOL, randint_fn, &rctx,
+                                                   EPS_DEG, TOL, &rctx,
                                                    &buff, NULL, false, false);
         dynarray_free(&buff);
         free_points(&seeds);
@@ -391,7 +391,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
         s_points seeds = random_seeds_inside(&mesh, 8);
         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
         s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, &domain, VOL_REL_DIFF,
-                                               EPS_DEG, TOL, randint_fn, &rctx,
+                                               EPS_DEG, TOL, &rctx,
                                                &buff, NULL, false, false);
         dynarray_free(&buff);
         free_points(&seeds);
@@ -434,7 +434,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
 //         s_points seeds = { .N = 2, .p = pts };
 //         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
 //         s_ncvx_vdiagram vd = vor3d_nonconvex(&seeds, domain, VOL_REL_DIFF,
-//                                                EPS_DEG, TOL, randint_fn, &rctx,
+//                                                EPS_DEG, TOL, &rctx,
 //                                                &buff, NULL);
 //         dynarray_free(&buff);
 //         int ok = 1;
@@ -468,7 +468,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
 //         s_points seeds = { .N = 4, .p = pts };
 //         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
 //         s_ncvx_vdiagram vd = vor3d_nonconvex(&seeds, domain, VOL_REL_DIFF,
-//                                                EPS_DEG, TOL, randint_fn, &rctx,
+//                                                EPS_DEG, TOL, &rctx,
 //                                                &buff, NULL);
 //         dynarray_free(&buff);
 //         int ok = 1;

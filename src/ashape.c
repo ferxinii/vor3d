@@ -481,7 +481,7 @@ static s_trimesh boundary_to_trimesh(s_scplx *dt)
 /* ------------------------------------------------------------------ */
 
 s_trimesh alpha_shape_3d(const s_points *pts, double alpha, double TOL_dup,
-                         s_ashape_info *info)
+                         s_ashape_info *info, s_random_context *rng)
 {
     if (info) *info = (s_ashape_info){0};
     if (!pts || pts->N < 4) return trimesh_NAN;
@@ -496,7 +496,7 @@ s_trimesh alpha_shape_3d(const s_points *pts, double alpha, double TOL_dup,
         _t0 = _t1; \
     } while (0)
 
-    s_scplx dt = construct_dt_3d(pts, NULL, true, TOL_dup, NULL);
+    s_scplx dt = construct_dt_3d(pts, NULL, true, TOL_dup, NULL, rng);
     if (dt.N_ncells == 0) return trimesh_NAN;   /* degenerate / coplanar */
     ASHAPE_TICK("dt");
 

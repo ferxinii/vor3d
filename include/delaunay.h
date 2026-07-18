@@ -28,7 +28,8 @@ bool is_delaunay_3d(const s_scplx *scplx, e_delaunay_test_type type);
  *   surviving real seeds first; if any were dropped, mirrored seeds slide into positions
  *   < original_Nreal and would be mistaken for real seeds.  Pass NULL to ignore. */
 s_scplx construct_dt_3d(const s_points *points, const double *weights,
-                        bool keep_big_tetra, double TOL_duplicates, int *out_Nreal);
+                        bool keep_big_tetra, double TOL_duplicates, int *out_Nreal,
+                        s_random_context *rng);
 
 
 
@@ -57,15 +58,20 @@ typedef struct {
 /* bb_min_hint / bb_max_hint: optional AABB hint (e.g. bounding-polytope AABB) that
  * expands the big-tetrahedron to safely contain future mirror points even when few
  * seeds are provided.  Pass NULL for both to use the seed bounding box only. */
+/* rng: caller-owned PRNG that breaks point-location walk ties during construction
+ * (stored on the returned complex; propagates through dt_builder_end). Pass NULL for
+ * a fixed deterministic order. The complex must not outlive *rng. */
 s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, double TOL_dup,
-                               const s_point *bb_min_hint, const s_point *bb_max_hint);
+                               const s_point *bb_min_hint, const s_point *bb_max_hint,
+                               s_random_context *rng);
 
 /* Exact-id build (CDT): all builder predicates run on the cdt_predicates
  * registry (registry index == scplx point index), no weights.  Requires
  * cdt_predicates_init() to have been called; clears and repopulates the
  * registry for the seeds.  Add Steiners with dt_builder_extend_lnc. */
 s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
-                                    const s_point *bb_min_hint, const s_point *bb_max_hint);
+                                    const s_point *bb_min_hint, const s_point *bb_max_hint,
+                                    s_random_context *rng);
 
 /* Exact-id build of a LOCAL cavity DT (Phase B): predicates run on the SAME
  * cdt_predicates registry as the global CDT DT, without clearing it.  seeds are
@@ -81,7 +87,8 @@ s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
 s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           const int *l2g_real, int n, int scratch_base,
                                           const s_point *bb_min_hint,
-                                          const s_point *bb_max_hint);
+                                          const s_point *bb_max_hint,
+                                          s_random_context *rng);
 
 /* Phase 2: insert additional points (e.g. mirrors) into the existing DT.
  * Returns false on error. */

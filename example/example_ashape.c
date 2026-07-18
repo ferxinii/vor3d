@@ -180,7 +180,7 @@ static s_trimesh timed_ashape(const s_points *pts, double alpha, double tol,
                               s_ashape_info *info)
 {
     clock_t t0 = clock();
-    s_trimesh m = alpha_shape_3d(pts, alpha, tol, info);
+    s_trimesh m = alpha_shape_3d(pts, alpha, tol, info, NULL);
     double ms = 1000.0 * (double)(clock() - t0) / CLOCKS_PER_SEC;
     printf("        [extract] %.1f ms  (%d input pts)\n", ms, pts->N);
     return m;
@@ -335,13 +335,13 @@ static void case_degenerate(void)
     printf("  Case: degenerate inputs -> trimesh_NAN\n");
     s_points p3 = { .N = 3, .p = malloc(sizeof(s_point)*3) };
     p3.p[0]=(s_point){{{0,0,0}}}; p3.p[1]=(s_point){{{1,0,0}}}; p3.p[2]=(s_point){{{0,1,0}}};
-    s_trimesh m3 = alpha_shape_3d(&p3, 1.0, 1e-9, NULL);
+    s_trimesh m3 = alpha_shape_3d(&p3, 1.0, 1e-9, NULL, NULL);
     check("3 points -> invalid", !trimesh_is_valid(&m3));
     free_trimesh(&m3); free_points(&p3);
 
     s_points pc = { .N = 25, .p = malloc(sizeof(s_point)*25) };
     for (int i = 0; i < 25; i++) pc.p[i] = (s_point){{{ (double)(i%5), (double)(i/5), 0.0 }}};
-    s_trimesh mc = alpha_shape_3d(&pc, 100.0, 1e-9, NULL);
+    s_trimesh mc = alpha_shape_3d(&pc, 100.0, 1e-9, NULL, NULL);
     check("coplanar -> invalid", !trimesh_is_valid(&mc));
     free_trimesh(&mc); free_points(&pc);
 }

@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include "points.h"
 
+/* Forward decl of the PRNG context (definition in src/random.h). A complex may
+ * carry a caller-owned RNG used to break point-location walk ties deterministically
+ * (replaces the former process-global libc rand()); NULL => a fixed-order fallback,
+ * which is still deterministic (loop-detection + brute-force backstop stay sound). */
+typedef struct random_context s_random_context;
+
 typedef struct simplical_complex {  // May in stack
     s_points points;
     double *weights;  // size point.N, May be NULL if unweighted
@@ -31,6 +37,9 @@ typedef struct simplical_complex {  // May in stack
                               // Compile with -DNCELL_NO_POOL for plain per-cell malloc
                               // (ASAN-friendly: use-after-free of a flipped tet stays
                               // detectable instead of silently reading a recycled cell).
+    s_random_context *rng;    // caller-owned PRNG for walk tie-breaking; NULL = fixed
+                              // deterministic order (see the forward decl above). Set by
+                              // the build entry points; propagates through by-value copies.
 } s_scplx;
 
 

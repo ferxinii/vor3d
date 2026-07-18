@@ -149,7 +149,7 @@ int main(void)
            N, 8, 125);
     fflush(stdout);
 
-    s_scplx dt = construct_dt_3d(&points, NULL, false, 1e-12, NULL);
+    s_scplx dt = construct_dt_3d(&points, NULL, false, 1e-12, NULL, NULL);
 
     if (!dt.head) {
         fputs("construct_dt_3d returned an empty complex (error or crash).\n", stderr);

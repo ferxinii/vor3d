@@ -5,6 +5,7 @@
 #include "dt_predseam.h"  /* Phase 1: id-based predicate seam (walk-by-id) */
 #include "gnuplotc.h"
 #include "dynarray.h"
+#include "random.h"       /* caller-owned PRNG for deterministic walk tie-breaking */
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -544,12 +545,16 @@ static s_point ncell_centroid(const s_scplx *scplx, const s_ncell *ncell) {
 }
 
 
-static void random_order_04(int out[4])
+/* Fisher-Yates over {0,1,2,3} using the complex's caller-owned PRNG. When rng is
+ * NULL the identity order {0,1,2,3} is used: still deterministic (the walk's
+ * loop-detection + brute-force backstop handle any degenerate cycle). */
+static void random_order_04(s_random_context *rng, int out[4])
 {
     for (int ii=0; ii<4; ii++) out[ii] = ii;
 
+    if (!rng) return;
     for (int ii=3; ii>0; ii--) {
-        int jj = rand() % (ii + 1);
+        int jj = (int)random_uniform_range_u64(rng, (uint64_t)(ii + 1));
         int tmp = out[ii];
         out[ii] = out[jj];
         out[jj] = tmp;
@@ -570,17 +575,20 @@ static s_ncell *in_ncell_walk_core(const s_scplx *scplx, s_point p, int query_id
     assert(scplx->N_ncells >= 1 && "N_ncells < 1");
     s_ncell *current = scplx->head;
     int hint = scplx->walk_hint_vid;
+    /* rng is caller-owned; mutating *rng through a const complex is legal (the
+     * pointee is non-const). NULL => start at index 0 / head (deterministic). */
+    s_random_context *rng = scplx->rng;
     if (scplx->point2tet && hint >= 0 && hint < scplx->points.N &&
         scplx->point2tet[hint]) {
         current = scplx->point2tet[hint];
     } else if (scplx->point2tet) {
-        int randi = rand() % scplx->points.N;
+        int randi = rng ? (int)random_uniform_range_u64(rng, (uint64_t)scplx->points.N) : 0;
         for (int ii = 0; ii < scplx->points.N; ii++) {
             int idx = (randi + ii) % scplx->points.N;
             if (scplx->point2tet[idx]) { current = scplx->point2tet[idx]; break; }
         }
     } else {
-        int randi = rand() % scplx->N_ncells;
+        int randi = rng ? (int)random_uniform_range_u64(rng, (uint64_t)scplx->N_ncells) : 0;
         for (int ii = 0; ii < randi; ii++) current = current->next;
     }
 
@@ -600,7 +608,7 @@ static s_ncell *in_ncell_walk_core(const s_scplx *scplx, s_point p, int query_id
         return bruteforce_find_ncell_containing(scplx, p);
     current->walk_token = wstamp;
 
-    int order[4]; random_order_04(order);
+    int order[4]; random_order_04(rng, order);
     for (int kk=0; kk<4; kk++) {  /* Visit faces in random order to prevent loops ? */
         int ii = order[kk];
 

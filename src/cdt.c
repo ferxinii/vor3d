@@ -1369,8 +1369,8 @@ static int try_cavity_expansion(s_scplx *dt,
          * above-vertex, local DT empty). */
         s_dt_builder lb = dt->exact_ids
             ? dt_builder_begin_exact_local(&lpts, 0.0, l2g, n, dt->points.N,
-                                           &bb_lo, &bb_hi)
-            : dt_builder_begin(&lpts, NULL, 0.0, &bb_lo, &bb_hi);
+                                           &bb_lo, &bb_hi, NULL)
+            : dt_builder_begin(&lpts, NULL, 0.0, &bb_lo, &bb_hi, NULL);
         free(lpts_arr);
         if (!lb._stack) { CDT_DBG("expand side=%d iter=%d: lb begin fail\n", side, dbg_iter); goto done; }
         ldt = dt_builder_end(&lb, true, NULL, NULL, 0);
@@ -2850,7 +2850,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
      * the true implicit LNC Steiner positions.  (The float DT builder remains
      * for the Voronoi seed / weighted paths; only the CDT is exact.) */
     cdt_predicates_init();  /* FPU rounding mode; idempotent */
-    s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL);
+    s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL, NULL);
     if (!b._stack) return (s_scplx){0};
 
     if (!segment_recovery(&b, working, EPS_DEG, TOL, sc)) {

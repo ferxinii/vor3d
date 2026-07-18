@@ -142,7 +142,7 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
 
     /* Phase 1: build initial DT from seeds only, keeping big tetra in place.
      * Pass bp AABB as hint so the big tetra is large enough even with 1 seed. */
-    s_dt_builder builder = dt_builder_begin(&seeds, NULL, ud.TOL, &bp->min, &bp->max);
+    s_dt_builder builder = dt_builder_begin(&seeds, NULL, ud.TOL, &bp->min, &bp->max, NULL);
     if (!builder._stack) {
         fprintf(stderr, "vor3d: error building initial DT.\n");
         free_points(&seeds);

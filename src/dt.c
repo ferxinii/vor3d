@@ -1895,7 +1895,8 @@ static void remove_ignored_points(s_scplx *scplx, bool *ignored, bool keep_big_t
 static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *weights,
                               double TOL_dup, const s_point *bb_min_hint,
                               const s_point *bb_max_hint, bool exact,
-                              const int *l2g_real, int scratch_base)
+                              const int *l2g_real, int scratch_base,
+                              s_random_context *rng)
 {
     s_dt_builder b = {0};
     assert(!(exact && weights) && "exact-id mode does not support weights");
@@ -1911,6 +1912,9 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
     if (!initialize_scplx(seeds, weights, &b.dt, bb_min_hint, bb_max_hint)) {
         free(ignored); stack_free(stack); free(stack); return b;
     }
+    /* Attach the caller's PRNG BEFORE the seed-insertion loop below so every
+     * point-location walk during construction breaks ties deterministically. */
+    b.dt.rng = rng;
 
     if (exact && !l2g_real) {
         /* Exact GLOBAL DT: OWN the registry -- register every point (sentinels
@@ -1996,10 +2000,11 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
 }
 
 s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, double TOL_dup,
-                              const s_point *bb_min_hint, const s_point *bb_max_hint)
+                              const s_point *bb_min_hint, const s_point *bb_max_hint,
+                              s_random_context *rng)
 {
     return dt_builder_begin_impl(seeds, weights, TOL_dup, bb_min_hint, bb_max_hint,
-                                 false, NULL, 0);
+                                 false, NULL, 0, rng);
 }
 
 /* Exact-id build: predicates run on the cdt_predicates registry (no weights).
@@ -2007,20 +2012,22 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
  * repopulates it for the seeds.  Steiners are then added via
  * dt_builder_extend_lnc, real points via dt_builder_extend. */
 s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
-                                    const s_point *bb_min_hint, const s_point *bb_max_hint)
+                                    const s_point *bb_min_hint, const s_point *bb_max_hint,
+                                    s_random_context *rng)
 {
     return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
-                                 true, NULL, 0);
+                                 true, NULL, 0, rng);
 }
 
 s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           const int *l2g_real, int n, int scratch_base,
                                           const s_point *bb_min_hint,
-                                          const s_point *bb_max_hint)
+                                          const s_point *bb_max_hint,
+                                          s_random_context *rng)
 {
     (void)n;  /* n == seeds->N; the map is sized from points.N inside the impl */
     return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
-                                 true, l2g_real, scratch_base);
+                                 true, l2g_real, scratch_base, rng);
 }
 
 
@@ -2228,9 +2235,10 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
 
 
 s_scplx construct_dt_3d(const s_points *points, const double *weights,
-                        bool keep_big_tetra, double TOL_duplicates, int *out_Nreal)
+                        bool keep_big_tetra, double TOL_duplicates, int *out_Nreal,
+                        s_random_context *rng)
 {
-    s_dt_builder b = dt_builder_begin(points, weights, TOL_duplicates, NULL, NULL);
+    s_dt_builder b = dt_builder_begin(points, weights, TOL_duplicates, NULL, NULL, rng);
     if (!b._stack) {
         fprintf(stderr, "construct_dt_3d: Error.\n");
         return (s_scplx){0};

@@ -2552,11 +2552,11 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
                                   const s_ncvx_domain *domain,
                                   double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
-                                  int (*randint)(void*, int), void *rctx,
+                                  s_random_context *rng,
                                   s_dynarray *buff_points, int *out_kept_idx,
                                   bool want_surface, bool merge_orphans)
 {
-    (void)vol_max_rel_diff; (void)randint; (void)rctx; (void)buff_points;
+    (void)vol_max_rel_diff; (void)buff_points;
     if (!seeds || seeds->N <= 0 || !ncvx_domain_is_valid(domain))
         return (s_ncvx_vdiagram){0};
     /* The orphan-merge pass reads the surface accumulators, so it needs the
@@ -2589,7 +2589,7 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
     s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
-    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max);
+    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max, rng);
     if (!builder._stack) {
         if (out_kept_idx) for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = -1;
         return (s_ncvx_vdiagram){0};
@@ -2662,14 +2662,14 @@ s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
                                    const s_trimesh *mesh,
                                    double vol_max_rel_diff,
                                    double EPS_DEG, double TOL,
-                                   int (*randint)(void*, int), void *rctx,
+                                   s_random_context *rng,
                                    s_dynarray *buff_points, int *out_kept_idx,
                                    bool want_surface, bool merge_orphans)
 {
     s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL, 0);
     if (!ncvx_domain_is_valid(&domain)) return (s_ncvx_vdiagram){0};
     s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, &domain, vol_max_rel_diff,
-                                           EPS_DEG, TOL, randint, rctx,
+                                           EPS_DEG, TOL, rng,
                                            buff_points, out_kept_idx,
                                            want_surface, merge_orphans);
     free_ncvx_domain(&domain);  /* result owns its own copy */
@@ -2708,7 +2708,7 @@ s_vdiagram vor3d_convex_clip(const s_points *seeds, const s_bpoly *bp,
     s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
-    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max);
+    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max, NULL);
     if (!builder._stack) {
         if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
         return (s_vdiagram){0};

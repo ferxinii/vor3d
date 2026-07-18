@@ -652,7 +652,7 @@ static double union_core(const s_points *centers, const double radii[],
     int *ball_of_point = malloc(N * sizeof(int));   /* seed i -> compacted vid, or -1 */
     for (int i = 0; i < N; i++) { weights[i] = radii[i]*radii[i]; ball_of_point[i] = i; }
 
-    s_dt_builder b = dt_builder_begin(centers, weights, TOL_dup, NULL, NULL);
+    s_dt_builder b = dt_builder_begin(centers, weights, TOL_dup, NULL, NULL, NULL);
     s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/true, NULL, ball_of_point, N);
 
     /* Inverse map: compacted scplx point id -> original ball id (-1 for the four

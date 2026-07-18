@@ -617,7 +617,7 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     MEDAX_TICK("sampling");
 
     /* Step 2: Delaunay triangulation of the samples (lean, no mirrors) */
-    s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL);
+    s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL, NULL);
     if (!b._stack) { free_samples(&S); return medax_NAN; }
     int Nreal = 0;
     s_scplx dt = dt_builder_end(&b, false, &Nreal, NULL, 0);

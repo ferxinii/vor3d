@@ -6,6 +6,7 @@
 #include "convh.h"
 #include "dynarray.h"
 #include "gnuplotc.h"
+#include "random.h"
 #include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -428,8 +429,11 @@ s_vdiagram voronoi_from_delaunay_3d(const s_scplx *dt, const s_bpoly *bpoly, int
 // --------------------------------------- PLOTS ------------------------------------------------
 static void randomize_colors(int N, char **colors)
 {
+    /* Plot-only cosmetic shuffle. Uses a locally-seeded PRNG (not the process-global
+     * rand()) so it neither depends on nor perturbs any shared RNG state. */
+    s_random_context rng = random_initialize(0x9E3779B97F4A7C15ULL);
     for (int i = N - 1; i > 0; i--) {
-        int j = rand() % (i + 1);
+        int j = (int)random_uniform_range_u64(&rng, (uint64_t)(i + 1));
         char *tmp = colors[i];
         colors[i] = colors[j];
         colors[j] = tmp;

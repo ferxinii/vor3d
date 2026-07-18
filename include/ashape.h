@@ -4,6 +4,9 @@
 #include "points.h"
 #include "trimesh.h"
 
+/* Forward decl of the PRNG context (definition in src/random.h); see scplx.h. */
+typedef struct random_context s_random_context;
+
 /* Diagnostics filled by alpha_shape_3d (all optional; pass NULL to ignore). */
 typedef struct ashape_info {
     double alpha_used;    /* the alpha actually applied (== input, or auto) */
@@ -84,6 +87,6 @@ typedef struct ashape_info {
  * deduplication, or coplanar so that no real tetrahedron exists), if the
  * in-set is empty at this alpha, or on allocation failure. */
 s_trimesh alpha_shape_3d(const s_points *pts, double alpha, double TOL_dup,
-                         s_ashape_info *info);
+                         s_ashape_info *info, s_random_context *rng);
 
 #endif

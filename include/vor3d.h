@@ -72,17 +72,20 @@ s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_par
 // driven by the surface accumulators, so it REQUIRES the surface machinery:
 // passing merge_orphans=true forces want_surface on internally (the merged
 // surface is produced regardless of the want_surface argument).
+/* rng: caller-owned PRNG used to break point-location walk ties deterministically
+ * (replaces the former process-global rand()). Pass NULL for a fixed deterministic
+ * order. Must outlive the call. */
 s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const s_ncvx_domain *domain,
                                  double vol_max_rel_diff,
                                  double EPS_DEG, double TOL,
-                                 int (*randint)(void*, int), void *rctx,
+                                 s_random_context *rng,
                                  s_dynarray *buff_points, int *out_kept_idx,
                                  bool want_surface, bool merge_orphans);
 
 s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const s_trimesh *mesh,
                                   double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
-                                  int (*randint)(void*, int), void *rctx,
+                                  s_random_context *rng,
                                   s_dynarray *buff_points, int *out_kept_idx,
                                   bool want_surface, bool merge_orphans);
 
