@@ -2362,6 +2362,27 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         s_point tv[4];
         extract_vertices_ncell(&domain->cdt, nc, tv);
 
+        /* Skip degenerate sliver tets (relative volume < 1e-12 of their bbox
+         * cube), like the near-zero "lens" tets the CDT creates between the two
+         * triangulations of a near-planar boundary quad (co-spherical hull
+         * input). Pieces carved from such a tet are thinner than any epsilon:
+         * their hulls collapse into flat sheets whose mis-wound, mis-classified
+         * faces poison the per-plane surface XOR (duplicate walls + missing
+         * boundary facets -> N_surface == 0). Treated like an exterior pocket,
+         * the neighbouring pieces' walls survive the XOR once and every cell
+         * surface closes over the sliver; only the sliver's negligible volume
+         * is dropped. */
+        {
+            s_point lo = tv[0], hi = tv[0];
+            for (int k = 1; k < 4; k++) {
+                if (tv[k].x < lo.x) lo.x = tv[k].x;  if (tv[k].x > hi.x) hi.x = tv[k].x;
+                if (tv[k].y < lo.y) lo.y = tv[k].y;  if (tv[k].y > hi.y) hi.y = tv[k].y;
+                if (tv[k].z < lo.z) lo.z = tv[k].z;  if (tv[k].z > hi.z) hi.z = tv[k].z;
+            }
+            double d2 = norm_squared(subtract_points(hi, lo));
+            if (fabs(signed_volume_tetra(tv)) < 1e-12 * d2 * sqrt(d2)) continue;
+        }
+
         s_point c = { .x = (tv[0].x+tv[1].x+tv[2].x+tv[3].x)*0.25,
                       .y = (tv[0].y+tv[1].y+tv[2].y+tv[3].y)*0.25,
                       .z = (tv[0].z+tv[1].z+tv[2].z+tv[3].z)*0.25 };
