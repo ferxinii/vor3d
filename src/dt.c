@@ -6,7 +6,7 @@
 #include "points.h"
 #include "gtests.h"
 #include "dt_predseam.h"  /* Phase 1: id-based predicate seam (dead exact branch until Phase 2) */
-#include "voronoi_predicates.h"  /* orient3d_dd for the sentinel regularity reductions */
+#include "predicates_basic.h"  /* orient3d_dd for the sentinel regularity reductions */
 #include "dynarray.h"     /* star enumeration in the edge-unsplit preconditions */
 #include <assert.h>
 #include <stdlib.h>
@@ -557,7 +557,7 @@ static inline void map_vid_lid(s_ncell *ncell, int v1, int *l1, int v2, int *l2,
 }   
 
 static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id, int opp_face_localid, s_ncell *OUT_PTRS[3])
-{   
+{
     scplx->N_ncells += 1;
     s_ncell *nc2 = nc1->opposite[opp_cell_id], *nc3 = malloc_ncell(scplx);
     if (!nc2) return 0;
@@ -629,40 +629,28 @@ static int flip23(s_scplx *scplx, s_dstack *stack, s_ncell *nc1, int opp_cell_id
     return 1;
 }
 
-static int can_perform_flip32(const s_ncell *ncell, int opp_cell_id, int *ridge_id_2)
-{   /* Checks if tetra abpd exists */
-    int face_vid[3]; extract_ids_face(ncell, 2, &opp_cell_id, face_vid);
-    int opp_face_lid; face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_lid);
-    
-    s_ncell *opp_ncell = ncell->opposite[opp_cell_id];
-    for (int ii=0; ii<4; ii++) {
-        s_ncell *opp_opp = opp_ncell->opposite[ii];
-        if (opp_opp && opp_opp != ncell &&
-            inarray(opp_opp->vertex_id, 4, ncell->vertex_id[opp_cell_id]) &&
-            inarray(opp_opp->vertex_id, 4, opp_ncell->vertex_id[opp_face_lid])) {
-                *ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, opp_ncell->vertex_id[ii]);
-                /* ES/Vigo flippability: a 3->2 flip is valid only if the reflex
-                 * edge (ridge) has degree EXACTLY 3 -- i.e. the ring
-                 * ncell->n2->n3 closes back to ncell.  Finding a third tet
-                 * sharing p and d is necessary but NOT sufficient; on a degree>3
-                 * ridge the facet is not flippable yet and flip32's surgery would
-                 * corrupt the complex (duplicate tets).  Defer so the cascade
-                 * flips other facets first (which reduces this ridge's degree). */
-                int m2, s2, m3, s3, m4, s4;
-                s_ncell *n2 = next_ncell_ridge_cycle(ncell, opp_cell_id, *ridge_id_2, &m2, &s2);
-                if (!n2) { if (dt_trace_on()) fprintf(stderr, "[trace]       f32: ring open at n2\n"); return 0; }
-                s_ncell *n3 = next_ncell_ridge_cycle(n2, m2, s2, &m3, &s3);
-                if (!n3) { if (dt_trace_on()) fprintf(stderr, "[trace]       f32: ring open at n3\n"); return 0; }
-                s_ncell *n4 = next_ncell_ridge_cycle(n3, m3, s3, &m4, &s4);
-                if (n4 != ncell) {
-                    if (dt_trace_on()) fprintf(stderr, "[trace]       f32: ridge degree > 3\n");
-                    return 0;
-                }
-                return 1;
-        }
+/* 3->2 flip of the two tets {p,a,b,c} + {a,b,c,d} around ridge bc, where
+ * ridge_id_2 is the local id in ncell of a (the shared-face vertex NOT on the
+ * ridge).  The caller has already established that bc is the UNIQUE reflex
+ * edge of the pair (segment pd exits face abc across bc), which makes the
+ * three tets around bc a convex bipyramid; the only remaining precondition is
+ * combinatorial: the ridge must have degree exactly 3, i.e. the ring
+ * ncell -> {a,b,c,d} -> {p,b,c,d} closes back to ncell.  A ridge of higher
+ * degree is not flippable yet; the face is left for the cascade to revisit
+ * once other flips have reduced the degree. */
+static int can_perform_flip32(const s_ncell *ncell, int opp_cell_id, int ridge_id_2)
+{
+    int m2, s2, m3, s3, m4, s4;
+    s_ncell *n2 = next_ncell_ridge_cycle(ncell, opp_cell_id, ridge_id_2, &m2, &s2);
+    if (!n2) { if (dt_trace_on()) fprintf(stderr, "[trace]       f32: ring open at n2\n"); return 0; }
+    s_ncell *n3 = next_ncell_ridge_cycle(n2, m2, s2, &m3, &s3);
+    if (!n3) { if (dt_trace_on()) fprintf(stderr, "[trace]       f32: ring open at n3\n"); return 0; }
+    s_ncell *n4 = next_ncell_ridge_cycle(n3, m3, s3, &m4, &s4);
+    if (n4 != ncell) {
+        if (dt_trace_on()) fprintf(stderr, "[trace]       f32: ridge degree > 3\n");
+        return 0;
     }
-    if (dt_trace_on()) fprintf(stderr, "[trace]       f32: no third tet with p+d found\n");
-    return 0;
+    return 1;
 }
 
 
@@ -854,12 +842,12 @@ static int flip44(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int id_ridge_
     int nc3_id2; face_localid_of_adjacent_ncell(nc5, 2, &nc5_p, nc5_p, &nc3_id2);
     int nc3_opp_face_lid; face_localid_of_adjacent_ncell(nc3, 2, &nc3_id1, nc3_id1, &nc3_opp_face_lid);
 
+    /* flip32 gets the real stack: it frees one ring cell, which may be a
+     * pending stack entry (a stale pointer would later be popped as garbage),
+     * and it pushes its own two outputs. */
     s_ncell *FLIP32_PTRS[2];
-    flip32(scplx, NULL, nc3, nc3_id1, nc3_id2, nc3_opp_face_lid, FLIP32_PTRS);
+    if (!flip32(scplx, stack, nc3, nc3_id1, nc3_id2, nc3_opp_face_lid, FLIP32_PTRS)) return 0;
     if(stack) {
-        if (!stack_push(stack, FLIP32_PTRS[0])) return 0;
-        if (!stack_push(stack, FLIP32_PTRS[1])) return 0;
-
         /* The Bowyer-Watson loop pops each cell and checks exactly one face:
          * opposite[local_p], i.e. the face opposite the newly inserted point p.
          * This is correct for flip14/flip23/flip32, where every face shared between
@@ -1196,88 +1184,216 @@ static int unsplit_edge(s_scplx *scplx, s_dstack *stack, const s_unsplit_cfg *cf
 }
 
 
-static int can_perform_flip41(const s_ncell *ncell, int opp_cell_id, int *redundant_localid)
-{
-    int face_vid[3]; extract_ids_face(ncell, 2, &opp_cell_id, face_vid);
-    int opp_face_lid; face_localid_of_adjacent_ncell(ncell, 2, &opp_cell_id, opp_cell_id, &opp_face_lid);
-    s_ncell *opp_ncell = ncell->opposite[opp_cell_id];
-    int p_vid = ncell->vertex_id[opp_cell_id];
+/* ==========================================================================
+ * Face-unsplit (6 -> 2): atomic removal of a vertex r lying exactly INSIDE
+ * the triangle (p, a, d) -- the 2-D analogue of the edge-unsplit above.
+ *
+ * Reached from CASE_NON_CONVEX when segment pd exits the shared face
+ * {r, a, u} along the line of edge (r, a), beyond r: then p, a, d, r are
+ * coplanar with r strictly inside triangle pad, and the popped non-regular
+ * face certifies r redundant (the fan around edge (r,u) is not the lower
+ * hull of {p,a,d,u,r}, so r^ lies above the lifted facet {p,a,d,u}).  No
+ * 5-point flip can remove r because its star spans both sides of the plane.
+ *
+ * Precondition (can_perform_unsplit_face): r's star is exactly the double
+ * 3-fan
+ *     F_0 = {r,p,a,u}  F_1 = {r,a,d,u}  F_2 = {r,d,p,u}      (apex u)
+ *     G_0 = {r,p,a,u'} G_1 = {r,a,d,u'} G_2 = {r,d,p,u'}     (apex u')
+ * with G_i glued to F_i across the in-plane face.  The six tets are replaced
+ * by U = {p,a,d,u} and U' = {p,a,d,u'}: the exact union of each fan.
+ * ========================================================================== */
 
-    /* For each edge of shared face, check if degree 3 tetrahedron exists */
-    int degree3_edges[3][2], n_degree3 = 0;
-    for (int i=0; i<3; i++) {
-        int va = face_vid[i], vb = face_vid[(i+1)%3];
-        for (int j=0; j<4; j++) {
-            s_ncell *nb = opp_ncell->opposite[j];
-            if (nb && nb != ncell &&
-                inarray(nb->vertex_id, 4, p_vid) &&
-                inarray(nb->vertex_id, 4, va)    &&
-                inarray(nb->vertex_id, 4, vb)) {
-                degree3_edges[n_degree3][0] = va;
-                degree3_edges[n_degree3][1] = vb;
-                n_degree3++;
-                break;
+typedef struct {
+    int r, p, a, d, u, u2;
+    s_ncell *F[3];
+    s_ncell *G[3];
+} s_unsplit_face_cfg;
+
+static int can_perform_unsplit_face(s_scplx *scplx, s_ncell *ncell, int opp_cell_id,
+                                    int r_vid, int a_vid, int u_vid, int d_vid,
+                                    s_unsplit_face_cfg *cfg)
+{
+    if (r_vid < 4) return 0;   /* never remove a sentinel */
+    cfg->r = r_vid; cfg->a = a_vid; cfg->u = u_vid; cfg->d = d_vid;
+    cfg->p = ncell->vertex_id[opp_cell_id];
+
+    /* F1: the fan around edge (r,u) is exactly 3 tets. */
+    int lid_a = id_where_equal_int(ncell->vertex_id, 4, a_vid);
+    if (!can_perform_flip32(ncell, opp_cell_id, lid_a)) {
+        if (dt_trace_on()) fprintf(stderr, "[trace]       unsplit_face: (r,u) ring not degree 3\n");
+        return 0;
+    }
+    int m2, s2, m3, s3;
+    cfg->F[0] = ncell;
+    cfg->F[1] = next_ncell_ridge_cycle(ncell, opp_cell_id, lid_a, &m2, &s2);
+    cfg->F[2] = next_ncell_ridge_cycle(cfg->F[1], m2, s2, &m3, &s3);
+
+    /* F2: across each in-plane face (F_i minus u) sits G_i, all with ONE
+     * common apex u' distinct from everything in the configuration. */
+    cfg->u2 = -1;
+    for (int i = 0; i < 3; i++) {
+        int lid_u = id_where_equal_int(cfg->F[i]->vertex_id, 4, u_vid);
+        s_ncell *g = cfg->F[i]->opposite[lid_u];
+        if (!g) return 0;
+        int lid_apex; face_localid_of_adjacent_ncell(cfg->F[i], 2, &lid_u, lid_u, &lid_apex);
+        int apex = g->vertex_id[lid_apex];
+        if (i == 0) cfg->u2 = apex;
+        else if (apex != cfg->u2) {
+            if (dt_trace_on()) fprintf(stderr, "[trace]       unsplit_face: far side is not a single fan\n");
+            return 0;
+        }
+        cfg->G[i] = g;
+    }
+    if (cfg->u2 == u_vid || cfg->u2 == cfg->p || cfg->u2 == a_vid || cfg->u2 == d_vid || cfg->u2 == r_vid)
+        return 0;
+
+    /* F3: star completeness -- r's FULL star must be exactly {F_i} u {G_i}. */
+    {
+        int lid_r = id_where_equal_int(ncell->vertex_id, 4, r_vid);
+        int omit[3], m = 0;
+        for (int j = 0; j < 4; j++) if (j != lid_r) omit[m++] = j;
+        s_dynarray star = dynarray_initialize(sizeof(s_ncell *), 64);
+        if (!star.items) return 0;
+        int ok = ncells_incident_face(scplx, ncell, 0, omit, &star) && star.N == 6;
+        if (ok) {
+            s_ncell **sc = star.items;
+            for (unsigned k = 0; k < star.N && ok; k++) {
+                bool found = false;
+                for (int i = 0; i < 3 && !found; i++)
+                    found = (sc[k] == cfg->F[i] || sc[k] == cfg->G[i]);
+                ok = found;
             }
+        }
+        dynarray_free(&star);
+        if (!ok) {
+            if (dt_trace_on()) fprintf(stderr, "[trace]       unsplit_face: star of %d is not the double 3-fan\n", r_vid);
+            return 0;
         }
     }
 
-    if (n_degree3 != 2) {
-        if (dt_trace_on()) fprintf(stderr, "[trace]       f41: n_degree3=%d (need 2)\n", n_degree3);
+    /* F4: replacement tets are proper and on opposite sides of the plane. */
+    int ou  = dtp_orient(scplx, cfg->p, a_vid, d_vid, u_vid);
+    int ou2 = dtp_orient(scplx, cfg->p, a_vid, d_vid, cfg->u2);
+    if (ou == 0 || ou2 == 0 || ou == ou2) {
+        if (dt_trace_on()) fprintf(stderr, "[trace]       unsplit_face: replacement tet flat or same-side\n");
         return 0;
     }
+    return 1;
+}
 
-    /* Redundant vertex is common to both degree-3 edges */
-    int redundant_vid = -1;
-    for (int i = 0; i < 2; i++)
-        for (int j = 0; j < 2; j++)
-            if (degree3_edges[0][i] == degree3_edges[1][j])
-                redundant_vid = degree3_edges[0][i];
+static int unsplit_face(s_scplx *scplx, s_dstack *stack, const s_unsplit_face_cfg *cfg,
+                        bool *ignored)
+{   /* 0 ERROR, 1 OK (flip41 convention) */
+    int r = cfg->r, p = cfg->p, a = cfg->a, d = cfg->d, u = cfg->u, u2 = cfg->u2;
+    if (dt_trace_on())
+        fprintf(stderr, "[trace]     -> unsplit_face: remove %d inside triangle (%d,%d,%d), apexes %d/%d\n",
+                r, p, a, d, u, u2);
 
-    assert(redundant_vid != -1);
-    /* Finding D: never flip away a big-tetra sentinel (id < 4).  Near the hull
-     * the degree-3 pattern can land on a sentinel; removing it corrupts the hull
-     * topology.  Reject the flip41 -- flip_tetrahedra falls through to flip32. */
-    if (redundant_vid < 4) {
-        if (dt_trace_on()) fprintf(stderr, "[trace]       f41: redundant vid %d is a sentinel\n", redundant_vid);
-        return 0;
+    /* S1: outer neighbours across the faces opposite r (they contain no r,
+     * so they are never an F or a G). */
+    s_ncell *X[3], *Y[3];
+    for (int i = 0; i < 3; i++) {
+        X[i] = cfg->F[i]->opposite[id_where_equal_int(cfg->F[i]->vertex_id, 4, r)];
+        Y[i] = cfg->G[i]->opposite[id_where_equal_int(cfg->G[i]->vertex_id, 4, r)];
     }
-    *redundant_localid = id_where_equal_int(ncell->vertex_id, 4, redundant_vid);
 
-    /* The two degree-3 edges are NECESSARY but not SUFFICIENT for a 4->1 flip.
-     * A hull-adjacent weighted configuration can pass the edge test yet have the
-     * redundant vertex's star NOT be a clean 4-tet diamond (the 4 incident tets
-     * span 5+ vertices).  flip41's pointer surgery assumes a diamond, so a false
-     * positive corrupts the complex (stack overflow in face_localid_of_adjacent
-     * _ncell writing multiple ids into a single-int slot).  Build the star and
-     * require exactly 4 incident tets whose vertices, minus r, are exactly 4
-     * distinct.  If not, reject -- flip_tetrahedra falls through to flip32. */
-    const s_ncell *star[4]; star[0] = ncell; int k = 1;
+    /* S2: reuse F_0 as U = {p,a,d,u} and G_0 as U' = {p,a,d,u'}
+     * (slots 0:p 1:a 2:d 3:apex). */
+    s_ncell *U = cfg->F[0], *U2 = cfg->G[0];
+    set_ncell_vids(U,  p, a, d, u);
+    set_ncell_vids(U2, p, a, d, u2);
+
+    /* S3: gluing.  Face omitting p = {a,d,apex} came from F_1/G_1, omitting
+     * a = {p,d,apex} from F_2/G_2, omitting d = {p,a,apex} from F_0/G_0,
+     * omitting the apex = {p,a,d} joins U and U'. */
+    set_ncell_opposite_pointers(U,  X[1], X[2], X[0], U2);
+    set_ncell_opposite_pointers(U2, Y[1], Y[2], Y[0], U);
+
+    /* S4: back-pointers. */
+    for (int lid = 0; lid < 3; lid++) {
+        int aux;
+        if (U->opposite[lid])  { face_localid_of_adjacent_ncell(U,  2, &lid, lid, &aux); U->opposite[lid]->opposite[aux]  = U;  }
+        if (U2->opposite[lid]) { face_localid_of_adjacent_ncell(U2, 2, &lid, lid, &aux); U2->opposite[lid]->opposite[aux] = U2; }
+    }
+
+    /* S5: unlink and free F_1, F_2, G_1, G_2. */
+    s_ncell *gone[4] = { cfg->F[1], cfg->F[2], cfg->G[1], cfg->G[2] };
     for (int i = 0; i < 4; i++) {
-        if (i == *redundant_localid) continue;
-        const s_ncell *nb = ncell->opposite[i];
-        if (nb && inarray(nb->vertex_id, 4, redundant_vid) && k < 4) star[k++] = nb;
+        s_ncell *c = gone[i];
+        if (c->next) c->next->prev = c->prev;
+        if (c->prev) c->prev->next = c->next;
+        else scplx->head = c->next;
+        if (stack) stack_remove_ncell(stack, c);
+        free_ncell(scplx, c);
+    }
+
+    /* S6: bookkeeping. */
+    scplx->N_ncells -= 4;
+    ignored[r] = true;
+    if (scplx->point2tet) scplx->point2tet[r] = NULL;
+    p2t_update(scplx, U);
+    p2t_update(scplx, U2);
+
+    /* S7: stack. */
+    if (stack) {
+        if (!stack_push(stack, U))  return 0;
+        if (!stack_push(stack, U2)) return 0;
+    }
+
+    /* Post-surgery re-checks by vertex ids (see unsplit_edge). */
+    int faces[7][3] = { {a,d,u}, {p,d,u}, {p,a,u}, {p,a,d}, {a,d,u2}, {p,d,u2}, {p,a,u2} };
+    for (int f = 0; f < 7; f++) {
+        s_ncell *cell; int lid;
+        if (!unsplit_find_face(scplx, faces[f][0], faces[f][1], faces[f][2], &cell, &lid))
+            continue;
+        if (!cell->opposite[lid]) continue;
+        if (!are_locally_delaunay(scplx, cell, lid, DELAUNAY_TEST_NONSTRICT))
+            if (flip_tetrahedra(scplx, stack, cell, lid, ignored) == -1) return 0;
+    }
+    return 1;
+}
+
+
+/* 4->1 flip removing r, a vertex of the shared face of {p,r,b,c} + {r,b,c,d}.
+ * The caller has already established that segment pd exits the face BEYOND r
+ * (both face edges at r are reflex), which is the only configuration in
+ * which a 4->1 is admissible; in that configuration the non-regularity of the
+ * face certifies r redundant.  What remains is combinatorial: r's star must
+ * be the clean 4-tet diamond {p,r,b,c},{r,b,c,d},{p,r,b,d},{p,r,c,d}, i.e.
+ * ncell's three neighbours across the faces containing r all contain r and
+ * the link of r is exactly the 4 vertices {p,b,c,d}.  Otherwise the face is
+ * not transformable yet and is left for the cascade to revisit. */
+static int can_perform_flip41(const s_ncell *ncell, int r_localid)
+{
+    int r_vid = ncell->vertex_id[r_localid];
+
+    /* Finding D: never flip away a big-tetra sentinel (id < 4). */
+    if (r_vid < 4) {
+        if (dt_trace_on()) fprintf(stderr, "[trace]       f41: redundant vid %d is a sentinel\n", r_vid);
+        return 0;
+    }
+
+    const s_ncell *star[4]; star[0] = ncell; int k = 1;
+    for (int f = 0; f < 4; f++) {
+        if (f == r_localid) continue;
+        const s_ncell *nb = ncell->opposite[f];
+        if (nb && inarray(nb->vertex_id, 4, r_vid)) star[k++] = nb;
     }
     if (k != 4) {
-        if (dt_trace_on()) fprintf(stderr, "[trace]       f41: star of %d has %d local tets (need 4)\n", redundant_vid, k);
+        if (dt_trace_on()) fprintf(stderr, "[trace]       f41: star of %d has %d local tets (need 4)\n", r_vid, k);
         return 0;
     }
-    int diamond[4], nd = 0;
-    for (int i = 0; i < 4; i++)
+    int link[4], nl = 0;
+    for (int si = 0; si < 4; si++)
         for (int m = 0; m < 4; m++) {
-            int v = star[i]->vertex_id[m];
-            if (v == redundant_vid) continue;
-            if (!inarray(diamond, nd, v)) {
-                if (nd >= 4) {
-                    if (dt_trace_on()) fprintf(stderr, "[trace]       f41: star of %d not a diamond (5+ link vertices)\n", redundant_vid);
-                    return 0;   /* 5th distinct vertex -> not a diamond */
-                }
-                diamond[nd++] = v;
+            int v = star[si]->vertex_id[m];
+            if (v == r_vid || inarray(link, nl, v)) continue;
+            if (nl == 4) {
+                if (dt_trace_on()) fprintf(stderr, "[trace]       f41: star of %d not a diamond (5+ link vertices)\n", r_vid);
+                return 0;
             }
+            link[nl++] = v;
         }
-    if (nd != 4) {
-        if (dt_trace_on()) fprintf(stderr, "[trace]       f41: link has %d vertices (need 4)\n", nd);
-        return 0;
-    }
     return 1;
 }
 
@@ -1599,9 +1715,35 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
                 ncell->vertex_id[0], ncell->vertex_id[1], ncell->vertex_id[2],
                 ncell->vertex_id[3], face_ids[0], face_ids[1], face_ids[2],
                 pid, opp_face_vertex_id, (int)fcase);
+
+    /* Edelsbrunner-Shah case analysis of the pair {p,a,b,c} + {a,b,c,d}: let
+     * x be where segment pd pierces the plane of the shared face.  Edge i of
+     * the face is REFLEX when d and the third face vertex lie on opposite
+     * sides of plane (p, f_i, f_{i+1}), i.e. x is outside the face across
+     * that edge.  0 reflex edges: x inside the face, union convex, 2->3.
+     * 1 reflex edge bc: x beyond bc; the three tets around bc form a convex
+     * bipyramid, 3->2 on exactly that ridge.  2 reflex edges: x beyond the
+     * vertex r they share; the only admissible move is a 4->1 removing r,
+     * which the face's non-regularity certifies redundant.  A 3->2 on either
+     * reflex edge in that case is NOT a valid flip (the three tets around the
+     * edge are not convex) and overlaps the mesh.  A zero orientation
+     * (degenerate pd through an edge line) is not transformable here. */
+    int sigma = dtp_orient(scplx, pid, face_ids[0], face_ids[1], face_ids[2]);
+    int reflex[3], zero[3], nreflex = 0, nzero = 0;
+    for (int i = 0; i < 3; i++) {
+        int oi = dtp_orient(scplx, pid, face_ids[i], face_ids[(i+1)%3], opp_face_vertex_id);
+        reflex[i] = (oi == -sigma);
+        zero[i] = (oi == 0);
+        nreflex += reflex[i];
+        nzero += zero[i];
+    }
+    if (dt_trace_on())
+        fprintf(stderr, "[trace]     reflex edges: {%d,%d}=%d {%d,%d}=%d {%d,%d}=%d\n",
+                face_ids[0], face_ids[1], reflex[0], face_ids[1], face_ids[2], reflex[1],
+                face_ids[2], face_ids[0], reflex[2]);
+
     switch (fcase) {
         int ridge_id_2;
-        int redundant_localid;
         case CASE_ERROR:
             fprintf(stderr, "  flip_tetrahedra: tet vids=[%d,%d,%d,%d]  opp_cell_id=%d  opp_face_vid=%d\n",
                     ncell->vertex_id[0], ncell->vertex_id[1],
@@ -1613,24 +1755,65 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
             if (!flip23(scplx, stack, ncell, opp_cell_id, opp_face_localid, NULL)) return -1;
             return 1;
         case CASE_NON_CONVEX:
-            if (scplx->weights &&
-                can_perform_flip41(ncell, opp_cell_id, &redundant_localid)) {
-                    if (dt_trace_on())
-                        fprintf(stderr, "[trace]     -> flip41 (remove vid %d)\n",
-                                ncell->vertex_id[redundant_localid]);
-                    if (!flip41(scplx, stack, ncell, redundant_localid, ignored))
-                        return -1;
-                    else return 1;
-            } else if (can_perform_flip32(ncell, opp_cell_id, &ridge_id_2)) {
-                if (dt_trace_on()) fprintf(stderr, "[trace]     -> flip32\n");
+            if (nzero == 0 && nreflex == 1) {
+                /* ridge = reflex edge i = (f_i, f_{i+1}); a = f_{i+2} */
+                int i = reflex[0] ? 0 : reflex[1] ? 1 : 2;
+                ridge_id_2 = id_where_equal_int(ncell->vertex_id, 4, face_ids[(i+2)%3]);
+                if (!can_perform_flip32(ncell, opp_cell_id, ridge_id_2)) {
+                    if (dt_trace_on()) fprintf(stderr, "[trace]     -> BLOCKED (non-convex: ridge not degree 3)\n");
+                    return 0;
+                }
+                if (dt_trace_on())
+                    fprintf(stderr, "[trace]     -> flip32 on ridge {%d,%d}\n", face_ids[i], face_ids[(i+1)%3]);
                 if (!flip32(scplx, stack, ncell, opp_cell_id, ridge_id_2, opp_face_localid, NULL))
                     return -1;
-                else return 1;
-            } else {
+                return 1;
+            }
+            if (nzero == 0 && nreflex == 2) {
+                /* r = vertex shared by the two reflex edges = the vertex not on
+                 * the single non-reflex edge i = (f_i, f_{i+1}) */
+                int i = !reflex[0] ? 0 : !reflex[1] ? 1 : 2;
+                int r_vid = face_ids[(i+2)%3];
+                int r_localid = id_where_equal_int(ncell->vertex_id, 4, r_vid);
+                if (!scplx->weights) {
+                    /* Unweighted: no vertex is ever redundant, so no 4->1; not
+                     * transformable now (never observed in practice). */
+                    if (dt_trace_on()) fprintf(stderr, "[trace]     -> BLOCKED (non-convex beyond vertex %d, unweighted)\n", r_vid);
+                    return 0;
+                }
+                if (!can_perform_flip41(ncell, r_localid)) {
+                    if (dt_trace_on()) fprintf(stderr, "[trace]     -> BLOCKED (non-convex: star of %d not a diamond yet)\n", r_vid);
+                    return 0;
+                }
+                if (dt_trace_on()) fprintf(stderr, "[trace]     -> flip41 (remove vid %d)\n", r_vid);
+                if (!flip41(scplx, stack, ncell, r_localid, ignored)) return -1;
+                return 1;
+            }
+            if (scplx->weights && nzero == 1 && nreflex == 1) {
+                /* pd exits along the line of the zero edge, beyond the vertex r
+                 * it shares with the reflex edge: r lies inside triangle
+                 * (p, a, d) with a = other end of the zero edge and u = other
+                 * end of the reflex edge (the third face vertex). */
+                int iz = zero[0] ? 0 : zero[1] ? 1 : 2;
+                int ir = reflex[0] ? 0 : reflex[1] ? 1 : 2;
+                int e_z[2] = { face_ids[iz], face_ids[(iz+1)%3] };
+                int e_r[2] = { face_ids[ir], face_ids[(ir+1)%3] };
+                int r_vid = (e_z[0] == e_r[0] || e_z[0] == e_r[1]) ? e_z[0] : e_z[1];
+                int a_vid = (e_z[0] == r_vid) ? e_z[1] : e_z[0];
+                int u_vid = (e_r[0] == r_vid) ? e_r[1] : e_r[0];
+                s_unsplit_face_cfg cfg;
+                if (can_perform_unsplit_face(scplx, ncell, opp_cell_id, r_vid, a_vid, u_vid,
+                                             opp_face_vertex_id, &cfg)) {
+                    if (!unsplit_face(scplx, stack, &cfg, ignored)) return -1;
+                    return 1;
+                }
                 if (dt_trace_on())
-                    fprintf(stderr, "[trace]     -> BLOCKED (non-convex: no flip41/flip32)\n");
+                    fprintf(stderr, "[trace]     -> DEFERRED (unsplit_face of %d not applicable yet)\n", r_vid);
                 return 0;
             }
+            if (dt_trace_on())
+                fprintf(stderr, "[trace]     -> BLOCKED (non-convex: nreflex=%d nzero=%d)\n", nreflex, nzero);
+            return 0;
         case CASE_FLAT:
             /* Through-vertex sub-case (PLAN_UNSPLIT_EDGE.md): 2 of the 3
              * (p, face-edge, d) orients zero <=> a shared-face vertex r is
@@ -1663,7 +1846,7 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
                 if (dt_trace_on()) fprintf(stderr, "[trace]     -> flip44\n");
                 if (flip44(scplx, stack, ncell, opp_cell_id, ridge_id_2, NULL, ignored) == -1)
                     return -1;
-                else return 1;
+                return 1;
             } else {
                 if (dt_trace_on())
                     fprintf(stderr, "[trace]     -> BLOCKED (flat: no flip44)\n");
@@ -1701,54 +1884,57 @@ static int flip_tetrahedra(s_scplx *scplx, s_dstack *stack, s_ncell *ncell, int 
     return 0;
 }
 
-static bool point_close_to_ncell_vertex(s_scplx *scplx, s_ncell *ncell, s_point point, double TOL)
+/* Local id of a vertex of ncell within TOL of point, or -1. */
+static int close_vertex_localid(const s_scplx *scplx, const s_ncell *ncell, s_point point, double TOL)
 {
     const double TOL2 = TOL*TOL;
-    if (distance_squared(scplx->points.p[ncell->vertex_id[0]], point) <= TOL2 || 
-        distance_squared(scplx->points.p[ncell->vertex_id[1]], point) <= TOL2 ||
-        distance_squared(scplx->points.p[ncell->vertex_id[2]], point) <= TOL2 ||
-        distance_squared(scplx->points.p[ncell->vertex_id[3]], point) <= TOL2)
-        return true;
-    else return false;
+    for (int i = 0; i < 4; i++)
+        if (distance_squared(scplx->points.p[ncell->vertex_id[i]], point) <= TOL2) return i;
+    return -1;
 }
 
-static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored)
-{   /* -1: ERROR, 0: not inserted, 1: inserted */
-    s_point point = scplx->points.p[point_id];
-    s_ncell *container_ncell = in_ncell_walk_id(scplx, point_id);
-
-    if (scplx->exact_ids && getenv("CDT_CHECK_WALK")) {
-        /* Exact point-in-tet: for each face, the query must be on the same side
-         * as the opposite vertex (or on the face) -- robust to tet orientation. */
-        const int *V = container_ncell->vertex_id;
-        bool inside = true;
-        for (int i = 0; i < 4 && inside; i++) {
-            int f[3], k = 0;
-            for (int j = 0; j < 4; j++) if (j != i) f[k++] = V[j];
-            int oo = cdt_orient3d(f[0], f[1], f[2], V[i]);
-            int oq = cdt_orient3d(f[0], f[1], f[2], point_id);
-            if (oo != 0 && oq != 0 && oo != oq) inside = false;
-        }
-        if (!inside)
-            fprintf(stderr, "WALK BUG: container [%d,%d,%d,%d] does NOT contain point %d (exact)\n",
-                    V[0], V[1], V[2], V[3], point_id);
-    }
-
+/* A heavier duplicate of an existing vertex v at EXACTLY the same location
+ * takes over v's star: every star tet is relabelled v -> new_id and v is
+ * dropped.  This is a pure weight raise of one vertex, which the ES Section 8
+ * argument covers with S_{i-1} = S minus v: every tet outside star(v) is
+ * regular for S, hence for S minus v; raising the weight only lowers the
+ * lifted vertex, so the star tets keep f-values at least those of the
+ * R(S minus v) tets and "link facets suffice" still holds.  The caller then
+ * runs the ordinary link-facet cascade for new_id.  A near-duplicate that is
+ * NOT bit-identical must not be handled this way (its star tets are not R(S)
+ * tets under the new coordinates, so internal star faces can be non-regular
+ * and no link-facet cascade repairs them): it is inserted as the distinct
+ * point it is.  Returns 1 done, 0 error. */
+static int take_over_vertex_star(s_scplx *scplx, s_ncell *cell, int lid_v, int new_id,
+                                 s_dstack *stack, bool *ignored)
+{
+    int v = cell->vertex_id[lid_v];
+    int omit[3], m = 0;
+    for (int j = 0; j < 4; j++) if (j != lid_v) omit[m++] = j;
+    s_dynarray star = dynarray_initialize(sizeof(s_ncell *), 64);
+    if (!star.items) return 0;
+    if (!ncells_incident_face(scplx, cell, 0, omit, &star)) { dynarray_free(&star); return 0; }
+    s_ncell **sc = star.items;
     if (dt_trace_on())
-        fprintf(stderr, "[trace] INSERT %d (%.3g,%.3g,%.3g) container {%d,%d,%d,%d}\n",
-                point_id, point.x, point.y, point.z,
-                container_ncell->vertex_id[0], container_ncell->vertex_id[1],
-                container_ncell->vertex_id[2], container_ncell->vertex_id[3]);
+        fprintf(stderr, "[trace]   -> heavier coincident duplicate: %d takes over the %u-tet star of %d\n",
+                new_id, star.N, v);
+    for (unsigned k = 0; k < star.N; k++)
+        sc[k]->vertex_id[id_where_equal_int(sc[k]->vertex_id, 4, v)] = new_id;
+    ignored[v] = true;
+    if (scplx->point2tet) { scplx->point2tet[v] = NULL; scplx->point2tet[new_id] = sc[0]; }
+    int ok = 1;
+    if (stack)
+        for (unsigned k = 0; k < star.N && ok; k++) ok = stack_push(stack, sc[k]);
+    dynarray_free(&star);
+    return ok;
+}
 
-    if (point_close_to_ncell_vertex(scplx, container_ncell, point, TOL_dup) ||
-        p_locally_redundant_in_ncell(scplx, container_ncell, point_id)) {
-        if (dt_trace_on()) fprintf(stderr, "[trace]   -> dropped (dup/redundant)\n");
-        ignored[point_id] = true;
-        return 0;
-    }
-
-    if (!flip14(scplx, container_ncell, point_id, stack)) return -1;
-
+/* Flip locally non-regular link facets of point_id until none remain
+ * (ES Section 7, steps 6-9).  The stack holds cells that may contain
+ * point_id; each is checked on its face opposite point_id. */
+static int flip_cascade(s_scplx *scplx, int point_id, s_dstack *stack, bool *ignored)
+{
+    s_point point = scplx->points.p[point_id];
     while (stack->size > 0) {
         s_ncell *current = stack_pop(stack);
         if (!inarray(current->vertex_id, 4, point_id)) continue;
@@ -1784,8 +1970,70 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
             if (flip_tetrahedra(scplx, stack, current, opp_cell_id, ignored) == -1) return -1;
         }
     }
-
     return 1;
+}
+
+static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, double TOL_dup, bool *ignored)
+{   /* -1: ERROR, 0: not inserted, 1: inserted */
+    s_point point = scplx->points.p[point_id];
+    s_ncell *container_ncell = in_ncell_walk_id(scplx, point_id);
+
+    if (scplx->exact_ids && getenv("CDT_CHECK_WALK")) {
+        /* Exact point-in-tet: for each face, the query must be on the same side
+         * as the opposite vertex (or on the face) -- robust to tet orientation. */
+        const int *V = container_ncell->vertex_id;
+        bool inside = true;
+        for (int i = 0; i < 4 && inside; i++) {
+            int f[3], k = 0;
+            for (int j = 0; j < 4; j++) if (j != i) f[k++] = V[j];
+            int oo = cdt_orient3d(f[0], f[1], f[2], V[i]);
+            int oq = cdt_orient3d(f[0], f[1], f[2], point_id);
+            if (oo != 0 && oq != 0 && oo != oq) inside = false;
+        }
+        if (!inside)
+            fprintf(stderr, "WALK BUG: container [%d,%d,%d,%d] does NOT contain point %d (exact)\n",
+                    V[0], V[1], V[2], V[3], point_id);
+    }
+
+    if (dt_trace_on())
+        fprintf(stderr, "[trace] INSERT %d (%.3g,%.3g,%.3g) container {%d,%d,%d,%d}\n",
+                point_id, point.x, point.y, point.z,
+                container_ncell->vertex_id[0], container_ncell->vertex_id[1],
+                container_ncell->vertex_id[2], container_ncell->vertex_id[3]);
+
+    int close_lid = close_vertex_localid(scplx, container_ncell, point, TOL_dup);
+    if (close_lid >= 0) {
+        int v = container_ncell->vertex_id[close_lid];
+        /* Within TOL_dup of an existing vertex.  Unweighted: keep the first.
+         * Weighted: the lighter (or equal) one is dropped -- at the same
+         * location power distances differ by a constant, so it is redundant.
+         * A heavier one survives instead: by taking over v's star if the two
+         * coincide exactly, otherwise by ordinary insertion as a distinct
+         * point (see take_over_vertex_star). */
+        if (!scplx->weights || v < 4 || scplx->weights[point_id] <= scplx->weights[v]) {
+            if (dt_trace_on()) fprintf(stderr, "[trace]   -> dropped (duplicate of vertex %d)\n", v);
+            ignored[point_id] = true;
+            return 0;
+        }
+        const s_point *pv = &scplx->points.p[v];
+        if (pv->x == point.x && pv->y == point.y && pv->z == point.z) {
+            if (!take_over_vertex_star(scplx, container_ncell, close_lid, point_id, stack, ignored))
+                return -1;
+            return flip_cascade(scplx, point_id, stack, ignored);
+        }
+        if (dt_trace_on())
+            fprintf(stderr, "[trace]   -> heavier near-duplicate of vertex %d: inserting as a distinct point\n", v);
+    }
+
+    if (p_locally_redundant_in_ncell(scplx, container_ncell, point_id)) {
+        if (dt_trace_on()) fprintf(stderr, "[trace]   -> dropped (redundant)\n");
+        ignored[point_id] = true;
+        return 0;
+    }
+
+    if (!flip14(scplx, container_ncell, point_id, stack)) return -1;
+
+    return flip_cascade(scplx, point_id, stack, ignored);
 }
 
 int scplx_insert_point(s_scplx *dt, s_point p, double TOL)

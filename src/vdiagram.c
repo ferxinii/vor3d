@@ -3,6 +3,7 @@
 #include "convh.h"
 #include "scplx.h"
 #include "vdiagram.h"
+#include "volsph.h"
 #include "convh.h"
 #include "dynarray.h"
 #include "gnuplotc.h"
@@ -297,10 +298,17 @@ int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenera
 static int add_vvertex_from_ncell(const s_scplx *dt, const s_ncell *ncell, double EPS_degenerate, double TOL,  s_dynarray *vertices)
 {   /* 1: added, 0: not added, -1: error */
     s_point v[4];
-    extract_vertices_ncell(dt, ncell, v);
-
     s_point circumcentre;
-    if (!circumcentre_tetrahedron(v, EPS_degenerate, &circumcentre)) return 0;
+    int ok;
+    if (dt->weights) {
+        double w[4];
+        extract_vertices_and_weights_ncell(dt, ncell, v, w);
+        ok = power_circumcentre_tetrahedron(v, w, EPS_degenerate, &circumcentre);
+    } else {
+        extract_vertices_ncell(dt, ncell, v);
+        ok = circumcentre_tetrahedron(v, EPS_degenerate, &circumcentre);
+    }
+    if (!ok) return 0;
     /* From what I have found, it is unavoidable to have near-degenerate ncells (or completely degenerate).
      * Trying to fit a plane and then find the circumcentre in the projected plane
      * gives me strangle results... I find that skipping those ncells works best */

@@ -7,6 +7,7 @@
 #include "trimesh.h"
 #include "clip_lp.h"     /* Tier-B: 3D LP-feasibility dispatch (lp3_*) */
 #include "linalg.h"      /* solve_3x3_ppivot */
+#include "volsph.h"      /* circumcentre_maybe_weighted */
 #include "surf_vkey.h"   /* combinatorial vertex keys + per-cell surface assembly */
 
 #include <stdlib.h>
@@ -39,6 +40,8 @@ void free_ncvx_vdiagram(s_ncvx_vdiagram *vd)
     int N = vd->seeds.N;   /* read before free_points zeroes the struct */
     free_points(&vd->seeds);
     free_ncvx_domain(&vd->domain);
+    free(vd->adj_offset);
+    free(vd->adj_neighbor);
     if (vd->vcells) {
         for (int i = 0; i < N; i++) free_vcell(&vd->vcells[i]);
         free(vd->vcells);
@@ -300,10 +303,22 @@ static int cell_adjacency_is_symmetric(const struct ncvx_cell_adjacency *adj)
  * tet); a greedy descent over the Voronoi adjacency then reaches the true
  * nearest seed. Returns an id in [0,N). The owner of p's cell always contains p,
  * so seeding the flood from it guarantees overlap. */
-static double nseed_d2(s_point p, s_point q)
-{ double dx=p.x-q.x, dy=p.y-q.y, dz=p.z-q.z; return dx*dx+dy*dy+dz*dz; }
+static double nseed_d2(s_point p, s_point q, double w)
+{ double dx=p.x-q.x, dy=p.y-q.y, dz=p.z-q.z; return dx*dx+dy*dy+dz*dz - w; }
 
-static int nearest_seed(s_scplx *seed_dt, const s_points *rs,
+/* seed_weights: NULL = unweighted (nseed_d2's w term is then always 0, plain
+ * Euclidean descent). Weighted, the descent is over POWER distance -- greedy
+ * adjacency descent still converges to the true nearest seed because adj is
+ * the regular triangulation's own dual graph (same monotone-descent property
+ * Delaunay/Voronoi has for Euclidean distance, carried over to power
+ * distance on a regular triangulation). This matters here: unlike
+ * compute_vertex_owners (which only uses this as a float STARTING guess,
+ * then re-derives the true owner via an exact weighted descent),
+ * clip_domain's callers use this result directly to seed a flood-fill with
+ * no further correction -- an unweighted-only descent could pick a seed
+ * whose weighted cell never reaches p at all, silently dropping that tet's
+ * volume from every cell. */
+static int nearest_seed(s_scplx *seed_dt, const s_points *rs, const double *seed_weights,
                         const struct ncvx_cell_adjacency *adj, int N, s_point p)
 {
     int cur = -1; double cd = 0.0;
@@ -312,12 +327,14 @@ static int nearest_seed(s_scplx *seed_dt, const s_points *rs,
         for (int k = 0; k < 4; k++) {
             int id = loc->vertex_id[k];
             if (id < 0 || id >= N) continue;
-            double d = nseed_d2(p, rs->p[id]);
+            double w = seed_weights ? seed_weights[id] : 0.0;
+            double d = nseed_d2(p, rs->p[id], w);
             if (cur < 0 || d < cd) { cur = id; cd = d; }
         }
     if (cur < 0) {                     /* walk gave nothing -> brute nearest */
         for (int i = 0; i < N; i++) {
-            double d = nseed_d2(p, rs->p[i]);
+            double w = seed_weights ? seed_weights[i] : 0.0;
+            double d = nseed_d2(p, rs->p[i], w);
             if (cur < 0 || d < cd) { cur = i; cd = d; }
         }
         return cur;
@@ -327,7 +344,8 @@ static int nearest_seed(s_scplx *seed_dt, const s_points *rs,
         for (int k = adj->offset[cur]; k < adj->offset[cur + 1]; k++) {
             int j = adj->neighbor[k];
             if (j < 0 || j >= N) continue;
-            double d = nseed_d2(p, rs->p[j]);
+            double w = seed_weights ? seed_weights[j] : 0.0;
+            double d = nseed_d2(p, rs->p[j], w);
             if (d < bd) { best = j; bd = d; }
         }
         if (best == cur) break;
@@ -343,7 +361,7 @@ static int nearest_seed(s_scplx *seed_dt, const s_points *rs,
  * equidistant to owner and some neighbour (lies on a Voronoi face) -- category
  * (b) must then keep v for every incident cell, so it falls back to the exact
  * per-bisector loop. A float greedy descent (nearest_seed) seeds an EXACT
- * monotone descent over the Voronoi adjacency using lp_feasible_T0_T1_S (the
+ * monotone descent over the Voronoi adjacency using lp2_feasible_T0_T1_S (the
  * very predicate category (b) uses), so owner[]/tie[] reproduce (b) bit-for-bit. */
 static int compute_vertex_owners(const s_points *qpts, const s_points *rs,
                                  s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
@@ -354,18 +372,25 @@ static int compute_vertex_owners(const s_points *qpts, const s_points *rs,
     char *tie   = calloc((size_t)P, 1);
     if (!owner || !tie) { free(owner); free(tie); return 0; }
 
+    const double *seed_weights = seed_dt->weights;   /* NULL = unweighted */
+
     for (int v = 0; v < P; v++) {
         s_point V = qpts->p[v];
-        int m = nearest_seed(seed_dt, rs, adj, N, V);      /* float nearest as start */
+        int m = nearest_seed(seed_dt, rs, seed_weights, adj, N, V);   /* float nearest as start */
         if (m < 0) m = 0;
         for (;;) {                                          /* exact monotone descent */
             int moved = -1;
             s_point sm = rs->p[m];
+            double wm = seed_weights ? seed_weights[m] : 0.0;
             for (int k = adj->offset[m]; k < adj->offset[m+1]; k++) {
                 int j = adj->neighbor[k];
                 if (j < 0 || j >= N) continue;
                 s_point sj = rs->p[j];
-                if (lp_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z) < 0) {
+                int fe = seed_weights
+                    ? power_lp2_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z,
+                                                 wm, seed_weights[j])
+                    : lp2_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z);
+                if (fe < 0) {
                     moved = j; break;                       /* V strictly closer to j */
                 }
             }
@@ -374,11 +399,16 @@ static int compute_vertex_owners(const s_points *qpts, const s_points *rs,
         }
         char t = 0;                                         /* tie test at final owner */
         s_point sm = rs->p[m];
+        double wm = seed_weights ? seed_weights[m] : 0.0;
         for (int k = adj->offset[m]; k < adj->offset[m+1]; k++) {
             int j = adj->neighbor[k];
             if (j < 0 || j >= N) continue;
             s_point sj = rs->p[j];
-            if (lp_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z) == 0) { t = 1; break; }
+            int fe = seed_weights
+                ? power_lp2_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z,
+                                             wm, seed_weights[j])
+                : lp2_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z);
+            if (fe == 0) { t = 1; break; }
         }
         owner[v] = m; tie[v] = t;
     }
@@ -386,22 +416,32 @@ static int compute_vertex_owners(const s_points *qpts, const s_points *rs,
     return 1;
 }
 
-/* |X-s|^2 - |X-t|^2 (bisector value of s->t at X, in double). */
-static double lp_bisval(s_point X, s_point s, s_point t)
+/* |X-s|^2 - |X-t|^2 - ws + wt (weighted bisector value of s->t at X, in
+ * double; a plain, non-exact position solve for an already-classified
+ * crossing, not part of the exact predicate chain -- ws=wt=0 for the
+ * unweighted case reproduces the old formula exactly, so callers always
+ * pass real (zero-when-unweighted) weights rather than branching here). */
+static double lp_bisval(s_point X, s_point s, s_point t, double ws, double wt)
 {
     s_point xs = subtract_points(X, s), xt = subtract_points(X, t);
-    return dot_prod(xs, xs) - dot_prod(xt, xt);
+    return dot_prod(xs, xs) - dot_prod(xt, xt) - ws + wt;
 }
 
 /* Exact sign(lam_j - lam_k) for two bisectors s->tj, s->tk that cross tet edge
  * AB, where lam_m = g_mA/(g_mA - g_mB) is the crossing parameter (g_mX the
  * bisector value at X). From lp3_predicates.tex:
  *   sign(lam_j - lam_k) = -sign(det) * slope_j * slope_k
- * with det = lp3_det_TTS, slope = lp3_slope_TTS. Used by the (d) 1D-LP. */
-static int lp_cmp_lambda(s_point A, s_point B, s_point s, s_point tj, s_point tk)
+ * with det = lp3_det_TTS, slope = lp3_slope_TTS. Used by the (d) 1D-LP.
+ * ws,wtj,wtk: real (zero-when-unweighted) weights -- det always dispatches
+ * to the weighted power_lp3_det_TTS (identical to lp3_det_TTS at all-zero
+ * weights, Phase 2). slope (lp3_slope_TTS) is weight-invariant (a_S
+ * untouched: the same additive weight shift cancels identically between the
+ * edge's two endpoints), so it stays unweighted, unchanged. */
+static int lp_cmp_lambda(s_point A, s_point B, s_point s, s_point tj, s_point tk,
+                         double ws, double wtj, double wtk)
 {
-    int det = lp3_det_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z,
-                          tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
+    int det = power_lp3_det_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z,
+                                tj.x,tj.y,tj.z, tk.x,tk.y,tk.z, ws,wtj,wtk);
     int sj  = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
     int sk  = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tk.x,tk.y,tk.z);
     return -det * sj * sk;
@@ -420,16 +460,25 @@ static int lp_cmp_lambda(s_point A, s_point B, s_point s, s_point tj, s_point tk
  * SAME key in every tet and piece of the cell.  bis gets ALL partners E\{s},
  * making bisector-plane membership complete. */
 static s_vlabel canonical_vv_label(int s, int j1, int j2, int j3,
-                                   const s_points *seeds, const int *nbr, int NB)
+                                   const s_points *seeds, const double *seed_weights,
+                                   const int *nbr, int NB)
 {
     s_point sph[4] = { seeds->p[s], seeds->p[j1], seeds->p[j2], seeds->p[j3] };
+    double sph_w[4];
+    if (seed_weights) {
+        sph_w[0] = seed_weights[s];  sph_w[1] = seed_weights[j1];
+        sph_w[2] = seed_weights[j2]; sph_w[3] = seed_weights[j3];
+    }
     int32_t E[SV_NBIS + 1];
     int ne = 0;
     E[ne++] = s; E[ne++] = j1; E[ne++] = j2; E[ne++] = j3;
     for (int k = 0; k < NB; k++) {
         int u = nbr[k];
         if (u == j1 || u == j2 || u == j3) continue;
-        if (test_insphere(sph, seeds->p[u]) != 0) continue;
+        int on_sphere = seed_weights
+            ? test_orthosphere(4, sph, sph_w, seeds->p[u], seed_weights[u]) == 0
+            : test_insphere(sph, seeds->p[u]) == 0;
+        if (!on_sphere) continue;
         if (ne <= SV_NBIS) E[ne++] = u;
         else fprintf(stderr, "canonical_vv_label: cospherical cluster >%d (dropped %d)\n",
                      SV_NBIS + 1, u);
@@ -459,7 +508,8 @@ static s_vlabel canonical_vv_label(int s, int j1, int j2, int j3,
  * When there is no concyclic partner the cluster is just {j1,j2}, so the key is
  * bit-for-bit the plain EF/EE key -- non-degenerate cells are untouched. */
 static int canonical_edge_cluster(int cell_seed, int j1, int j2,
-                                  const s_points *seeds, const int *nbr, int NB,
+                                  const s_points *seeds, const double *seed_weights,
+                                  const int *nbr, int NB,
                                   int32_t out[SV_NBIS])
 {
     s_point a = seeds->p[cell_seed], b = seeds->p[j1], c = seeds->p[j2];
@@ -468,7 +518,11 @@ static int canonical_edge_cluster(int cell_seed, int j1, int j2,
     for (int k = 0; k < NB; k++) {
         int u = nbr[k];
         if (u == j1 || u == j2) continue;
-        if (!points_concyclic(a, b, c, seeds->p[u])) continue;
+        int concyclic = seed_weights
+            ? power_points_concyclic(a, seed_weights[cell_seed], b, seed_weights[j1],
+                                     c, seed_weights[j2], seeds->p[u], seed_weights[u])
+            : points_concyclic(a, b, c, seeds->p[u]);
+        if (!concyclic) continue;
         if (n < SV_NBIS) out[n++] = u;
         else fprintf(stderr, "canonical_edge_cluster: cocircular cluster >%d (dropped %d)\n",
                      SV_NBIS, u);
@@ -579,6 +633,7 @@ static int piece_to_surface(const s_convh *piece, const s_vlabel *labels,
  * (output-sensitive) enumeration is a later optimization. Coordinates are float;
  * every keep/drop decision is exact. Returns 1 (built), 0 (empty), -1 (error). */
 static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
+                                  const double *seed_weights,
                                   const struct ncvx_cell_adjacency *adj,
                                   const int *vor_vtx, int n_vtx,   /* n_vtx * {t1,t2,t3}     */
                                   const int *vor_edge, int n_edge, /* n_edge * {a,b,ap1,ap2} */
@@ -591,6 +646,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
     *out = convhull_NAN;
     if (out_labels) *out_labels = NULL;
     s_point s = seeds->p[seed_id];
+    double s_w = seed_weights ? seed_weights[seed_id] : 0.0;
     int NB = adj->offset[seed_id + 1] - adj->offset[seed_id];
     const int *nbr = NB ? adj->neighbor + adj->offset[seed_id] : NULL;  /* NB neighbour seed indices */
 
@@ -617,7 +673,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             for (int f = 0; f < 4; f++) if (f != j) tri[n++] = FC[f];  /* 3 faces meeting at j */
             for (int k = 0; k < NB && keep; k++) {
                 s_cid3 q = { CT_SEED, nbr[k] };
-                int r = lp3_feasible(tet, sigma_f, s, seeds, tri[0], tri[1], tri[2], q);
+                int r = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, tri[0], tri[1], tri[2], q);
                 if (r < 0) keep = 0;
                 /* V exactly ON B(s,nbr[k]) (e.g. a CDT Steiner vertex hit dead-on
                  * by the bisector): record the membership, or every facet face
@@ -642,29 +698,42 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         int lo_k = -1, hi_k = -1, empty = 0;   /* binding LO/HI neighbour index (-1 = segment end) */
         for (int k = 0; k < NB && !empty; k++) {
             s_point t = seeds->p[nbr[k]];
+            double wt = seed_weights ? seed_weights[nbr[k]] : 0.0;
             /* exact signs of gX = |X-s|^2 - |X-t|^2 (>0 == X outside this bisector) */
-            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z);
-            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            int sA, sB;
+            if (seed_weights) {
+                sA = -power_lp2_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z, s_w, wt);
+                sB = -power_lp2_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z, s_w, wt);
+            } else {
+                sA = -lp2_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z);
+                sB = -lp2_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            }
             if (sA <= 0 && sB <= 0) continue;            /* edge inside (boundary counts as in) */
             if (sA >= 0 && sB >= 0) { empty = 1; continue; }  /* interior fully outside: also the
                  * endpoint-ON-bisector case (sX==0, other end out) -- the interior is infeasible,
                  * so the constraint must EMPTY the edge, not be skipped */
-            /* strict straddle -> crossing in (0,1); slope>0 (g decreasing) => LO bound */
+            /* strict straddle -> crossing in (0,1); slope>0 (g decreasing) => LO bound.
+             * slope (lp3_slope_TTS) is weight-invariant, stays unweighted. */
             int slope = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
             if (slope > 0) {
-                if (lo_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[lo_k]]) > 0) lo_k = k;
+                if (lo_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[lo_k]],
+                        s_w, wt, seed_weights ? seed_weights[nbr[lo_k]] : 0.0) > 0) lo_k = k;
             } else if (slope < 0) {
-                if (hi_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[hi_k]]) < 0) hi_k = k;
+                if (hi_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[hi_k]],
+                        s_w, wt, seed_weights ? seed_weights[nbr[hi_k]] : 0.0) < 0) hi_k = k;
             }
         }
         if (empty) continue;
         if (lo_k >= 0 && hi_k >= 0 &&
-            lp_cmp_lambda(A,B,s, seeds->p[nbr[lo_k]], seeds->p[nbr[hi_k]]) > 0) continue; /* empty interval */
+            lp_cmp_lambda(A,B,s, seeds->p[nbr[lo_k]], seeds->p[nbr[hi_k]], s_w,
+                seed_weights ? seed_weights[nbr[lo_k]] : 0.0,
+                seed_weights ? seed_weights[nbr[hi_k]] : 0.0) > 0) continue; /* empty interval */
         for (int side = 0; side < 2; side++) {
             int kk = side ? hi_k : lo_k;
             if (kk < 0) continue;                        /* this end is a tet vertex (category b) */
             s_point t = seeds->p[nbr[kk]];
-            double gA = lp_bisval(A, s, t), gB = lp_bisval(B, s, t);
+            double wt = seed_weights ? seed_weights[nbr[kk]] : 0.0;
+            double gA = lp_bisval(A, s, t, s_w, wt), gB = lp_bisval(B, s, t, s_w, wt);
             double lam = gA / (gA - gB);
             s_point Pt = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y), .z = A.z + lam*(B.z-A.z) };
             s_vlabel lb = vlabel_make3(vkey_VB(tet_vids[e[0]], tet_vids[e[1]], seed_id, nbr[kk]),
@@ -694,7 +763,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         if (R != tet_id) {                              /* R == 0: unresolved -> test */
             int strict = 1;
             for (int f = 0; f < 4 && keep; f++) {
-                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[f]);
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, FC[f]);
                 if (fe < 0) keep = 0;
                 else if (fe == 0) strict = 0;
             }
@@ -703,8 +772,15 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         if (keep) {
             s_point tetc[4] = { s, seeds->p[j1], seeds->p[j2], seeds->p[j3] };
             s_point Pt;
-            if (circumcentre_tetrahedron(tetc, EPS_DEG, &Pt)) {
-                s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, nbr, NB);
+            double tetc_w[4];
+            const double *tetc_w_ptr = NULL;
+            if (seed_weights) {
+                tetc_w[0] = s_w; tetc_w[1] = seed_weights[j1];
+                tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
+                tetc_w_ptr = tetc_w;
+            }
+            if (circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &Pt)) {
+                s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, seed_weights, nbr, NB);
                 if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
             }
         }
@@ -719,15 +795,19 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         int j1 = vor_edge[4*ei+0], j2 = vor_edge[4*ei+1];
         int cap[2] = { vor_edge[4*ei+2], vor_edge[4*ei+3] };
         s_point t1 = seeds->p[j1], t2 = seeds->p[j2];
-        s_point n1 = subtract_points(t1, s); double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s));
-        s_point n2 = subtract_points(t2, s); double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s));
+        double wt1 = seed_weights ? seed_weights[j1] : 0.0;
+        double wt2 = seed_weights ? seed_weights[j2] : 0.0;
+        s_point n1 = subtract_points(t1, s);
+        double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s)) + 0.5*(s_w - wt1);
+        s_point n2 = subtract_points(t2, s);
+        double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2);
         for (int f = 0; f < 4; f++) {
             s_cid3 a = FC[f], b = { CT_SEED, j1 }, c = { CT_SEED, j2 };
             int keep = 1;
             int zf[3], nzf = 0;      /* other faces the crossing lies exactly ON */
             for (int g = 0; g < 4 && keep; g++) {
                 if (g == f) continue;
-                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[g]);
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, FC[g]);
                 if (fe < 0) keep = 0;
                 else if (fe == 0) zf[nzf++] = g;
             }
@@ -738,7 +818,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             for (int ci2 = 0; ci2 < 2 && keep; ci2++) {
                 if (cap[ci2] < 0) continue;
                 s_cid3 q = { CT_SEED, cap[ci2] };
-                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, q);
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, q);
                 if (fe < 0) keep = 0;
                 else if (fe == 0) zcap = cap[ci2];
             }
@@ -778,7 +858,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                     uint8_t fm = (uint8_t)(1 << f);
                     for (int zi = 0; zi < nzf; zi++) fm |= (uint8_t)(1 << zf[zi]);
                     if (zcap >= 0) {
-                        lb = canonical_vv_label(seed_id, j1, j2, zcap, seeds, nbr, NB);
+                        lb = canonical_vv_label(seed_id, j1, j2, zcap, seeds, seed_weights, nbr, NB);
                         lb.fmask = fm;
                         /* keep the face form as an alternate so PK_FACE
                          * membership of this face is still recognised */
@@ -793,7 +873,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                          * cocircular cluster (collinear dual edges coincide). */
                         int e2[2]; lp3_shared_edge(f, zf[0], e2);
                         int32_t cl[SV_NBIS];
-                        int ncl = canonical_edge_cluster(seed_id, j1, j2, seeds, nbr, NB, cl);
+                        int ncl = canonical_edge_cluster(seed_id, j1, j2, seeds, seed_weights, nbr, NB, cl);
                         lb = vlabel_make3(vkey_EE(seed_id, cl[0], cl[1],
                                                   tet_vids[e2[0]], tet_vids[e2[1]]),
                                           fm, -1, -1, -1);
@@ -802,7 +882,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                         /* generic face crossing: EF, seed-triple canonicalised
                          * over the cocircular cluster. */
                         int32_t cl[SV_NBIS];
-                        int ncl = canonical_edge_cluster(seed_id, j1, j2, seeds, nbr, NB, cl);
+                        int ncl = canonical_edge_cluster(seed_id, j1, j2, seeds, seed_weights, nbr, NB, cl);
                         lb = vlabel_make3(vkey_EF(seed_id, cl[0], cl[1],
                                                   tet_vids[fv[0]], tet_vids[fv[1]], tet_vids[fv[2]]),
                                           fm, -1, -1, -1);
@@ -844,6 +924,7 @@ err:
  * entirely inside the domain, so it is not carved by any tet. Returns 1 (built
  * into *out, volume in *vol_out), 0 (degenerate/empty), -1 (allocation error). */
 static int emit_interior_cell(int seed_id, const s_points *seeds,
+                              const double *seed_weights,
                               const int *nbr, int NB,
                               const int *vor_vtx, int n_vtx, double EPS_DEG,
                               s_convh *out, double *vol_out, s_vlabel **out_labels)
@@ -854,14 +935,23 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     s_dynarray cand = dynarray_initialize(sizeof(s_vlabel), 32);
     if (!pts.items || !cand.items) { dynarray_free(&pts); dynarray_free(&cand); return -1; }
     s_point s = seeds->p[seed_id];
+    double s_w = seed_weights ? seed_weights[seed_id] : 0.0;
     for (int vi = 0; vi < n_vtx; vi++) {
         int j1 = vor_vtx[3*vi+0], j2 = vor_vtx[3*vi+1], j3 = vor_vtx[3*vi+2];
         s_point tetc[4] = { s, seeds->p[j1], seeds->p[j2], seeds->p[j3] };
         s_point Pt;
-        if (circumcentre_tetrahedron(tetc, EPS_DEG, &Pt)) {
+        double tetc_w[4];
+        const double *tetc_w_ptr = NULL;
+        if (seed_weights) {
+            tetc_w[0] = s_w; tetc_w[1] = seed_weights[j1];
+            tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
+            tetc_w_ptr = tetc_w;
+        }
+        int ok = circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &Pt);
+        if (ok) {
             /* interior cell: all faces are Voronoi walls, so every vertex is a
              * VV point on the bisectors of its (possibly cospherical) cluster. */
-            s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, nbr, NB);
+            s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, seed_weights, nbr, NB);
             if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) {
                 dynarray_free(&pts); dynarray_free(&cand); return -1;
             }
@@ -905,6 +995,7 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
  * must be nonzero and unique per fan tet (resolved_vtx memo, category a).
  * Returns 1 OK, 0 allocation error. */
 static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
+                                    const double *seed_weights,
                                     const struct ncvx_cell_adjacency *adj,
                                     const int *vor_vtx, int n_vtx,
                                     const int *vor_edge, int n_edge,
@@ -913,6 +1004,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
                                     double EPS_DEG, s_dynarray *pts)
 {
     s_point s = seeds->p[seed_id];
+    double s_w = seed_weights ? seed_weights[seed_id] : 0.0;
     int NB = adj->offset[seed_id + 1] - adj->offset[seed_id];
     const int *nbr = NB ? adj->neighbor + adj->offset[seed_id] : NULL;
 
@@ -929,7 +1021,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         for (int f = 0; f < 4; f++) if (f != j) tri[n++] = FC[f];  /* 3 faces meeting at j */
         for (int k = 0; k < NB && keep; k++) {
             s_cid3 q = { CT_SEED, nbr[k] };
-            if (lp3_feasible(tet, sigma_f, s, seeds, tri[0], tri[1], tri[2], q) < 0) keep = 0;
+            if (lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, tri[0], tri[1], tri[2], q) < 0) keep = 0;
         }
         if (keep && !dynarray_push(pts, &tet[j])) return 0;
     }
@@ -941,25 +1033,37 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         int lo_k = -1, hi_k = -1, empty = 0;
         for (int k = 0; k < NB && !empty; k++) {
             s_point t = seeds->p[nbr[k]];
-            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z);
-            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            double wt = seed_weights ? seed_weights[nbr[k]] : 0.0;
+            int sA, sB;
+            if (seed_weights) {
+                sA = -power_lp2_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z, s_w, wt);
+                sB = -power_lp2_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z, s_w, wt);
+            } else {
+                sA = -lp2_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, t.x,t.y,t.z);
+                sB = -lp2_feasible_T0_T1_S(B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            }
             if (sA <= 0 && sB <= 0) continue;
             if (sA >= 0 && sB >= 0) { empty = 1; continue; }
             int slope = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
             if (slope > 0) {
-                if (lo_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[lo_k]]) > 0) lo_k = k;
+                if (lo_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[lo_k]],
+                        s_w, wt, seed_weights ? seed_weights[nbr[lo_k]] : 0.0) > 0) lo_k = k;
             } else if (slope < 0) {
-                if (hi_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[hi_k]]) < 0) hi_k = k;
+                if (hi_k < 0 || lp_cmp_lambda(A,B,s, t, seeds->p[nbr[hi_k]],
+                        s_w, wt, seed_weights ? seed_weights[nbr[hi_k]] : 0.0) < 0) hi_k = k;
             }
         }
         if (empty) continue;
         if (lo_k >= 0 && hi_k >= 0 &&
-            lp_cmp_lambda(A,B,s, seeds->p[nbr[lo_k]], seeds->p[nbr[hi_k]]) > 0) continue;
+            lp_cmp_lambda(A,B,s, seeds->p[nbr[lo_k]], seeds->p[nbr[hi_k]], s_w,
+                seed_weights ? seed_weights[nbr[lo_k]] : 0.0,
+                seed_weights ? seed_weights[nbr[hi_k]] : 0.0) > 0) continue;
         for (int side = 0; side < 2; side++) {
             int kk = side ? hi_k : lo_k;
             if (kk < 0) continue;
             s_point t = seeds->p[nbr[kk]];
-            double gA = lp_bisval(A, s, t), gB = lp_bisval(B, s, t);
+            double wt = seed_weights ? seed_weights[nbr[kk]] : 0.0;
+            double gA = lp_bisval(A, s, t, s_w, wt), gB = lp_bisval(B, s, t, s_w, wt);
             double lam = gA / (gA - gB);
             s_point Pt = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y), .z = A.z + lam*(B.z-A.z) };
             if (!dynarray_push(pts, &Pt)) return 0;
@@ -976,7 +1080,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         if (R != tet_id) {
             int strict = 1;
             for (int f = 0; f < 4 && keep; f++) {
-                int fe = lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[f]);
+                int fe = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, FC[f]);
                 if (fe < 0) keep = 0;
                 else if (fe == 0) strict = 0;
             }
@@ -985,7 +1089,14 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         if (keep) {
             s_point tetc[4] = { s, seeds->p[j1], seeds->p[j2], seeds->p[j3] };
             s_point Pt;
-            if (circumcentre_tetrahedron(tetc, EPS_DEG, &Pt))
+            double tetc_w[4];
+            const double *tetc_w_ptr = NULL;
+            if (seed_weights) {
+                tetc_w[0] = s_w; tetc_w[1] = seed_weights[j1];
+                tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
+                tetc_w_ptr = tetc_w;
+            }
+            if (circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &Pt))
                 if (!dynarray_push(pts, &Pt)) return 0;
         }
     }
@@ -995,19 +1106,23 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         int j1 = vor_edge[4*ei+0], j2 = vor_edge[4*ei+1];
         int cap[2] = { vor_edge[4*ei+2], vor_edge[4*ei+3] };
         s_point t1 = seeds->p[j1], t2 = seeds->p[j2];
-        s_point n1 = subtract_points(t1, s); double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s));
-        s_point n2 = subtract_points(t2, s); double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s));
+        double wt1 = seed_weights ? seed_weights[j1] : 0.0;
+        double wt2 = seed_weights ? seed_weights[j2] : 0.0;
+        s_point n1 = subtract_points(t1, s);
+        double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s)) + 0.5*(s_w - wt1);
+        s_point n2 = subtract_points(t2, s);
+        double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2);
         for (int f = 0; f < 4; f++) {
             s_cid3 a = FC[f], b = { CT_SEED, j1 }, c = { CT_SEED, j2 };
             int keep = 1;
             for (int g = 0; g < 4 && keep; g++) {
                 if (g == f) continue;
-                if (lp3_feasible(tet, sigma_f, s, seeds, a, b, c, FC[g]) < 0) keep = 0;
+                if (lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, FC[g]) < 0) keep = 0;
             }
             for (int ci2 = 0; ci2 < 2 && keep; ci2++) {
                 if (cap[ci2] < 0) continue;
                 s_cid3 q = { CT_SEED, cap[ci2] };
-                if (lp3_feasible(tet, sigma_f, s, seeds, a, b, c, q) < 0) keep = 0;
+                if (lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, q) < 0) keep = 0;
             }
             if (!keep) continue;
             int fv[3]; lp3_face_idx(f, fv);
@@ -1181,7 +1296,8 @@ static int nface_emit(int c, s_point P, int fa, int fb,
  * never lost. Same exact 1D-LP predicates as clip category (d). Returns 1 OK,
  * 0 allocation error, -1 walk anomaly (degenerate start/cycle; caller falls
  * back to the fan clip for the whole diagram). */
-static int convex_edge_walk(const s_points *seeds, const struct ncvx_cell_adjacency *adj,
+static int convex_edge_walk(const s_points *seeds, const double *seed_weights,
+                            const struct ncvx_cell_adjacency *adj,
                             int N, s_point A, s_point B, int owner_a, int f1, int f2,
                             s_dynarray *precs, s_dynarray *frecs)
 {
@@ -1190,21 +1306,31 @@ static int convex_edge_walk(const s_points *seeds, const struct ncvx_cell_adjace
         int NB = adj->offset[m+1] - adj->offset[m];
         const int *nbr = NB ? adj->neighbor + adj->offset[m] : NULL;
         s_point sm = seeds->p[m];
+        double wm = seed_weights ? seed_weights[m] : 0.0;
         int hi_k = -1;
         for (int k = 0; k < NB; k++) {
             s_point t = seeds->p[nbr[k]];
-            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
-            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
+            double wt = seed_weights ? seed_weights[nbr[k]] : 0.0;
+            int sA, sB;
+            if (seed_weights) {
+                sA = -power_lp2_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, t.x,t.y,t.z, wm, wt);
+                sB = -power_lp2_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, t.x,t.y,t.z, wm, wt);
+            } else {
+                sA = -lp2_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
+                sB = -lp2_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
+            }
             if (sA <= 0 && sB <= 0) continue;            /* edge inside this bisector */
             if (sA >= 0 && sB >= 0) return -1;           /* m does not meet the edge interior */
             int slope = lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, sm.x,sm.y,sm.z, t.x,t.y,t.z);
             if (slope < 0) {                             /* leaving crossing (HI bound) */
-                if (hi_k < 0 || lp_cmp_lambda(A,B,sm, t, seeds->p[nbr[hi_k]]) < 0) hi_k = k;
+                if (hi_k < 0 || lp_cmp_lambda(A,B,sm, t, seeds->p[nbr[hi_k]],
+                        wm, wt, seed_weights ? seed_weights[nbr[hi_k]] : 0.0) < 0) hi_k = k;
             }
         }
         if (hi_k < 0) return 1;                          /* interval reaches B: done */
         s_point t = seeds->p[nbr[hi_k]];
-        double gA = lp_bisval(A, sm, t), gB = lp_bisval(B, sm, t);
+        double wt_hi = seed_weights ? seed_weights[nbr[hi_k]] : 0.0;
+        double gA = lp_bisval(A, sm, t, wm, wt_hi), gB = lp_bisval(B, sm, t, wm, wt_hi);
         double lam = gA / (gA - gB);
         s_point X = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y),
                       .z = A.z + lam*(B.z-A.z) };
@@ -1213,12 +1339,19 @@ static int convex_edge_walk(const s_points *seeds, const struct ncvx_cell_adjace
         for (int k = 0; k < NB; k++) {                   /* exact co-crossing tie partners */
             if (k == hi_k) continue;
             s_point tk = seeds->p[nbr[k]];
-            int sA = -lp_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z);
-            int sB = -lp_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z);
+            double wtk = seed_weights ? seed_weights[nbr[k]] : 0.0;
+            int sA, sB;
+            if (seed_weights) {
+                sA = -power_lp2_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z, wm, wtk);
+                sB = -power_lp2_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z, wm, wtk);
+            } else {
+                sA = -lp2_feasible_T0_T1_S(A.x,A.y,A.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z);
+                sB = -lp2_feasible_T0_T1_S(B.x,B.y,B.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z);
+            }
             if (!((sA > 0 && sB < 0) || (sA < 0 && sB > 0))) continue;
             if (lp3_slope_TTS(A.x,A.y,A.z, B.x,B.y,B.z, sm.x,sm.y,sm.z, tk.x,tk.y,tk.z) >= 0)
                 continue;
-            if (lp_cmp_lambda(A,B,sm, tk, t) == 0)
+            if (lp_cmp_lambda(A,B,sm, tk, t, wm, wtk, wt_hi) == 0)
                 if (!nface_emit(nbr[k], X, f1, f2, precs, frecs)) return 0;
         }
         m = nbr[hi_k];
@@ -1233,18 +1366,22 @@ static int convex_edge_walk(const s_points *seeds, const struct ncvx_cell_adjace
  * no test against any other bp face is needed. Appends the float solves to
  * pts. Returns 1 OK, 0 allocation error. */
 static int nface_face_crossings(const s_convh *ch, int fi, int seed_id,
-                                const s_points *seeds, const int *ve, int n_edge,
+                                const s_points *seeds, const double *seed_weights,
+                                const int *ve, int n_edge,
                                 double EPS_DEG, s_dynarray *pts)
 {
     s_point fc[3]; convh_get_face(ch, fi, fc);
     s_point Aq = fc[0], Qq = fc[1], Rq = fc[2];
     s_point s = seeds->p[seed_id];
+    double s_w = seed_weights ? seed_weights[seed_id] : 0.0;
     s_point nf = cross_prod(subtract_points(Qq,Aq), subtract_points(Rq,Aq));
     double df = dot_prod(nf, Aq);
     for (int ei = 0; ei < n_edge; ei++) {
         int j1 = ve[4*ei+0], j2 = ve[4*ei+1];
         int cap[2] = { ve[4*ei+2], ve[4*ei+3] };
         s_point t1 = seeds->p[j1], t2 = seeds->p[j2];
+        double wt1 = seed_weights ? seed_weights[j1] : 0.0;
+        double wt2 = seed_weights ? seed_weights[j2] : 0.0;
         if (lp3_D_TSS(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
                       s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) == 0)
             continue;                                    /* Voronoi edge parallel to face */
@@ -1252,19 +1389,39 @@ static int nface_face_crossings(const s_convh *ch, int fi, int seed_id,
         for (int c2 = 0; c2 < 2 && keep; c2++) {         /* on the real edge segment */
             if (cap[c2] < 0) continue;
             s_point u = seeds->p[cap[c2]];
-            if (lp3_feasible_TSS_S(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
-                                   s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
-                                   u.x,u.y,u.z) < 0) keep = 0;
+            double wu = seed_weights ? seed_weights[cap[c2]] : 0.0;
+            int fe = seed_weights
+                ? power_lp3_feasible_TSS_S(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                          s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                          u.x,u.y,u.z, s_w,wt1,wt2,wu)
+                : lp3_feasible_TSS_S(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                    s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                    u.x,u.y,u.z);
+            if (fe < 0) keep = 0;
         }
         if (!keep) continue;
-        if (lp_feasible_S_S_T0(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
-                               s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
-        if (lp_feasible_S_S_T1(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
-                               s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
-        if (lp_feasible_S_S_T2(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
-                               s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
-        s_point n1 = subtract_points(t1, s); double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s));
-        s_point n2 = subtract_points(t2, s); double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s));
+        if (seed_weights) {
+            if (power_lp2_feasible_S_S_T0(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                          s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                          s_w,wt1,wt2) < 0) continue;
+            if (power_lp2_feasible_S_S_T1(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                          s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                          s_w,wt1,wt2) < 0) continue;
+            if (power_lp2_feasible_S_S_T2(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                          s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                          s_w,wt1,wt2) < 0) continue;
+        } else {
+            if (lp2_feasible_S_S_T0(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                   s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
+            if (lp2_feasible_S_S_T1(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                   s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
+            if (lp2_feasible_S_S_T2(Aq.x,Aq.y,Aq.z, Qq.x,Qq.y,Qq.z, Rq.x,Rq.y,Rq.z,
+                                   s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z) < 0) continue;
+        }
+        s_point n1 = subtract_points(t1, s);
+        double d1 = 0.5*(dot_prod(t1,t1) - dot_prod(s,s)) + 0.5*(s_w - wt1);
+        s_point n2 = subtract_points(t2, s);
+        double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2);
         double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
         double rhs[3] = { d1, d2, df }, x[3];
         if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
@@ -1472,6 +1629,7 @@ static void nface_seed_line(const s_convh *ch, const struct nface_geom *G,
  * N-face path has no surface evidence for the cell, its hull fails, or the
  * edge-walk hit a degeneracy. Returns 1 OK, 0 error. */
 static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
+                         const double *seed_weights,
                          const struct ncvx_cell_adjacency *adj, int i,
                          const int *vv, int n_vtx, const int *ve, int n_edge,
                          const int *nbr, int NB, s_point center,
@@ -1481,6 +1639,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
 {
     int Nf = bp->convh.Nf;
     s_point s = real_seeds->p[i];
+    double s_w = seed_weights ? seed_weights[i] : 0.0;
     if (n_vtx > 0) memset(resolved, 0, sizeof(int) * (size_t)n_vtx);
     pts->N = 0;
     int start = fan_tet_of_point(&bp->convh, center, s);
@@ -1493,8 +1652,8 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
             int fi; dynarray_get_value(fqueue, qh, &fi);
             s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
-            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, nbr, NB)) continue;  /* frontier */
-            if (!clip_cell_tet_accumulate(i, real_seeds, adj, vv, n_vtx, ve, n_edge,
+            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;  /* frontier */
+            if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                           tet, resolved, fi + 1, EPS_DEG, pts))
                 return 0;
             for (int k = 0; k < 3; k++) {
@@ -1512,8 +1671,8 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
         for (int fi = 0; fi < Nf; fi++) {
             s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
-            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, nbr, NB)) continue;
-            if (!clip_cell_tet_accumulate(i, real_seeds, adj, vv, n_vtx, ve, n_edge,
+            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;
+            if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                           tet, resolved, fi + 1, EPS_DEG, pts))
                 return 0;
         }
@@ -1540,6 +1699,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
     int Nf = bp->convh.Nf;
     s_point center = bp->CM;
     int rc = 0;
+    const double *seed_weights = seed_dt->weights;   /* NULL = unweighted */
 
     /* Hull seeds (unbounded Voronoi cells): a seed sharing a DT tet with any far
      * auxiliary point (id >= N). Their cells are bounded only by bp -> boundary. */
@@ -1601,12 +1761,16 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
             }
             if (tie[v]) {                       /* emit to every exactly-tied cell too */
                 s_point sm = real_seeds->p[m];
+                double wm = seed_weights ? seed_weights[m] : 0.0;
                 for (int k = adj->offset[m]; k < adj->offset[m+1]; k++) {
                     int j = adj->neighbor[k];
                     if (j < 0 || j >= N) continue;
                     s_point sj = real_seeds->p[j];
-                    if (lp_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z,
-                                            sj.x,sj.y,sj.z) != 0) continue;
+                    int fe = seed_weights
+                        ? power_lp2_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z,
+                                                     sj.x,sj.y,sj.z, wm, seed_weights[j])
+                        : lp2_feasible_T0_T1_S(V.x,V.y,V.z, sm.x,sm.y,sm.z, sj.x,sj.y,sj.z);
+                    if (fe != 0) continue;
                     pr.cell = j;
                     if (!dynarray_push(&precs, &pr)) goto err;
                     for (int q = vf_off[v]; q < vf_off[v+1]; q++) {
@@ -1619,7 +1783,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
         for (int e = 0; e < n_bp_edges && !force_fan; e++) {
             int va = bp_edges[4*e+0], vb = bp_edges[4*e+1];
             int ef1 = bp_edges[4*e+2], ef2 = bp_edges[4*e+3];
-            int r = convex_edge_walk(real_seeds, adj, N,
+            int r = convex_edge_walk(real_seeds, seed_weights, adj, N,
                                      bp->convh.points.p[va], bp->convh.points.p[vb],
                                      owner[va], ef1, ef2, &precs, &frecs);
             if (r == 0) goto err;
@@ -1646,6 +1810,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
         int NB = adj->offset[i+1] - adj->offset[i];
         const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
         s_point s = real_seeds->p[i];
+        double s_w = seed_weights ? seed_weights[i] : 0.0;
 
         /* ---- classify + (if interior) collect duals for a direct hull ----
          * A bounded (non-hull) cell is INTERIOR iff its whole convex Voronoi
@@ -1672,10 +1837,16 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
         ccbuf.N = 0;
         if (!boundary) {
             for (int vi = 0; vi < n_vtx; vi++) {
-                s_point tetc[4] = { s, real_seeds->p[vv[3*vi]], real_seeds->p[vv[3*vi+1]],
-                                    real_seeds->p[vv[3*vi+2]] };
+                int j1 = vv[3*vi], j2 = vv[3*vi+1], j3 = vv[3*vi+2];
+                s_point tetc[4] = { s, real_seeds->p[j1], real_seeds->p[j2], real_seeds->p[j3] };
                 s_point cc;
-                if (!circumcentre_tetrahedron(tetc, EPS_DEG, &cc)) { boundary = 1; break; }
+                double tetc_w[4]; const double *tetc_w_ptr = NULL;
+                if (seed_weights) {
+                    tetc_w[0] = s_w; tetc_w[1] = seed_weights[j1];
+                    tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
+                    tetc_w_ptr = tetc_w;
+                }
+                if (!circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &cc)) { boundary = 1; break; }
                 if (norm_squared(subtract_points(cc, s)) >= clear2) { boundary = 1; break; }
                 if (!dynarray_push(&ccbuf, &cc)) goto err;
             }
@@ -1705,11 +1876,18 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                 /* type 4: duals inside bp (clearance prescreen; exact ray-exit
                  * test only for the borderline band) */
                 for (int vi = 0; vi < n_vtx; vi++) {
-                    s_point tetc[4] = { s, real_seeds->p[vv[3*vi]],
-                                        real_seeds->p[vv[3*vi+1]],
-                                        real_seeds->p[vv[3*vi+2]] };
+                    int j1 = vv[3*vi], j2 = vv[3*vi+1], j3 = vv[3*vi+2];
+                    s_point tetc[4] = { s, real_seeds->p[j1],
+                                        real_seeds->p[j2],
+                                        real_seeds->p[j3] };
                     s_point cc;
-                    if (!circumcentre_tetrahedron(tetc, EPS_DEG, &cc)) continue;
+                    double tetc_w[4]; const double *tetc_w_ptr = NULL;
+                    if (seed_weights) {
+                        tetc_w[0] = s_w; tetc_w[1] = seed_weights[j1];
+                        tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
+                        tetc_w_ptr = tetc_w;
+                    }
+                    if (!circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &cc)) continue;
                     double r2 = norm_squared(subtract_points(cc, s));
                     if (r2 >= clear2 * (1.0 - 1e-9) &&
                         !nface_dual_in_bp(&bp->convh, fadj, &geom, center, cc, s,
@@ -1739,12 +1917,21 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                     int j1 = ve[4*ei+0], j2 = ve[4*ei+1];
                     int c1 = ve[4*ei+2], c2 = ve[4*ei+3];
                     s_point t1 = real_seeds->p[j1], t2 = real_seeds->p[j2];
+                    double wt1 = seed_weights ? seed_weights[j1] : 0.0;
+                    double wt2 = seed_weights ? seed_weights[j2] : 0.0;
                     if (c1 >= 0 && c2 >= 0) {
                         s_point cc1, cc2;
                         s_point e1[4] = { s, t1, t2, real_seeds->p[c1] };
                         s_point e2[4] = { s, t1, t2, real_seeds->p[c2] };
-                        if (!circumcentre_tetrahedron(e1, EPS_DEG, &cc1) ||
-                            !circumcentre_tetrahedron(e2, EPS_DEG, &cc2)) continue;
+                        double e1_w[4], e2_w[4];
+                        const double *e1_wp = NULL, *e2_wp = NULL;
+                        if (seed_weights) {
+                            e1_w[0] = e2_w[0] = s_w; e1_w[1] = e2_w[1] = wt1; e1_w[2] = e2_w[2] = wt2;
+                            e1_w[3] = seed_weights[c1]; e2_w[3] = seed_weights[c2];
+                            e1_wp = e1_w; e2_wp = e2_w;
+                        }
+                        if (!circumcentre_maybe_weighted(e1, e1_wp, EPS_DEG, &cc1) ||
+                            !circumcentre_maybe_weighted(e2, e2_wp, EPS_DEG, &cc2)) continue;
                         if (norm_squared(subtract_points(cc1, s)) < clear2m &&
                             norm_squared(subtract_points(cc2, s)) < clear2m)
                             continue;                        /* whole edge inside bp */
@@ -1755,7 +1942,12 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                         int a = c1 >= 0 ? c1 : c2;
                         s_point cc1;
                         s_point e1[4] = { s, t1, t2, real_seeds->p[a] };
-                        if (!circumcentre_tetrahedron(e1, EPS_DEG, &cc1)) continue;
+                        double e1_w[4]; const double *e1_wp = NULL;
+                        if (seed_weights) {
+                            e1_w[0] = s_w; e1_w[1] = wt1; e1_w[2] = wt2; e1_w[3] = seed_weights[a];
+                            e1_wp = e1_w;
+                        }
+                        if (!circumcentre_maybe_weighted(e1, e1_wp, EPS_DEG, &cc1)) continue;
                         s_point u = cross_prod(subtract_points(t1, s),
                                                subtract_points(t2, s));
                         if (dot_prod(u, subtract_points(real_seeds->p[a], s)) > 0)
@@ -1767,8 +1959,8 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                                                subtract_points(t2, s));
                         s_point n1 = subtract_points(t1, s), n2 = subtract_points(t2, s);
                         double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{u.x,u.y,u.z}};
-                        double rhs[3] = { 0.5*(dot_prod(t1,t1) - dot_prod(s,s)),
-                                          0.5*(dot_prod(t2,t2) - dot_prod(s,s)),
+                        double rhs[3] = { 0.5*(dot_prod(t1,t1) - dot_prod(s,s)) + 0.5*(s_w - wt1),
+                                          0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2),
                                           dot_prod(u, s) }, x[3];
                         if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) != 3) continue;
                         s_point p0 = { .x = x[0], .y = x[1], .z = x[2] };
@@ -1785,8 +1977,8 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                 for (unsigned qh = 0; qh < fqueue.N; qh++) {
                     int fi; dynarray_get_value(&fqueue, qh, &fi);
                     s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
-                    int may = lp3_cell_maybe_hits_tri(fc, s, real_seeds, nbr, NB);
-                    if (may && !nface_face_crossings(&bp->convh, fi, i, real_seeds,
+                    int may = lp3_cell_maybe_hits_tri(fc, s, real_seeds, seed_weights, s_w, nbr, NB);
+                    if (may && !nface_face_crossings(&bp->convh, fi, i, real_seeds, seed_weights,
                                                      ve, n_edge, EPS_DEG, &pts)) goto err;
                     if (!may && qh >= n_seed_faces) continue;
                     for (int k = 0; k < 3; k++) {
@@ -1806,18 +1998,37 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                 if (r == -1) goto err;
             }
             if (r != 1) {          /* no evidence, or degenerate N-face pool: fan */
-                if (!fan_clip_pool(bp, real_seeds, adj, i, vv, n_vtx, ve, n_edge,
+                if (!fan_clip_pool(bp, real_seeds, seed_weights, adj, i, vv, n_vtx, ve, n_edge,
                                    nbr, NB, center, fadj, face_stamp, &fstamp,
                                    &fqueue, resolved, EPS_DEG, &pts)) goto err;
-                s_points P = { (int)pts.N, (s_point *)pts.items };
-                r = convhull_from_points(&P, EPS_DEG, &hull);
-                if (r != 1) {
-                    fprintf(stderr, "clip_convex_bp: boundary cell %d failed to hull "
-                            "(%d pooled vertices, rc=%d)\n", i, (int)pts.N, r);
-                    goto err;
+                if (pts.N == 0) {
+                    /* Weighted-only edge case: seed i is not power-redundant (it
+                     * appears in the regular triangulation, so its cell is
+                     * non-empty SOMEWHERE in unbounded space) but a much more
+                     * heavily-weighted neighbour can still dominate it at every
+                     * point of the (finite) domain -- including its own site.
+                     * fan_clip_pool's exhaustive safety net tried every bp face
+                     * and found no candidate tet at all, which is conclusive:
+                     * the fan tets partition bp with no gaps, so a genuinely
+                     * non-empty domain-cell would have to overlap at least one
+                     * of them. This is a legitimate zero-volume cell, not a
+                     * failure (see ch_intersect's own convhull_NAN/rc=0
+                     * "empty intersection" convention). */
+                    hull = convhull_NAN;
+                    hv = 0.0;
+                } else {
+                    s_points P = { (int)pts.N, (s_point *)pts.items };
+                    r = convhull_from_points(&P, EPS_DEG, &hull);
+                    if (r != 1) {
+                        fprintf(stderr, "clip_convex_bp: boundary cell %d failed to hull "
+                                "(%d pooled vertices, rc=%d)\n", i, (int)pts.N, r);
+                        goto err;
+                    }
+                    hv = volume_convhull(&hull);
                 }
+            } else {
+                hv = volume_convhull(&hull);
             }
-            hv = volume_convhull(&hull);
         }
 
         vcells[i] = (s_vcell){0};
@@ -2253,6 +2464,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                        s_vcell *vcells)
 {
     int N = real_seeds->N;
+    const double *seed_weights = seed_dt->weights;        /* NULL = unweighted */
     int  *owner    = NULL;                                /* 2a: per-CDT-vertex owner cell */
     char *tie      = NULL;
     int  *resolved = NULL;                                /* 2b: per-dual containing tet id */
@@ -2289,12 +2501,27 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
      * directly, skipping all per-tet clips). The reach test uses the one-sided
      * triangle filter against boundary faces, so a cell that truly touches the
      * surface is never mis-classified interior; false positives just take the
-     * slow (clipped) path. */
+     * slow (clipped) path.
+     *
+     * BUG GUARD: the reach test (Phase A below) is a flood seeded from boundary
+     * tets and expanded through cell adjacency -- it can fail to ever visit a
+     * seed that sits outside the domain (or in an exterior CDT pocket): such a
+     * seed's raw bisector cell is finite (no unbounded edge) and, if the flood
+     * never reaches it, silently falls into "interior" and gets emitted whole,
+     * uncapped by the domain surface at all (single huge piece bounded only by
+     * neighbouring bisectors -- observed as a multi-order-of-magnitude volume
+     * outlier on real, non-convex anatomy). Close that gap directly: a seed that
+     * fails the exact CDT point-location containment test can never be safely
+     * treated as interior, regardless of what the flood does or doesn't reach. */
     for (int i = 0; i < N; i++) {
         int ne = adj->edge_off[i+1] - adj->edge_off[i];
         const int *ed = ne ? adj->edge + 4 * adj->edge_off[i] : NULL;
         for (int e = 0; e < ne; e++)
             if (ed[4*e+2] == -1 || ed[4*e+3] == -1) { cellkind[i] = 1; break; }
+        if (!cellkind[i]) {
+            s_ncell *loc = in_ncell_walk(&domain->cdt, real_seeds->p[i]);
+            if (!loc || !loc->interior) cellkind[i] = 1;
+        }
     }
 
     /* Debug (NCVX_ALL_BOUNDARY=1): disable the interior-cell shortcut; every
@@ -2318,20 +2545,21 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                       .y = (tv[0].y+tv[1].y+tv[2].y+tv[3].y)*0.25,
                       .z = (tv[0].z+tv[1].z+tv[2].z+tv[3].z)*0.25 };
         queue.N = 0;
-        int o = nearest_seed(seed_dt, real_seeds, adj, N, c);
+        int o = nearest_seed(seed_dt, real_seeds, seed_weights, adj, N, c);
         if (o >= 0) { stamp[o] = tet_stamp; if (!dynarray_push(&queue, &o)) goto err; }
         for (unsigned qh = 0; qh < queue.N; qh++) {
             int i; dynarray_get_value(&queue, qh, &i);
             int NB = adj->offset[i+1] - adj->offset[i];
             const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
-            if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, nbr, NB))
+            double wi = seed_weights ? seed_weights[i] : 0.0;
+            if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB))
                 continue;
             if (!cellkind[i]) {
                 for (int f = 0; f < 4; f++) {
                     if (!face_is_domain_boundary(nc, f)) continue;   /* interior face */
                     int fv[3]; lp3_face_idx(f, fv);
                     s_point tri[3] = { tv[fv[0]], tv[fv[1]], tv[fv[2]] };
-                    if (lp3_cell_maybe_hits_tri(tri, real_seeds->p[i], real_seeds, nbr, NB)) {
+                    if (lp3_cell_maybe_hits_tri(tri, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB)) {
                         cellkind[i] = 1; break;
                     }
                 }
@@ -2387,14 +2615,15 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                       .y = (tv[0].y+tv[1].y+tv[2].y+tv[3].y)*0.25,
                       .z = (tv[0].z+tv[1].z+tv[2].z+tv[3].z)*0.25 };
         queue.N = 0;
-        int o = nearest_seed(seed_dt, real_seeds, adj, N, c);
+        int o = nearest_seed(seed_dt, real_seeds, seed_weights, adj, N, c);
         if (o >= 0) { stamp[o] = tet_stamp; if (!dynarray_push(&queue, &o)) goto err; }
 
         for (unsigned qh = 0; qh < queue.N; qh++) {
             int i; dynarray_get_value(&queue, qh, &i);
             int NB = adj->offset[i+1] - adj->offset[i];
             const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
-            if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, nbr, NB))
+            double wi = seed_weights ? seed_weights[i] : 0.0;
+            if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB))
                 continue;                                 /* frontier */
 
             int do_expand = 0;
@@ -2407,7 +2636,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
                 const int *ve = n_edge ? adj->edge + 4 * adj->edge_off[i] : NULL;
                 int *rv = resolved ? resolved + adj->vtx_off[i] : NULL;
                 s_convh piece; s_vlabel *labels = NULL;
-                int r = clip_vcell_clip_tet_lp(i, real_seeds, adj, vv, n_vtx, ve, n_edge,
+                int r = clip_vcell_clip_tet_lp(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                                tv, nc->vertex_id, owner, tie, rv, tet_stamp,
                                                EPS_DEG, &piece, want_surface ? &labels : NULL);
                 if (r == 1) {
@@ -2478,7 +2707,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         const int *vv = n_vtx ? adj->vtx + 3 * adj->vtx_off[i] : NULL;
         s_convh hull; double hv; s_vlabel *labels = NULL;
         int nnb = adj->offset[i+1] - adj->offset[i];
-        int r = emit_interior_cell(i, real_seeds,
+        int r = emit_interior_cell(i, real_seeds, seed_weights,
                                    nnb ? adj->neighbor + adj->offset[i] : NULL,
                                    nnb,
                                    vv, n_vtx, EPS_DEG, &hull, &hv,
@@ -2569,7 +2798,7 @@ err_early:
 
 /* ---------------------------------------------------------------------- */
 
-s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
+s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const double *weights,
                                   const s_ncvx_domain *domain,
                                   double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
@@ -2610,7 +2839,7 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
     s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
-    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max, rng);
+    s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max, rng);
     if (!builder._stack) {
         if (out_kept_idx) for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = -1;
         return (s_ncvx_vdiagram){0};
@@ -2651,6 +2880,13 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
         return (s_ncvx_vdiagram){0};
     }
 
+    /* Transfer adj.offset/adj.neighbor (the combinatorial cell adjacency, already
+     * index-aligned with the compacted real_seeds/vcells) into the result; the
+     * rest of adj (vtx/edge, needed only inside clip_domain) is freed below. */
+    int    *adj_offset_out   = adj.offset;
+    int    *adj_neighbor_out = adj.neighbor;
+    adj.offset = NULL; adj.neighbor = NULL;
+
     /* Assemble result. Output seeds = the compacted real seeds; the output domain
      * carries surface/volume/bpoly only (empty CDT -- nobody reads it). */
     s_ncvx_vdiagram out;
@@ -2671,15 +2907,18 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds,
         free_ncvx_domain(&out.domain);
         for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
         free(vcells);
+        free(adj_offset_out); free(adj_neighbor_out);
         return (s_ncvx_vdiagram){0};
     }
 
-    out.vcells = vcells;
+    out.vcells      = vcells;
+    out.adj_offset   = adj_offset_out;
+    out.adj_neighbor = adj_neighbor_out;
     return out;
 }
 
 
-s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
+s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const double *weights,
                                    const s_trimesh *mesh,
                                    double vol_max_rel_diff,
                                    double EPS_DEG, double TOL,
@@ -2689,7 +2928,7 @@ s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
 {
     s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL, 0);
     if (!ncvx_domain_is_valid(&domain)) return (s_ncvx_vdiagram){0};
-    s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, &domain, vol_max_rel_diff,
+    s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, weights, &domain, vol_max_rel_diff,
                                            EPS_DEG, TOL, rng,
                                            buff_points, out_kept_idx,
                                            want_surface, merge_orphans);
@@ -2705,7 +2944,8 @@ s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds,
  * count of the caller's pre-filter input seeds) is composed in place by
  * dt_builder_end exactly as the mirror path does. Returns a zeroed s_vdiagram on
  * failure. `seeds` are the (already geometry-filtered) interior seeds. */
-s_vdiagram vor3d_convex_clip(const s_points *seeds, const s_bpoly *bp,
+s_vdiagram vor3d_convex_clip(const s_points *seeds, const double *weights,
+                             const s_bpoly *bp,
                              double EPS_DEG, double TOL,
                              int *out_kept_idx, int n_kept_idx)
 {
@@ -2729,7 +2969,7 @@ s_vdiagram vor3d_convex_clip(const s_points *seeds, const s_bpoly *bp,
     s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
-    s_dt_builder builder = dt_builder_begin(seeds, NULL, TOL, &big_min, &big_max, NULL);
+    s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max, NULL);
     if (!builder._stack) {
         if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
         return (s_vdiagram){0};

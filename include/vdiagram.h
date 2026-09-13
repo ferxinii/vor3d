@@ -53,6 +53,15 @@ typedef struct ncvx_vdiagram {
     s_points      seeds;    /* copy of seeds */
     s_ncvx_domain domain;   /* copy of domain */
     s_vcell      *vcells;   /* array of length seeds.N */
+    /* Combinatorial cell adjacency (Delaunay dual of the seed DT): cell i and cell j
+     * are adjacent iff they share a Voronoi/power facet. CSR layout, index-aligned
+     * with seeds/vcells: cell i's neighbors are adj_neighbor[adj_offset[i] ..
+     * adj_offset[i+1]-1]. NULL/absent (adj_offset==NULL) only on a zeroed/failed
+     * diagram. Exposed for the weighted-Voronoi Newton solver's (approximate)
+     * Hessian -- see WEIGHTED_VORONOI_ASYMMETRY.md SS7 Step 2(a); no facet-area
+     * weighting, just the combinatorial graph. */
+    int          *adj_offset;    /* size seeds.N+1 */
+    int          *adj_neighbor;  /* size adj_offset[seeds.N] */
 } s_ncvx_vdiagram;
 
 /*

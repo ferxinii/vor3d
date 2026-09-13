@@ -344,9 +344,24 @@ static bool radical_center_face(s_point A, s_point B, s_point C,
 /* Radical center (equal-power point) of four balls: 3x3 solve with rows
  * 2(c_k - c_0), rhs (c_k - c_0).(c_k + c_0) - (w_k - w_0); rows scaled to
  * unit norm before partial pivoting.  For K-tets |Y - c_i| <= r_i (the in-K
- * condition), so Y is always local to the balls.  Returns false for
- * (near-)coplanar centers. */
-static bool radical_center_tet(const s_point c[4], const double w[4], s_point *out)
+ * condition), so Y is always local to the balls.  Returns 0 for
+ * (near-)coplanar centers.  This is the weighted analogue of
+ * circumcentre_tetrahedron (external/geometry) -- a separate numerical solve
+ * (unit-row-normalized pivoting vs. centered/scaled), not guaranteed
+ * bit-identical to it at zero weight, so the two are kept as distinct
+ * functions rather than merged.  Each row's geometric part is normalized to
+ * unit length before pivoting, so a pivot magnitude after partial pivoting is
+ * a well-scaled quantity (bounded in [0,1], not an arbitrary-scale value) --
+ * comparing it against EPS_degenerate is exactly the same kind of check
+ * circumcentre_tetrahedron makes, just on a differently-conditioned solve.
+ * A near-zero (not just exactly-zero) pivot means the four balls' radical
+ * planes are nearly parallel: solving anyway would divide by a near-zero
+ * number and silently return a wildly unstable point (seen in practice on
+ * dense/large-N configurations with big weight spreads -- a plain double
+ * solve like this one has no other way to signal that instability), so it
+ * must be rejected the same way a truly-zero pivot already is. */
+int power_circumcentre_tetrahedron(const s_point c[4], const double w[4],
+                                   double EPS_degenerate, s_point *out)
 {
     double A[3][4];
     for (int k = 1; k <= 3; k++) {
@@ -355,7 +370,7 @@ static bool radical_center_tet(const s_point c[4], const double w[4], s_point *o
         A[k-1][0] = 2*dk.x; A[k-1][1] = 2*dk.y; A[k-1][2] = 2*dk.z;
         A[k-1][3] = dot_prod(dk, sk) - (w[k] - w[0]);
         double n = sqrt(A[k-1][0]*A[k-1][0] + A[k-1][1]*A[k-1][1] + A[k-1][2]*A[k-1][2]);
-        if (n == 0.0) return false;
+        if (n <= EPS_degenerate) return 0;
         for (int j = 0; j < 4; j++) A[k-1][j] /= n;
     }
     for (int col = 0; col < 3; col++) {
@@ -364,7 +379,7 @@ static bool radical_center_tet(const s_point c[4], const double w[4], s_point *o
             if (fabs(A[r_][col]) > fabs(A[piv][col])) piv = r_;
         if (piv != col)
             for (int j = 0; j < 4; j++) { double t = A[col][j]; A[col][j] = A[piv][j]; A[piv][j] = t; }
-        if (A[col][col] == 0.0) return false;
+        if (fabs(A[col][col]) <= EPS_degenerate) return 0;
         for (int r_ = 0; r_ < 3; r_++) {
             if (r_ == col) continue;
             double f = A[r_][col]/A[col][col];
@@ -374,7 +389,7 @@ static bool radical_center_tet(const s_point c[4], const double w[4], s_point *o
     out->x = A[0][3]/A[0][0];
     out->y = A[1][3]/A[1][1];
     out->z = A[2][3]/A[2][2];
-    return true;
+    return 1;
 }
 
 /* Triple-intersection point P of three spheres (above the centers plane).
@@ -573,13 +588,12 @@ static inline void sort2(int *a)
 static void tet_volume_split_power(const s_point c[4], const double r[4],
                                    double EPS_DEGEN, double out_F[4])
 {
-    (void)EPS_DEGEN;
     double w[4];
     for (int i = 0; i < 4; i++) w[i] = r[i]*r[i];
 
     s_point Y;
     s_point X[4];   /* X[k] = radical center of the face OMITTING vertex k */
-    bool ok = radical_center_tet(c, w, &Y);
+    bool ok = power_circumcentre_tetrahedron(c, w, EPS_DEGEN, &Y);
     for (int k = 0; ok && k < 4; k++) {
         int f[3], n = 0;
         for (int t = 0; t < 4; t++) if (t != k) f[n++] = t;

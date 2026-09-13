@@ -164,7 +164,7 @@ int main(void)
     s_random_context rctx = random_initialize(42);
     s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
 
-    s_vdiagram vd = vor3d_in_bp(&points, &bp, 1e-3, 1e-12, 1e-12,
+    s_vdiagram vd = vor3d_in_bp(&points, NULL, &bp, 1e-3, 1e-12, 1e-12,
                                     randint_fn, &rctx, &buff, NULL);
     write_seeds_csv(&points, &buff, "seeds_and_mirrors.csv");
     dynarray_free(&buff);

@@ -329,7 +329,7 @@ static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
         if (!seeds.p) { local_fail++; continue; }
 
         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
-        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, domain, VOL_REL_DIFF,
+        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain, VOL_REL_DIFF,
                                                    EPS_DEG, TOL, &rctx,
                                                    &buff, NULL, false, false);
         dynarray_free(&buff);
@@ -390,7 +390,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
     {
         s_points seeds = random_seeds_inside(&mesh, 8);
         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
-        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, &domain, VOL_REL_DIFF,
+        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, &domain, VOL_REL_DIFF,
                                                EPS_DEG, TOL, &rctx,
                                                &buff, NULL, false, false);
         dynarray_free(&buff);

@@ -150,7 +150,7 @@ static double total_volume(const s_ncvx_vdiagram *vd)
 static s_ncvx_vdiagram run(const s_ncvx_domain *domain, const s_points *seeds,
                            int want_surface, int merge_orphans)
 {
-    return vor3d_in_ncvx_domain(seeds, domain, 1e-2, EPS_DEG, TOL,
+    return vor3d_in_ncvx_domain(seeds, NULL, domain, 1e-2, EPS_DEG, TOL,
                                 NULL, NULL, NULL,
                                 want_surface != 0, merge_orphans != 0);
 }

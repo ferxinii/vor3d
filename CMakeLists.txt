@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 project(vor3d LANGUAGES C CXX)
 
 if (NOT TARGET geometry)
+    # vor3d unconditionally uses test_orthosphere/test_orthosphere_w (dt.c,
+    # acplx.c, ashape.c), which geometry now declares only when this option
+    # is enabled.
+    set(GEOMETRY_COMPILE_TESTS_POWER ON CACHE BOOL "" FORCE)
     add_subdirectory(external/geometry)
 endif()
 
@@ -37,7 +41,9 @@ target_include_directories(vor3d
 target_link_libraries(vor3d
     PRIVATE
         gnuplotC
-        voronoi_predicates
+        predicates_basic     # orient3d_dd (dt.c)
+        predicates_lp        # lp2_*/lp3_* (clip_lp.h, ncvx.c, mirroring.c, surf_vkey.h)
+        predicates_power     # power_incircle3d (clip_lp.h, weighted co-orthocircularity)
         implicit_predicates  # used by cdt_predicates.cpp (CDT)
     PUBLIC
         geometry  # Users need to know about s_point

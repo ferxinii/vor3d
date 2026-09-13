@@ -1,8 +1,8 @@
 
 #include "points.h"
 #include "dynarray.h"
-#include "voronoi_predicates.h"
-#include "robust_predicates.h"
+#include "predicates_lp.h"
+#include "predicates_basic.h"
 #include "vdiagram.h"
 #include "scplx.h"
 #include <stdlib.h>
@@ -25,7 +25,7 @@ static int lp_D(const s_point face[3], s_point s,
     if (i.type == CSEED && j.type == CSEED) {
         s_point ti = seeds->p[best_idx[i.idx]];
         s_point tj = seeds->p[best_idx[j.idx]];
-        return lp_det2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+        return lp2_det2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                        s.x,s.y,s.z,
                        ti.x,ti.y,ti.z, tj.x,tj.y,tj.z);
     }
@@ -33,17 +33,17 @@ static int lp_D(const s_point face[3], s_point s,
     /* CSEED x TRI */
     if (i.type == CSEED && j.type != CSEED) {
         s_point ti = seeds->p[best_idx[i.idx]];
-        if (j.type == TRI0) return -lp_D_T0_S(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
-        if (j.type == TRI1) return -lp_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
-        if (j.type == TRI2) return -lp_D_T2_S(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (j.type == TRI0) return -lp2_D_T0_S(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (j.type == TRI1) return -lp2_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+        if (j.type == TRI2) return -lp2_D_T2_S(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
     }
 
     /* TRI x CSEED */
     if (i.type != CSEED && j.type == CSEED) {
         s_point tj = seeds->p[best_idx[j.idx]];
-        if (i.type == TRI0) return lp_D_T0_S(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
-        if (i.type == TRI1) return lp_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
-        if (i.type == TRI2) return lp_D_T2_S(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (i.type == TRI0) return lp2_D_T0_S(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (i.type == TRI1) return lp2_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+        if (i.type == TRI2) return lp2_D_T2_S(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
     }
 
     /* TRI x TRI */
@@ -78,11 +78,11 @@ static int lp_feasible(const s_point face[3], s_point s,
     if (L.type != CSEED && M.type != CSEED && N.type == CSEED) {
         s_point ti = seeds->p[best_idx[N.idx]];
         if (L.type == TRI0 && M.type == TRI1)
-            return lp_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+            return lp2_feasible_T0_T1_S(A.x,A.y,A.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
         if (L.type == TRI1 && M.type == TRI2)
-            return lp_feasible_T1_T2_S(B.x,B.y,B.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+            return lp2_feasible_T1_T2_S(B.x,B.y,B.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
         if (L.type == TRI0 && M.type == TRI2)
-            return lp_feasible_T0_T2_S(C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
+            return lp2_feasible_T0_T2_S(C.x,C.y,C.z, s.x,s.y,s.z, ti.x,ti.y,ti.z);
     }
 
     /* TRI x CSEED x CSEED */
@@ -90,13 +90,13 @@ static int lp_feasible(const s_point face[3], s_point s,
         s_point tj = seeds->p[best_idx[M.idx]];
         s_point tl = seeds->p[best_idx[N.idx]];
         if (L.type == TRI0)
-            return lp_feasible_T0_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+            return lp2_feasible_T0_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                                       s.x,s.y,s.z, tj.x,tj.y,tj.z, tl.x,tl.y,tl.z);
         if (L.type == TRI1)
-            return lp_feasible_T1_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+            return lp2_feasible_T1_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                                       s.x,s.y,s.z, tj.x,tj.y,tj.z, tl.x,tl.y,tl.z);
         if (L.type == TRI2)
-            return lp_feasible_T2_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+            return lp2_feasible_T2_S_S(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                                       s.x,s.y,s.z, tj.x,tj.y,tj.z, tl.x,tl.y,tl.z);
     }
 
@@ -105,17 +105,17 @@ static int lp_feasible(const s_point face[3], s_point s,
         if (N.type == L.type) return 0;
         s_point tj = seeds->p[best_idx[M.idx]];
         if (L.type == TRI0 && N.type == TRI1)
-            return lp_feasible_T0_S_T1(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+            return lp2_feasible_T0_S_T1(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
         if (L.type == TRI0 && N.type == TRI2)
-            return lp_feasible_T0_S_T2(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+            return lp2_feasible_T0_S_T2(A.x,A.y,A.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
         if (L.type == TRI1 && N.type == TRI0)
-            return lp_feasible_T1_S_T0(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+            return lp2_feasible_T1_S_T0(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
         if (L.type == TRI1 && N.type == TRI2)
-            return lp_feasible_T1_S_T2(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+            return lp2_feasible_T1_S_T2(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
         if (L.type == TRI2 && N.type == TRI0)
-            return lp_feasible_T2_S_T0(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+            return lp2_feasible_T2_S_T0(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
         if (L.type == TRI2 && N.type == TRI1)
-            return lp_feasible_T2_S_T1(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
+            return lp2_feasible_T2_S_T1(B.x,B.y,B.z, C.x,C.y,C.z, s.x,s.y,s.z, tj.x,tj.y,tj.z);
     }
 
     /* CSEED x CSEED x TRI */
@@ -123,13 +123,13 @@ static int lp_feasible(const s_point face[3], s_point s,
         s_point tj = seeds->p[best_idx[L.idx]];
         s_point tk = seeds->p[best_idx[M.idx]];
         if (N.type == TRI0)
-            return lp_feasible_S_S_T0(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+            return lp2_feasible_S_S_T0(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                                       s.x,s.y,s.z, tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
         if (N.type == TRI1)
-            return lp_feasible_S_S_T1(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+            return lp2_feasible_S_S_T1(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                                       s.x,s.y,s.z, tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
         if (N.type == TRI2)
-            return lp_feasible_S_S_T2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+            return lp2_feasible_S_S_T2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                                       s.x,s.y,s.z, tj.x,tj.y,tj.z, tk.x,tk.y,tk.z);
     }
 
@@ -142,9 +142,9 @@ static int lp_feasible(const s_point face[3], s_point s,
         s_point tL = seeds->p[best_idx[L.idx]];
         s_point tM = seeds->p[best_idx[M.idx]];
         s_point tN = seeds->p[best_idx[N.idx]];
-        return lp_det2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+        return lp2_det2(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                        s.x,s.y,s.z, tL.x,tL.y,tL.z, tM.x,tM.y,tM.z)
-             * lp_det3(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
+             * lp2_det3(A.x,A.y,A.z, B.x,B.y,B.z, C.x,C.y,C.z,
                        s.x,s.y,s.z, tL.x,tL.y,tL.z, tM.x,tM.y,tM.z,
                        tN.x,tN.y,tN.z);
     }

@@ -23,9 +23,10 @@
 #include "dynarray.h"
 #include "hash.h"
 #include "UF.h"         /* Union-Find for connected-component splitting */
-#include "gtests.h"     /* exact orient2d + test_insphere */
-#include "voronoi_predicates.h"   /* exact lp3_* feasibility for edge ordering */
-#include "robust_predicates.h"    /* orient3d */
+#include "gtests.h"     /* exact orient2d + test_insphere, test_orthosphere */
+#include "predicates_lp.h"   /* exact lp3_* feasibility for edge ordering */
+#include "predicates_lp_power.h"   /* power_lp3_*: weighted edge ordering */
+#include "predicates_basic.h"    /* orient3d */
 
 /* ---- key type ---------------------------------------------------------- */
 
@@ -927,33 +928,47 @@ static inline int sv_partners(s_vkey X, int cs, int out[3])
  * The 0 result is the exact coincidence certificate used by the merge (step 1.6). */
 static inline int ord_line_raw(s_vkey a, s_vkey b, s_point ca, s_point cb,
                                s_pkey P, s_pkey Q, int cs,
-                               const s_points *sd, const s_points *cv,
+                               const s_points *sd, const double *seed_weights,
+                               const s_points *cv,
                                const s_pkey *facet, int nfac)
 {
     s_point s  = sd->p[cs];
+    double s_w = seed_weights ? seed_weights[cs] : 0.0;
     s_point nP = sv_plane_nrm(P, sd, cv), nQ = sv_plane_nrm(Q, sd, cv);
     int feas = 2, db = 0;                        /* feas sentinel 2 = unhandled */
 
     if (P.tag == PK_BIS && Q.tag == PK_BIS) {    /* L1: Voronoi edge; verts VV/EF */
         int t1 = (P.a==cs)?P.b:P.a, t2 = (Q.a==cs)?Q.b:Q.a;
         s_point T1 = sd->p[t1], T2 = sd->p[t2];
+        double wt1 = seed_weights ? seed_weights[t1] : 0.0;
+        double wt2 = seed_weights ? seed_weights[t2] : 0.0;
         if (b.tag == VK_VV) {                    /* R_b = bisector B(cs,t3b) */
             int pb[3], nb = sv_partners(b, cs, pb), t3b = -1;
             for (int i=0;i<nb;i++) if (pb[i]!=t1 && pb[i]!=t2) t3b = pb[i];
             if (t3b < 0) goto fallback;
             db = sv_det3s(subtract_points(sd->p[t3b], s), nP, nQ);
             s_point u = sd->p[t3b];
+            double wu = seed_weights ? seed_weights[t3b] : 0.0;
             if (a.tag == VK_VV) {                /* SSS vs S = insphere */
                 int pa[3], na = sv_partners(a, cs, pa), t3a = -1;
                 for (int i=0;i<na;i++) if (pa[i]!=t1 && pa[i]!=t2) t3a = pa[i];
                 if (t3a < 0) goto fallback;
                 s_point sph[4] = { s, T1, T2, sd->p[t3a] };
-                feas = -test_insphere(sph, u);
+                if (seed_weights) {
+                    double sph_w[4] = { s_w, wt1, wt2, seed_weights[t3a] };
+                    feas = -test_orthosphere(4, sph, sph_w, u, wu);
+                } else {
+                    feas = -test_insphere(sph, u);
+                }
             } else if (a.tag == VK_EF) {         /* TSS vs S */
                 s_point A=cv->p[a.d], Qf=cv->p[a.e], R=cv->p[a.f];
-                feas = lp3_feasible_TSS_S(A.x,A.y,A.z, Qf.x,Qf.y,Qf.z, R.x,R.y,R.z,
-                                          s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
-                                          u.x,u.y,u.z);
+                feas = seed_weights
+                    ? power_lp3_feasible_TSS_S(A.x,A.y,A.z, Qf.x,Qf.y,Qf.z, R.x,R.y,R.z,
+                                               s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                               u.x,u.y,u.z, s_w, wt1, wt2, wu)
+                    : lp3_feasible_TSS_S(A.x,A.y,A.z, Qf.x,Qf.y,Qf.z, R.x,R.y,R.z,
+                                         s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                         u.x,u.y,u.z);
             }
         } else if (b.tag == VK_EF) {             /* R_b = b's face */
             s_point A2=cv->p[b.d], Q2=cv->p[b.e], R2=cv->p[b.f];
@@ -963,13 +978,22 @@ static inline int ord_line_raw(s_vkey a, s_vkey b, s_point ca, s_point cb,
                 for (int i=0;i<na;i++) if (pa[i]!=t1 && pa[i]!=t2) t3a = pa[i];
                 if (t3a < 0) goto fallback;
                 s_point U = sd->p[t3a];
-                feas = lp3_feasible_SSS_T(s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
-                                          U.x,U.y,U.z, A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z);
+                feas = seed_weights
+                    ? power_lp3_feasible_SSS_T(s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                               U.x,U.y,U.z, A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z,
+                                               s_w, wt1, wt2, seed_weights[t3a])
+                    : lp3_feasible_SSS_T(s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                         U.x,U.y,U.z, A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z);
             } else if (a.tag == VK_EF) {         /* TSS vs T (general query face) */
                 s_point A1=cv->p[a.d], Q1=cv->p[a.e], R1=cv->p[a.f];
-                feas = lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z, Q1.x,Q1.y,Q1.z, R1.x,R1.y,R1.z,
-                                              A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z,
-                                              s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z);
+                feas = seed_weights
+                    ? power_lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z, Q1.x,Q1.y,Q1.z, R1.x,R1.y,R1.z,
+                                                   A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z,
+                                                   s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z,
+                                                   s_w, wt1, wt2)
+                    : lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z, Q1.x,Q1.y,Q1.z, R1.x,R1.y,R1.z,
+                                             A2.x,A2.y,A2.z, Q2.x,Q2.y,Q2.z, R2.x,R2.y,R2.z,
+                                             s.x,s.y,s.z, T1.x,T1.y,T1.z, T2.x,T2.y,T2.z);
             }
         }
     }
@@ -977,21 +1001,31 @@ static inline int ord_line_raw(s_vkey a, s_vkey b, s_point ca, s_point cb,
         s_pkey BP = (P.tag==PK_BIS)?P:Q, FP = (P.tag==PK_FACE)?P:Q;
         int t = (BP.a==cs)?BP.b:BP.a;
         s_point T = sd->p[t];
+        double wt = seed_weights ? seed_weights[t] : 0.0;
         if (b.tag == VK_EF) {                    /* R_b = other bisector B(cs,t') */
             int pb[3], nb = sv_partners(b, cs, pb), tp = -1;
             for (int i=0;i<nb;i++) if (pb[i]!=t) tp = pb[i];
             if (tp < 0) goto fallback;
             db = sv_det3s(subtract_points(sd->p[tp], s), nP, nQ);
             s_point u = sd->p[tp];
+            double wu = seed_weights ? seed_weights[tp] : 0.0;
             if (a.tag == VK_EF) {                /* TSS vs S */
                 int pa[3]; sv_partners(a, cs, pa); int ta = (pa[0]!=t)?pa[0]:pa[1];
                 s_point A=cv->p[a.d],Qf=cv->p[a.e],R=cv->p[a.f], Ta=sd->p[ta];
-                feas = lp3_feasible_TSS_S(A.x,A.y,A.z,Qf.x,Qf.y,Qf.z,R.x,R.y,R.z,
-                                          s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z, u.x,u.y,u.z);
+                double wta = seed_weights ? seed_weights[ta] : 0.0;
+                feas = seed_weights
+                    ? power_lp3_feasible_TSS_S(A.x,A.y,A.z,Qf.x,Qf.y,Qf.z,R.x,R.y,R.z,
+                                               s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z, u.x,u.y,u.z,
+                                               s_w, wt, wta, wu)
+                    : lp3_feasible_TSS_S(A.x,A.y,A.z,Qf.x,Qf.y,Qf.z,R.x,R.y,R.z,
+                                         s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z, u.x,u.y,u.z);
             } else if (a.tag == VK_VB) {         /* TTS vs S */
                 s_point A=cv->p[a.a], B=cv->p[a.b];
-                feas = lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
-                                          T.x,T.y,T.z, u.x,u.y,u.z);
+                feas = seed_weights
+                    ? power_lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
+                                               T.x,T.y,T.z, u.x,u.y,u.z, s_w, wt, wu)
+                    : lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
+                                         T.x,T.y,T.z, u.x,u.y,u.z);
             }
         } else if (b.tag == VK_VB) {             /* R_b = other face F2 on b's edge */
             int f2 = sv_other_face(b.a, b.b, FP, facet, nfac);
@@ -1002,13 +1036,23 @@ static inline int ord_line_raw(s_vkey a, s_vkey b, s_point ca, s_point cb,
             if (a.tag == VK_EF) {                /* TSS vs T (gen) */
                 int pa[3]; sv_partners(a, cs, pa); int ta = (pa[0]!=t)?pa[0]:pa[1];
                 s_point A1=cv->p[a.d],Q1=cv->p[a.e],R1=cv->p[a.f], Ta=sd->p[ta];
-                feas = lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z,Q1.x,Q1.y,Q1.z,R1.x,R1.y,R1.z,
-                                              A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z,
-                                              s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z);
+                double wta = seed_weights ? seed_weights[ta] : 0.0;
+                feas = seed_weights
+                    ? power_lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z,Q1.x,Q1.y,Q1.z,R1.x,R1.y,R1.z,
+                                                   A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z,
+                                                   s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z,
+                                                   s_w, wt, wta)
+                    : lp3_feasible_TSS_T_gen(A1.x,A1.y,A1.z,Q1.x,Q1.y,Q1.z,R1.x,R1.y,R1.z,
+                                             A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z,
+                                             s.x,s.y,s.z, T.x,T.y,T.z, Ta.x,Ta.y,Ta.z);
             } else if (a.tag == VK_VB) {         /* TTS vs T */
                 s_point A=cv->p[a.a],B=cv->p[a.b];
-                feas = lp3_feasible_TTS_T(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z, T.x,T.y,T.z,
-                                          A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z);
+                feas = seed_weights
+                    ? power_lp3_feasible_TTS_T(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z, T.x,T.y,T.z,
+                                               A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z,
+                                               s_w, wt)
+                    : lp3_feasible_TTS_T(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z, T.x,T.y,T.z,
+                                         A2.x,A2.y,A2.z,Q2.x,Q2.y,Q2.z,R2.x,R2.y,R2.z);
             }
         }
     }
@@ -1018,8 +1062,13 @@ static inline int ord_line_raw(s_vkey a, s_vkey b, s_point ca, s_point cb,
             int pa[3]; sv_partners(a, cs, pa); int ta = pa[0];
             db = sv_det3s(subtract_points(sd->p[tb], s), nP, nQ);
             s_point A=cv->p[a.a], B=cv->p[a.b], Ta=sd->p[ta], u=sd->p[tb];
-            feas = lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
-                                      Ta.x,Ta.y,Ta.z, u.x,u.y,u.z);
+            double wta = seed_weights ? seed_weights[ta] : 0.0;
+            double wtb = seed_weights ? seed_weights[tb] : 0.0;
+            feas = seed_weights
+                ? power_lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
+                                          Ta.x,Ta.y,Ta.z, u.x,u.y,u.z, s_w, wta, wtb)
+                : lp3_feasible_TTS_S(A.x,A.y,A.z,B.x,B.y,B.z, s.x,s.y,s.z,
+                                     Ta.x,Ta.y,Ta.z, u.x,u.y,u.z);
         }
     }
 
@@ -1037,10 +1086,11 @@ fallback:                                          /* unhandled / degenerate slo
  * (Phase C) for coincident vertices. */
 static inline int ord_line(s_vkey a, s_vkey b, s_point ca, s_point cb,
                            s_pkey P, s_pkey Q, int cs,
-                           const s_points *sd, const s_points *cv,
+                           const s_points *sd, const double *seed_weights,
+                           const s_points *cv,
                            const s_pkey *facet, int nfac)
 {
-    int r = ord_line_raw(a, b, ca, cb, P, Q, cs, sd, cv, facet, nfac);
+    int r = ord_line_raw(a, b, ca, cb, P, Q, cs, sd, seed_weights, cv, facet, nfac);
     return r ? r : sv_vkey_cmp(a, b);
 }
 

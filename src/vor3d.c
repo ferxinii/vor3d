@@ -125,7 +125,9 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
      * (only Stage C's mirror path does); callers that request out_dt fall back to
      * the mirror path. Set VOR3D_MIRRORS=1 to force the legacy mirror path (A/B). */
     if (!out_dt && seeds.N > 0 && !getenv("VOR3D_MIRRORS")) {
-        s_vdiagram vd = vor3d_convex_clip(&seeds, bp, ud.EPS_DEG, ud.TOL,
+        /* weights always NULL here: callers reaching vor3d_core (vor3d_in_bp/
+         * vor3d_in_bp_dt/vor3d_in_convh) reject non-NULL weights up front. */
+        s_vdiagram vd = vor3d_convex_clip(&seeds, NULL, bp, ud.EPS_DEG, ud.TOL,
                                           out_kept_idx,
                                           out_kept_idx ? ud.generator.seeds.N : 0);
         free_points(&seeds);
@@ -217,10 +219,20 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
 
 
 
-s_vdiagram vor3d_in_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
+s_vdiagram vor3d_in_bp(const s_points *seeds, const double *weights,
+                      const s_bpoly *bp, double vol_max_rel_diff,
                       double EPS_DEG, double TOL, int (*randint)(void*, int),
                       void *rctx, s_dynarray *buff_points, int *out_kept_idx)
 {
+    /* The legacy mirror path's clip predicates (mirroring.c) are unweighted;
+     * silently building a weighted seed DT here would produce a diagram whose
+     * clip ignores the weights entirely. Reject loudly instead -- callers
+     * wanting a weighted convex build use vor3d_convex_clip directly. */
+    if (weights) {
+        fprintf(stderr, "vor3d_in_bp: non-NULL weights are not supported on this "
+                        "(legacy mirror) path; use vor3d_convex_clip directly.\n");
+        return (s_vdiagram){0};
+    }
     seed_userdata ud = {.generator.seeds = copy_points(seeds),
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
     return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud,
@@ -231,11 +243,17 @@ s_vdiagram vor3d_in_bp(const s_points *seeds, const s_bpoly *bp, double vol_max_
 /* Same as vor3d_in_bp, but also hands back the seed DT ownership in *out_dt
  * (caller must free_complex() it) instead of freeing it internally. Used by
  * Stage C (ncvx.c) to get the Delaunay dual for cell adjacency. */
-s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const s_bpoly *bp, double vol_max_rel_diff,
+s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const double *weights,
+                          const s_bpoly *bp, double vol_max_rel_diff,
                           double EPS_DEG, double TOL, int (*randint)(void*, int),
                           void *rctx, s_dynarray *buff_points, int *out_kept_idx,
                           s_scplx *out_dt)
 {
+    if (weights) {  /* see vor3d_in_bp */
+        fprintf(stderr, "vor3d_in_bp_dt: non-NULL weights are not supported on this "
+                        "(legacy mirror) path; use vor3d_convex_clip directly.\n");
+        return (s_vdiagram){0};
+    }
     seed_userdata ud = {.generator.seeds = copy_points(seeds),
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
     return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud,
@@ -243,12 +261,13 @@ s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const s_bpoly *bp, double vol_m
 }
 
 
-s_vdiagram vor3d_in_convh(const s_points *seeds, const s_convh *convh, double vol_max_rel_diff,
+s_vdiagram vor3d_in_convh(const s_points *seeds, const double *weights,
+                          const s_convh *convh, double vol_max_rel_diff,
                           double EPS_DEG, double TOL, int (*randint)(void*, int),
                           void *rctx, s_dynarray *buff_points, int *out_kept_idx)
 {
     s_bpoly bp = bpoly_from_convh(convh);
-    s_vdiagram out = vor3d_in_bp(seeds, &bp, vol_max_rel_diff, EPS_DEG, TOL,
+    s_vdiagram out = vor3d_in_bp(seeds, weights, &bp, vol_max_rel_diff, EPS_DEG, TOL,
                                   randint, rctx, buff_points, out_kept_idx);
     free_bpoly(&bp);
     return out;

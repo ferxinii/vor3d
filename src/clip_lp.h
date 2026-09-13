@@ -24,9 +24,11 @@
  * --------------------------------------------------------------------------- */
 
 #include "points.h"
-#include "voronoi_predicates.h"
-#include "robust_predicates.h"   /* orient3d */
-#include "gtests.h"              /* test_insphere */
+#include "predicates_lp.h"
+#include "predicates_lp_power.h" /* power_lp2_/power_lp3_ weighted dispatch */
+#include "predicates_basic.h"   /* orient3d */
+#include "predicates_power.h"   /* power_incircle3d: weighted co-orthocircularity */
+#include "gtests.h"              /* test_insphere, test_orthosphere */
 
 /* Constraint identifier. CT_TET: idx = face 0..3 (face f = the 3 verts != v[f]).
  * CT_SEED: idx = partner seed index into seeds->p[]. */
@@ -81,6 +83,18 @@ static inline int points_concyclic(s_point a, s_point b, s_point c, s_point d)
                       c.x, c.y, c.z, d.x, d.y, d.z) == 0;
 }
 
+/* Weighted (power) analogue: are a,b,c,d co-orthocircular?  Same coplanarity
+ * gate (unweighted -- coplanarity is purely geometric); power_incircle3d ==
+ * 0 iff d is on the weighted circle through (a,b,c).  wa,wb,wc,wd index-align
+ * with a,b,c,d respectively. */
+static inline int power_points_concyclic(s_point a, double wa, s_point b, double wb,
+                                         s_point c, double wc, s_point d, double wd)
+{
+    if (test_orientation((s_point[]){ a, b, c }, d) != 0) return 0;   /* not coplanar */
+    return power_incircle3d(a.x, a.y, a.z, wa, b.x, b.y, b.z, wb,
+                            c.x, c.y, c.z, wc, d.x, d.y, d.z, wd) == 0;
+}
+
 /* ---- helpers to pull the S/T pieces out of a constraint triple ---------- */
 
 /* Split (a,b,c) into the tet-face ids (T) and seed cids (S). */
@@ -119,9 +133,9 @@ static inline int lp3_D(const s_point tet[4], s_point s, const s_points *seeds,
     if (nT == 2) {                                   /* TTS: (t-s).(B-A) on shared edge */
         int e[2]; lp3_shared_edge(Tf[0], Tf[1], e);
         s_point A = tet[e[0]], B = tet[e[1]], t = seeds->p[Sc[0].idx];
-        /* sign((t-s).(B-A)) via lp_D_T1_S(A,B,s,t); per-edge orientation sign is
+        /* sign((t-s).(B-A)) via lp2_D_T1_S(A,B,s,t); per-edge orientation sign is
          * applied by the caller when this feeds a 1D-edge lo/hi decision. */
-        return lp_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
+        return lp2_D_T1_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z, t.x,t.y,t.z);
     }
     /* nT == 3, TTT: determinant of three face normals -- a fixed per-tet
      * orientation sign. Not used by the enumerate-and-hull clip. */
@@ -132,9 +146,18 @@ static inline int lp3_D(const s_point tet[4], s_point s, const s_points *seeds,
 /* ---- lp3_feasible : feasibility of vertex (a^b^c) against query d -------- */
 /* Returns >0 (strictly inside d), 0 (on d's boundary / degenerate), <0 (outside).
  * For T queries the raw predicate is multiplied by sigma_f[query face] so that
- * the tet interior is the feasible side.                                      */
+ * the tet interior is the feasible side.
+ *
+ * seed_weights: NULL-able, index-aligned with seeds->p[] (NULL = unweighted,
+ * matching the dt_builder_begin idiom). s_w is the cell's own seed s's weight
+ * (meaningless/unused when seed_weights is NULL). When non-NULL, every
+ * S-involving branch dispatches to the weighted power_lp2_/power_lp3_
+ * predicate instead of its unweighted counterpart; the two purely
+ * combinatorial branches (TTS vs T, TTT vs T) are weight-independent and
+ * untouched -- see the Phase 2 predicate table. */
 static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_point s,
                                const s_points *seeds,
+                               const double *seed_weights, double s_w,
                                s_cid3 a, s_cid3 b, s_cid3 c, s_cid3 d)
 {
     int Tf[3], nT, nS; s_cid3 Sc[3];
@@ -148,10 +171,24 @@ static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_poi
              * tests/clip_lp_validate.c. */
             s_point sph[4] = { s, t1, t2, t3 };
             s_point u = seeds->p[d.idx];
+            if (seed_weights) {
+                double sph_w[4] = { s_w, seed_weights[Sc[0].idx], seed_weights[Sc[1].idx],
+                                     seed_weights[Sc[2].idx] };
+                double w_u = seed_weights[d.idx];
+                return -test_orthosphere(4, sph, sph_w, u, w_u);
+            }
             return -test_insphere(sph, u);
         } else {                                     /* SSS vs T */
             int fv[3]; lp3_face_idx(d.idx, fv);
             s_point A = tet[fv[0]], Q = tet[fv[1]], R = tet[fv[2]];
+            if (seed_weights) {
+                double wt1 = seed_weights[Sc[0].idx], wt2 = seed_weights[Sc[1].idx],
+                       wt3 = seed_weights[Sc[2].idx];
+                return sigma_f[d.idx] *
+                       power_lp3_feasible_SSS_T(s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                                t3.x,t3.y,t3.z, A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z,
+                                                s_w, wt1, wt2, wt3);
+            }
             return sigma_f[d.idx] *
                    lp3_feasible_SSS_T(s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
                                       t3.x,t3.y,t3.z, A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z);
@@ -164,6 +201,13 @@ static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_poi
         if (d.type == CT_SEED) {                     /* TSS vs S */
             int fv[3]; lp3_face_idx(f, fv);
             s_point A = tet[fv[0]], Q = tet[fv[1]], R = tet[fv[2]], u = seeds->p[d.idx];
+            if (seed_weights) {
+                double wt1 = seed_weights[Sc[0].idx], wt2 = seed_weights[Sc[1].idx],
+                       wu = seed_weights[d.idx];
+                return power_lp3_feasible_TSS_S(A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z,
+                                                s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                                u.x,u.y,u.z, s_w, wt1, wt2, wu);
+            }
             return lp3_feasible_TSS_S(A.x,A.y,A.z, Q.x,Q.y,Q.z, R.x,R.y,R.z,
                                       s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
                                       u.x,u.y,u.z);
@@ -177,6 +221,13 @@ static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_poi
              * from the ascending-order sigma_f[] (which can differ by a swap). */
             int sq = orient3d(A.x,A.y,A.z, E.x,E.y,E.z, D.x,D.y,D.z,
                               tet[g].x,tet[g].y,tet[g].z);
+            if (seed_weights) {
+                double wt1 = seed_weights[Sc[0].idx], wt2 = seed_weights[Sc[1].idx];
+                return sq *
+                       power_lp3_feasible_TSS_T(A.x,A.y,A.z, E.x,E.y,E.z, C.x,C.y,C.z, D.x,D.y,D.z,
+                                                s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z,
+                                                s_w, wt1, wt2);
+            }
             return sq *
                    lp3_feasible_TSS_T(A.x,A.y,A.z, E.x,E.y,E.z, C.x,C.y,C.z, D.x,D.y,D.z,
                                       s.x,s.y,s.z, t1.x,t1.y,t1.z, t2.x,t2.y,t2.z);
@@ -188,11 +239,18 @@ static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_poi
         s_point A = tet[e[0]], B = tet[e[1]];
         if (d.type == CT_SEED) {                     /* TTS vs S */
             s_point t = seeds->p[Sc[0].idx], u = seeds->p[d.idx];
+            if (seed_weights) {
+                double wt = seed_weights[Sc[0].idx], wu = seed_weights[d.idx];
+                return power_lp3_feasible_TTS_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z,
+                                                t.x,t.y,t.z, u.x,u.y,u.z, s_w, wt, wu);
+            }
             return lp3_feasible_TTS_S(A.x,A.y,A.z, B.x,B.y,B.z, s.x,s.y,s.z,
                                       t.x,t.y,t.z, u.x,u.y,u.z);
         } else {                                     /* TTS vs T : automatic */
             /* Crossing lies on tet edge (faces Tf[0],Tf[1]); it is on a query
-             * face iff that face is one of the two, else strictly interior. */
+             * face iff that face is one of the two, else strictly interior.
+             * Purely combinatorial (no bisector value involved) -> weight-
+             * independent, unchanged whether or not seed_weights is given. */
             return (d.idx == Tf[0] || d.idx == Tf[1]) ? 0 : 1;
         }
     }
@@ -202,11 +260,17 @@ static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_poi
         int V = lp3_common_vertex(Tf[0], Tf[1], Tf[2]);
         if (d.type == CT_SEED) {                     /* TTT vs S : bisector value at V */
             s_point Vp = tet[V], t = seeds->p[d.idx];
-            /* lp_feasible_T0_T1_S(V,s,t) = sign(|V-t|^2 - |V-s|^2) = feasibility
+            /* lp2_feasible_T0_T1_S(V,s,t) = sign(|V-t|^2 - |V-s|^2) = feasibility
              * (>0 when V is strictly closer to s). */
-            return lp_feasible_T0_T1_S(Vp.x,Vp.y,Vp.z, s.x,s.y,s.z, t.x,t.y,t.z);
+            if (seed_weights) {
+                double wt = seed_weights[d.idx];
+                return power_lp2_feasible_T0_T1_S(Vp.x,Vp.y,Vp.z, s.x,s.y,s.z, t.x,t.y,t.z,
+                                                  s_w, wt);
+            }
+            return lp2_feasible_T0_T1_S(Vp.x,Vp.y,Vp.z, s.x,s.y,s.z, t.x,t.y,t.z);
         } else {                                     /* TTT vs T : combinatorial */
-            return (d.idx == V) ? 1 : 0;             /* strictly inside only the opposite face */
+            return (d.idx == V) ? 1 : 0;             /* strictly inside only the opposite face,
+                                                       * weight-independent */
         }
     }
 }
@@ -224,18 +288,37 @@ static inline int lp3_feasible(const s_point tet[4], const int sigma_f[4], s_poi
  * The contrapositive is exact: if any bisector has all four tet vertices strictly
  * on the t-side, cell_i ^ tet is empty -- safe to reject (frontier). Passing is
  * only necessary, so a survivor still gets the full clip. Uses only the validated
- * lp_feasible_T0_T1_S (bisector value sign), no lp3_D and no orientation data.
- * Returns 1 (maybe overlaps -> clip), 0 (definitely disjoint -> frontier).       */
+ * lp2_feasible_T0_T1_S (bisector value sign), no lp3_D and no orientation data.
+ * Returns 1 (maybe overlaps -> clip), 0 (definitely disjoint -> frontier).
+ *
+ * seed_weights: NULL-able, index-aligned with seeds->p[] (NULL = unweighted).
+ * s_w is the cell seed s's own weight (unused when seed_weights is NULL).
+ * The "minimized at a vertex" soundness argument above is stated for the
+ * bisector's own favoring test, whatever that is; a power bisector is still
+ * an affine half-space (a_S untouched, only its offset shifts -- Phase 2),
+ * so the identical argument holds verbatim once every "s-side" check below
+ * uses the WEIGHTED favoring test instead of the unweighted one. Without
+ * this, the filter would test cell membership against the wrong (unweighted)
+ * half-space when the cell is actually weighted, which could wrongly reject
+ * (as "frontier") a cell that genuinely overlaps the tet under the true
+ * weighted metric -- a real correctness gap, not just a missed
+ * optimization. */
 static inline int lp3_cell_maybe_hits_tet(const s_point tet[4], s_point s,
                                           const s_points *seeds,
+                                          const double *seed_weights, double s_w,
                                           const int *nbr, int NB)
 {
     for (int j = 0; j < NB; j++) {
         s_point t = seeds->p[nbr[j]];
         int on_s_side = 0;
-        for (int k = 0; k < 4; k++)
-            if (lp_feasible_T0_T1_S(tet[k].x,tet[k].y,tet[k].z,
-                                    s.x,s.y,s.z, t.x,t.y,t.z) >= 0) { on_s_side = 1; break; }
+        for (int k = 0; k < 4; k++) {
+            int fe = seed_weights
+                ? power_lp2_feasible_T0_T1_S(tet[k].x,tet[k].y,tet[k].z,
+                                             s.x,s.y,s.z, t.x,t.y,t.z, s_w, seed_weights[nbr[j]])
+                : lp2_feasible_T0_T1_S(tet[k].x,tet[k].y,tet[k].z,
+                                      s.x,s.y,s.z, t.x,t.y,t.z);
+            if (fe >= 0) { on_s_side = 1; break; }
+        }
         if (!on_s_side) return 0;               /* this bisector cuts the whole tet away */
     }
     return 1;
@@ -247,14 +330,20 @@ static inline int lp3_cell_maybe_hits_tet(const s_point tet[4], s_point s,
  * boundary is never rejected -> it can never be mis-classified as interior. */
 static inline int lp3_cell_maybe_hits_tri(const s_point tri[3], s_point s,
                                           const s_points *seeds,
+                                          const double *seed_weights, double s_w,
                                           const int *nbr, int NB)
 {
     for (int j = 0; j < NB; j++) {
         s_point t = seeds->p[nbr[j]];
         int on_s_side = 0;
-        for (int k = 0; k < 3; k++)
-            if (lp_feasible_T0_T1_S(tri[k].x,tri[k].y,tri[k].z,
-                                    s.x,s.y,s.z, t.x,t.y,t.z) >= 0) { on_s_side = 1; break; }
+        for (int k = 0; k < 3; k++) {
+            int fe = seed_weights
+                ? power_lp2_feasible_T0_T1_S(tri[k].x,tri[k].y,tri[k].z,
+                                             s.x,s.y,s.z, t.x,t.y,t.z, s_w, seed_weights[nbr[j]])
+                : lp2_feasible_T0_T1_S(tri[k].x,tri[k].y,tri[k].z,
+                                      s.x,s.y,s.z, t.x,t.y,t.z);
+            if (fe >= 0) { on_s_side = 1; break; }
+        }
         if (!on_s_side) return 0;
     }
     return 1;

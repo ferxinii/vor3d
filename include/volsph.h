@@ -4,6 +4,24 @@
 #include "points.h"
 typedef struct dynarray s_dynarray;
 
+/* Weighted (power/Laguerre) analogue of external/geometry's
+ * circumcentre_tetrahedron: the orthocenter of four weighted points, i.e.
+ * the point equidistant in the power-distance sense (|x-p_i|^2 - w_i) from
+ * all four.  A separate numerical solve from circumcentre_tetrahedron (not
+ * guaranteed bit-identical at zero weight) -- the two are never merged, see
+ * src/volsph.c.  Returns 1 on success, 0 for (near-)degenerate input. */
+int power_circumcentre_tetrahedron(const s_point p[4], const double w[4],
+                                   double EPS_degenerate, s_point *out);
+
+/* Dispatch: NULL weights -> plain unweighted circumcenter, else power
+ * circumcenter.  Use this at call sites instead of branching manually. */
+static inline int circumcentre_maybe_weighted(const s_point p[4], const double w[4] /* NULL = unweighted */,
+                                              double EPS_degenerate, s_point *out)
+{
+    return w ? power_circumcentre_tetrahedron(p, w, EPS_degenerate, out)
+             : circumcentre_tetrahedron(p, EPS_degenerate, out);
+}
+
 double volume_intersection_2_spheres(double rA, double rB, double dAB,
                                      bool check_intersection);
 double volume_intersection_3_spheres(double rA, double rB, double rC, 
