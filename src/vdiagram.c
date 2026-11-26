@@ -27,202 +27,6 @@ void free_vcell(s_vcell *c)
 }
 
 
-/* Serialize / deserialize
- * Format (v2): seeds | bpoly | per-cell: seed_id, volume, N_pieces, pieces[]
- * N_pieces is always 1 for convex diagrams. */
-static size_t size_serialize_vdiagram(const s_vdiagram *vd)
-{
-    int N_seeds = vd->seeds.N;
-
-    size_t size = 0;
-    /* seeds */
-    size += sizeof(int);
-    size += sizeof(s_point) * N_seeds;
-
-    /* bpoly */
-    size_t size_ch = 0;
-    serialize_convhull(&vd->bpoly.convh, NULL, &size_ch, NULL);
-    size += size_ch;
-    size += sizeof(s_point);    /* CM */
-    size += sizeof(s_point);    /* min */
-    size += sizeof(s_point);    /* max */
-    size += sizeof(double);     /* volume */
-
-    /* vcells */
-    for (int ii=0; ii<N_seeds; ii++) {
-        size += sizeof(int);    /* seed_id */
-        size += sizeof(double); /* volume */
-        size += sizeof(int);    /* N_pieces */
-        for (int p = 0; p < vd->vcells[ii].N_pieces; p++) {
-            size_t size_p = 0;
-            serialize_convhull(&vd->vcells[ii].pieces[p], NULL, &size_p, NULL);
-            size += size_p;
-        }
-    }
-
-    return size;
-}
-
-
-int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size, uint8_t **out)
-{
-    size_t s = size_serialize_vdiagram(vd);
-    if (size) *size = s;
-
-    if (!buff_write && !out) return 1;
-    if (buff_write && out) {
-        fprintf(stderr, "ERROR serialize_vdiagram: either provide buffer or let function malloc, but not both.\n");
-        return 0;
-    }
-
-    uint8_t *destination = NULL;
-    if (buff_write) {
-        destination = buff_write;
-    } else {
-        destination = malloc(s);
-        if (!destination) return 0;
-        *out = destination;
-    }
-
-    uint8_t *p = destination;
-
-    /* seeds */
-    memcpy(p, &vd->seeds.N, sizeof(int));
-    p += sizeof(int);
-    memcpy(p, vd->seeds.p, sizeof(s_point) * vd->seeds.N);
-    p += sizeof(s_point) * vd->seeds.N;
-
-    /* bpoly */
-    size_t size_ch;
-    serialize_convhull(&vd->bpoly.convh, p, &size_ch, NULL);
-    p += size_ch;
-    memcpy(p, &vd->bpoly.CM, sizeof(s_point));      p += sizeof(s_point);
-    memcpy(p, &vd->bpoly.min, sizeof(s_point));     p += sizeof(s_point);
-    memcpy(p, &vd->bpoly.max, sizeof(s_point));     p += sizeof(s_point);
-    memcpy(p, &vd->bpoly.volume, sizeof(double));   p += sizeof(double);
-
-    /* vcells */
-    for (int ii=0; ii<vd->seeds.N; ii++) {
-        memcpy(p, &vd->vcells[ii].seed_id,  sizeof(int));    p += sizeof(int);
-        memcpy(p, &vd->vcells[ii].volume,   sizeof(double)); p += sizeof(double);
-        memcpy(p, &vd->vcells[ii].N_pieces, sizeof(int));    p += sizeof(int);
-        for (int pi=0; pi<vd->vcells[ii].N_pieces; pi++) {
-            serialize_convhull(&vd->vcells[ii].pieces[pi], p, &size_ch, NULL);
-            p += size_ch;
-        }
-    }
-
-    return 1;
-}
-
-int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_read)
-{
-    if (!out || !data) return 0;
-
-    s_vdiagram vd;
-    const uint8_t *p = data;
-
-    /* points */
-    memcpy(&vd.seeds.N, p, sizeof(int));
-    p += sizeof(int);
-    assert(vd.seeds.N != 0);
-    vd.seeds.p = malloc(sizeof(s_point) * vd.seeds.N);
-    if (!vd.seeds.p) return 0;
-    memcpy(vd.seeds.p, p, sizeof(s_point) * vd.seeds.N);
-    p += sizeof(s_point) * vd.seeds.N;
-
-    /* bpoly */
-    size_t read;
-    if (!deserialize_convhull(p, &vd.bpoly.convh, &read))
-        { free(vd.seeds.p); return 0; };
-    p += read;
-    memcpy(&vd.bpoly.CM, p, sizeof(s_point));      p += sizeof(s_point);
-    memcpy(&vd.bpoly.min, p, sizeof(s_point));     p += sizeof(s_point);
-    memcpy(&vd.bpoly.max, p, sizeof(s_point));     p += sizeof(s_point);
-    memcpy(&vd.bpoly.volume, p, sizeof(double));   p += sizeof(double);
-
-    /* vcells */
-    vd.vcells = malloc(sizeof(s_vcell) * vd.seeds.N);
-    if (!vd.vcells) { free(vd.seeds.p); free_bpoly(&vd.bpoly); return 0; }
-    int cells_read = 0;
-    for (int ii=0; ii<vd.seeds.N; ii++) {
-        memcpy(&vd.vcells[ii].seed_id,  p, sizeof(int));    p += sizeof(int);
-        memcpy(&vd.vcells[ii].volume,   p, sizeof(double)); p += sizeof(double);
-        memcpy(&vd.vcells[ii].N_pieces, p, sizeof(int));    p += sizeof(int);
-        vd.vcells[ii].surface = NULL;          /* not serialized (yet); see plan */
-        vd.vcells[ii].N_surface = 0;
-
-        vd.vcells[ii].pieces = malloc(sizeof(s_convh) * vd.vcells[ii].N_pieces);
-        if (!vd.vcells[ii].pieces) goto error;
-
-        int pieces_read = 0;
-        for (int pi=0; pi<vd.vcells[ii].N_pieces; pi++) {
-            if (!deserialize_convhull(p, &vd.vcells[ii].pieces[pi], &read)) {
-                for (int jj=0; jj<pieces_read; jj++) free_convhull(&vd.vcells[ii].pieces[jj]);
-                free(vd.vcells[ii].pieces);
-                goto error;
-            }
-            p += read;
-            pieces_read++;
-        }
-        cells_read++;
-    }
-
-    *out = vd;
-    if (bytes_read) *bytes_read = (size_t)(p - data);
-    return 1;
-
-error:
-    for (int jj=0; jj<cells_read; jj++) free_vcell(&vd.vcells[jj]);
-    free(vd.vcells);
-    free(vd.seeds.p);
-    free_bpoly(&vd.bpoly);
-    return 0;
-}
-
-int write_serialized_vdiagram(const char *file, const uint8_t *data, size_t size)
-{
-	FILE *f = fopen(file, "wb");
-	if (!f) return 0;
-
-	/* write 8-byte length (little-endian) so the reader knows the size */
-	uint64_t sz = (uint64_t)size;
-	uint8_t header[8];
-	for (int i = 0; i < 8; ++i) header[i] = (uint8_t)((sz >> (i * 8)) & 0xFF);
-
-	if (fwrite(header, 1, 8, f) != 8) { fclose(f); return 0; }
-	if (fwrite(data, 1, size, f) != size) { fclose(f); return 0; }
-	fclose(f);
-	return 1;
-}
-
-int read_serialized_vdiagram(const char *file, uint8_t **outbuf, size_t *outsize)
-{
-	FILE *f = fopen(file, "rb");
-	if (!f) return 0;
-
-	uint8_t header[8];
-	if (fread(header, 1, 8, f) != 8) { fclose(f); return 0; }
-
-	uint64_t sz = 0;
-	for (int i = 0; i < 8; ++i) sz |= ((uint64_t)header[i]) << (i * 8);
-
-	uint8_t *buf = NULL;
-	if (sz > 0) {
-		buf = (uint8_t*)malloc((size_t)sz);
-		if (!buf) { fclose(f); return 0; }
-		if (fread(buf, 1, (size_t)sz, f) != (size_t)sz)
-            { free(buf); fclose(f); return 0; }
-	}
-
-	fclose(f);
-	*outbuf = buf;
-	*outsize = (size_t)sz;
-	return 0;
-}
-
-
-
 /* Memory of vdiagram, printing, and other utilities. */
 int vdiagram_is_valid(const s_vdiagram *vd)
 {
@@ -230,16 +34,16 @@ int vdiagram_is_valid(const s_vdiagram *vd)
     else return 1;
 }
 
-void free_vdiagram(s_vdiagram *vdiagram)
+void free_vdiagram(s_vdiagram *vd)
 {
-    if (vdiagram->vcells) {
-        for (int ii=0; ii<vdiagram->seeds.N; ii++)
-            free_vcell(&vdiagram->vcells[ii]);
-        free(vdiagram->vcells);
+    if (vd->vcells) {
+        for (int i = 0; i < vd->seeds.N; i++) free_vcell(&vd->vcells[i]);
+        free(vd->vcells);
     }
-    free_points(&vdiagram->seeds);
-    free_bpoly(&vdiagram->bpoly);
-    memset(vdiagram, 0, sizeof(s_vdiagram));
+    free_points(&vd->seeds);
+    free(vd->adj_offset);
+    free(vd->adj_neighbor);
+    memset(vd, 0, sizeof(s_vdiagram));
 }
 
 void print_vcell(const s_vcell *vcell)
@@ -268,11 +72,12 @@ void print_vdiagram(const s_vdiagram *vdiagram)
 
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL)
 {
-    /* s_vdiagram is always convex (N_pieces == 1) */
     for (int ii=0; ii<vd->seeds.N; ii++) {
-        e_geom_test test = test_point_in_convhull(&vd->vcells[ii].pieces[0], x, EPS_degenerate, TOL);
-        if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
-        if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
+        for (int p = 0; p < vd->vcells[ii].N_pieces; p++) {
+            e_geom_test test = test_point_in_convhull(&vd->vcells[ii].pieces[p], x, EPS_degenerate, TOL);
+            if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
+            if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
+        }
     }
     return -1;
 }
@@ -314,7 +119,7 @@ static void plot_add_bpoly(s_gnuplot *interface, const s_bpoly *bpoly, char *con
 }
 
 
-void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, const s_point ranges[2])
+void plot_vcell(const s_vor3d_domain *domain, const s_vcell *vcell, char *f_name, const s_point ranges[2])
 {
     int size[2] = {1080, 1080};
     s_gnuplot *interface = gnuplot_start(PNG_3D, f_name, size, 18);
@@ -330,7 +135,7 @@ void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, con
     }
 
     plot_add_vcell(interface, vcell, "fs transparent solid 0.6");
-    plot_add_bpoly(interface, &vdiag->bpoly, "fs transparent solid 0.1");
+    plot_add_bpoly(interface, &domain->bpoly, "fs transparent solid 0.1");
     gnuplot_end(interface);
 }
 

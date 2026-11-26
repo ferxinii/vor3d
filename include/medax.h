@@ -60,7 +60,7 @@ typedef struct medax {
  *   "mesh vertices only", sensible only for meshes already dense w.r.t. local
  *   thickness. Rule of thumb: r_sample <= 1/4 of the local half-thickness.
  * theta0/rho0: filter parameters (pass the *_DEFAULT macros normally).
- * randd01/rctx: RNG callback for the scatter (same pattern as vor3d_in_bp_pds);
+ * randd01/rctx: RNG callback for the scatter;
  *   may be NULL when r_sample <= 0.
  * TOL: duplicate-point tolerance for the internal DT (as in dt_builder).
  * EPS_DEG: degeneracy epsilon (circumcenters, normals).

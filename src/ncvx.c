@@ -19,84 +19,6 @@
 #include <math.h>
 
 
-/* -----------------------------------------------------------------------
- * Internal validity / free helpers
- * ----------------------------------------------------------------------- */
-
-int ncvx_domain_is_valid(const s_ncvx_domain *d)
-{
-    return trimesh_is_valid(&d->surface) &&
-           d->cdt.head != NULL &&
-           convhull_is_valid(&d->bpoly.convh);
-}
-
-void free_ncvx_domain(s_ncvx_domain *d)
-{
-    free_trimesh(&d->surface);
-    free_complex(&d->cdt);
-    free_bpoly(&d->bpoly);
-    memset(d, 0, sizeof(s_ncvx_domain));
-}
-
-void free_ncvx_vdiagram(s_ncvx_vdiagram *vd)
-{
-    int N = vd->seeds.N;   /* read before free_points zeroes the struct */
-    free_points(&vd->seeds);
-    free_ncvx_domain(&vd->domain);
-    free(vd->adj_offset);
-    free(vd->adj_neighbor);
-    if (vd->vcells) {
-        for (int i = 0; i < N; i++) free_vcell(&vd->vcells[i]);
-        free(vd->vcells);
-    }
-    memset(vd, 0, sizeof(s_ncvx_vdiagram));
-}
-
-
-/* ---------------------------------------------------------------------- */
-
-s_ncvx_domain ncvx_domain_from_trimesh(const s_trimesh *mesh,
-                                        double EPS_DEG, double TOL, int keep_exterior)
-{
-    if (!trimesh_is_valid(mesh))
-        return (s_ncvx_domain){0};
-
-    /* Build the CDT of the interior. keep_exterior=0 returns only interior tets;
-     * keep_exterior=1 returns the full convex-hull complex (interior + exterior
-     * pockets flagged via nc->interior), which the clip treats identically and
-     * which also supports walk-based point location. The scplx is kept as the
-     * domain (traversed by the clip); not extracted. */
-    s_scplx dt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
-                               : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
-    if (!dt.head) {
-        fprintf(stderr, "ncvx_domain_from_trimesh: tetrahedralization failed\n");
-        return (s_ncvx_domain){0};
-    }
-
-    double volume_sum = 0.0;
-    for (s_ncell *nc = dt.head; nc; nc = nc->next) {
-        if (!nc->interior) continue;              /* skip exterior pockets, if kept */
-        s_point v[4];
-        extract_vertices_ncell(&dt, nc, v);
-        volume_sum += fabs(signed_volume_tetra(v));
-    }
-
-    s_trimesh surface = copy_trimesh(mesh);
-    if (!trimesh_is_valid(&surface)) { free_complex(&dt); return (s_ncvx_domain){0}; }
-
-    s_bpoly bpoly = bpoly_from_points(&mesh->points, EPS_DEG);
-    if (!convhull_is_valid(&bpoly.convh)) {
-        free_trimesh(&surface); free_complex(&dt); return (s_ncvx_domain){0};
-    }
-
-    s_ncvx_domain domain = {0};
-    domain.surface       = surface;
-    domain.cdt           = dt;            /* take ownership */
-    domain.domain_volume = volume_sum;
-    domain.bpoly         = bpoly;
-    domain.spatial_index = NULL;
-    return domain;
-}
 
 
 /* ---------------------------------------------------------------------- */
@@ -2036,6 +1958,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
 
         vcells[i] = (s_vcell){0};
         vcells[i].seed_id  = i;
+        if (!convhull_is_valid(&hull)) continue;   /* empty cell: N_pieces 0, volume 0 */
         vcells[i].pieces   = malloc(sizeof(s_convh));
         if (!vcells[i].pieces) { free_convhull(&hull); goto err; }
         vcells[i].pieces[0] = hull;
@@ -2152,7 +2075,7 @@ static s_mo_heap mo_heap_pop(s_mo_heap *h, int *n)
     return top;
 }
 
-static int merge_orphans_pass(const s_ncvx_domain *domain, const s_points *real_seeds,
+static int merge_orphans_pass(const s_vor3d_domain *domain, const s_points *real_seeds,
                               int N, double EPS_DEG, s_dynarray *surf, s_dynarray *pcs,
                               s_dynarray *piece_tri_off, s_vcell *vcells)
 {
@@ -2461,7 +2384,7 @@ cleanup:
  * per-cell accumulators. Fills vcells[0..N-1]. No AABBs, no candidate lists.
  * The domain CDT may be interior-only or flagged (exterior pockets are skipped).
  * Returns 1 on success, 0 on allocation error. */
-static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
+static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
                        s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
                        double EPS_DEG, bool want_surface, bool merge_orphans,
                        s_vcell *vcells)
@@ -2823,32 +2746,23 @@ err_early:
 
 /* ---------------------------------------------------------------------- */
 
-s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const double *weights,
-                                  const s_ncvx_domain *domain,
-                                  double EPS_DEG, double TOL,
-                                  s_random_context *rng,
-                                  int *out_kept_idx,
-                                  bool want_surface, bool merge_orphans)
+/* Seed DT shared by both kernels: the real seeds plus 8 FAR auxiliary points
+ * (a box many times the domain size). They guarantee a non-degenerate 3D DT
+ * even for 1-3 (or coplanar) real seeds -- without which dt_builder_end leaves
+ * no real tetrahedra and the diagram is empty. Being far outside every real
+ * seed's circumsphere, they never flip a real Delaunay tet, so the all-real
+ * dual enumeration the clips rely on is exactly the true real Voronoi
+ * structure (unlike mirrors, which sit just outside the hull and corrupt it).
+ * Aux ids (>= N) are dropped by build_cell_adjacency; their far bisectors
+ * never reach the domain, and the clip bounds every cell.
+ * On success *out_dt has the N real seeds packed first, and out_kept_idx
+ * (nullable, length seeds->N, pre-filled with the identity) is composed with
+ * the DT compaction (duplicates / power-redundant seeds -> -1). */
+static int build_seed_dt(const s_points *seeds, const double *weights,
+                         const s_bpoly *bp, double TOL, s_random_context *rng,
+                         int *out_kept_idx, s_scplx *out_dt, int *out_N)
 {
-    if (!seeds || seeds->N <= 0 || !ncvx_domain_is_valid(domain))
-        return (s_ncvx_vdiagram){0};
-    /* The orphan-merge pass reads the surface accumulators, so it needs the
-     * surface machinery on regardless of the caller's want_surface. */
-    if (merge_orphans) want_surface = true;
-
-    /* Seed Delaunay of the real seeds plus 8 FAR auxiliary points (a box many
-     * times the domain size). They guarantee a non-degenerate 3D DT even for 1-3
-     * (or coplanar) real seeds -- without which dt_builder_end leaves no real
-     * tetrahedra and the diagram is empty. Being far outside every real seed's
-     * circumsphere, they never flip a real Delaunay tet, so the all-real dual
-     * enumeration the clip relies on is exactly the true real Voronoi structure
-     * (unlike mirrors, which sit just outside the hull and corrupt it). Aux ids
-     * (>= Nreal) are dropped by build_cell_adjacency; their far bisectors never
-     * reach the domain, and the tet clip bounds every cell. */
-    if (out_kept_idx)
-        for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = i;
-
-    s_point mn = domain->bpoly.min, mx = domain->bpoly.max;
+    s_point mn = bp->min, mx = bp->max;
     s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
     double  hx = 0.5*(mx.x-mn.x), hy = 0.5*(mx.y-mn.y), hz = 0.5*(mx.z-mn.z);
     double  h  = hx > hy ? (hx > hz ? hx : hz) : (hy > hz ? hy : hz);
@@ -2863,184 +2777,116 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const double *weight
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
     s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max, rng);
-    if (!builder._stack) {
-        if (out_kept_idx) for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = -1;
-        return (s_ncvx_vdiagram){0};
-    }
+    if (!builder._stack) return 0;
     s_points aux_pts = { .N = 8, .p = aux };
     if (!dt_builder_extend(&builder, &aux_pts, TOL)) {
         s_scplx tmp = dt_builder_end(&builder, false, NULL, NULL, 0);
         free_complex(&tmp);
-        if (out_kept_idx) for (int i = 0; i < seeds->N; i++) out_kept_idx[i] = -1;
-        return (s_ncvx_vdiagram){0};
+        return 0;
     }
     int Nreal = seeds->N;                       /* first seeds->N inserted points are real */
-    s_scplx seed_dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
-                                     out_kept_idx ? seeds->N : 0);
-    if (!seed_dt.head || Nreal <= 0) { free_complex(&seed_dt); return (s_ncvx_vdiagram){0}; }
-
-    int N = Nreal;
-    s_points real_seeds = { .N = N, .p = seed_dt.points.p };  /* compacted: real seeds first */
-
-    struct ncvx_cell_adjacency adj;
-    if (!build_cell_adjacency(&seed_dt, N, &adj)) {
-        free_complex(&seed_dt); return (s_ncvx_vdiagram){0};
-    }
-    if (!cell_adjacency_is_symmetric(&adj))
-        fprintf(stderr, "vor3d_in_ncvx_domain: cell adjacency is not symmetric "
-                        "(bug in build_cell_adjacency)\n");
-
-    s_vcell *vcells = calloc((size_t)N, sizeof(s_vcell));
-    if (!vcells) {
-        free_cell_adjacency(&adj); free_complex(&seed_dt);
-        return (s_ncvx_vdiagram){0};
-    }
-
-    /* Inverse (tet-outer) clip fills all vcells. */
-    if (!clip_domain(domain, &real_seeds, &seed_dt, &adj, EPS_DEG, want_surface,
-                     merge_orphans, vcells)) {
-        free(vcells); free_cell_adjacency(&adj); free_complex(&seed_dt);
-        return (s_ncvx_vdiagram){0};
-    }
-
-    /* Transfer adj.offset/adj.neighbor (the combinatorial cell adjacency, already
-     * index-aligned with the compacted real_seeds/vcells) into the result; the
-     * rest of adj (vtx/edge, needed only inside clip_domain) is freed below. */
-    int    *adj_offset_out   = adj.offset;
-    int    *adj_neighbor_out = adj.neighbor;
-    adj.offset = NULL; adj.neighbor = NULL;
-
-    /* Assemble result. Output seeds = the compacted real seeds; the output domain
-     * carries surface/volume/bpoly only (empty CDT -- nobody reads it). */
-    s_ncvx_vdiagram out;
-    out.seeds  = copy_points(&real_seeds);
-    out.domain = (s_ncvx_domain){
-        .surface       = copy_trimesh(&domain->surface),
-        .cdt           = (s_scplx){0},
-        .domain_volume = domain->domain_volume,
-        .bpoly         = bpoly_copy(&domain->bpoly),
-        .spatial_index = NULL,
-    };
-
-    free_cell_adjacency(&adj);
-    free_complex(&seed_dt);
-
-    if (!out.seeds.p || !trimesh_is_valid(&out.domain.surface)) {
-        free_points(&out.seeds);
-        free_ncvx_domain(&out.domain);
-        for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
-        free(vcells);
-        free(adj_offset_out); free(adj_neighbor_out);
-        return (s_ncvx_vdiagram){0};
-    }
-
-    out.vcells      = vcells;
-    out.adj_offset   = adj_offset_out;
-    out.adj_neighbor = adj_neighbor_out;
-    return out;
+    s_scplx dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
+                                out_kept_idx ? seeds->N : 0);
+    if (!dt.head || Nreal <= 0) { free_complex(&dt); return 0; }
+    *out_dt = dt;
+    *out_N  = Nreal;
+    return 1;
 }
 
 
-s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const double *weights,
-                                   const s_trimesh *mesh,
-                                   double EPS_DEG, double TOL,
-                                   s_random_context *rng,
-                                   int *out_kept_idx,
-                                   bool want_surface, bool merge_orphans)
+/* Convex-kernel cells are a single convex piece: their boundary mesh is the
+ * piece's own triangles. A cell whose mesh cannot be built is left with
+ * surface NULL/0 (same contract as the non-convex kernel). */
+static void convex_cell_surfaces(s_vcell *vcells, int N)
 {
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL, 0);
-    if (!ncvx_domain_is_valid(&domain)) return (s_ncvx_vdiagram){0};
-    s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, weights, &domain,
-                                           EPS_DEG, TOL, rng, out_kept_idx,
-                                           want_surface, merge_orphans);
-    free_ncvx_domain(&domain);  /* result owns its own copy */
-    return out;
+    for (int i = 0; i < N; i++) {
+        if (vcells[i].N_pieces != 1) continue;
+        const s_convh *h = &vcells[i].pieces[0];
+        s_trimesh m = trimesh_from_arrays(h->points.p, h->points.N, h->faces, h->Nf, 0.0);
+        if (!trimesh_is_valid(&m)) continue;
+        vcells[i].surface = malloc(sizeof(s_trimesh));
+        if (!vcells[i].surface) { free_trimesh(&m); continue; }
+        vcells[i].surface[0] = m;
+        vcells[i].N_surface  = 1;
+    }
 }
 
 
-/* Convex Voronoi diagram (IMPROVE_CONVEX.md Idea C). Same seed DT +
- * far-aux setup as vor3d_in_ncvx_domain (a lean seeds-only DT), then
- * clip_convex_bp fills the cells against the fan tetrahedralization of bp. Drops
- * seeds that dedup away in the DT; out_kept_idx (nullable, length n_kept_idx =
- * count of the caller's pre-filter input seeds) is composed in place by
- * dt_builder_end. Returns a zeroed s_vdiagram on
- * failure. `seeds` are the (already geometry-filtered) interior seeds. */
-s_vdiagram vor3d_convex_clip(const s_points *seeds, const double *weights,
-                             const s_bpoly *bp,
-                             double EPS_DEG, double TOL,
-                             int *out_kept_idx, int n_kept_idx)
+s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
+                         const s_vor3d_domain *domain,
+                         double EPS_DEG, double TOL, s_random_context *rng,
+                         int *out_kept_idx,
+                         bool want_surface, bool merge_orphans)
 {
-    if (!seeds || seeds->N <= 0 || !convhull_is_valid(&bp->convh))
+    const int n_in = (seeds && seeds->N > 0) ? seeds->N : 0;
+    if (out_kept_idx) for (int i = 0; i < n_in; i++) out_kept_idx[i] = -1;
+    if (n_in == 0 || !domain || !vor3d_domain_is_valid(domain))
         return (s_vdiagram){0};
 
-    /* Far auxiliary box (see vor3d_in_ncvx_domain): 8 points many times the
-     * domain size, guaranteeing a non-degenerate DT for any seed count without
-     * corrupting the real Voronoi structure (unlike mirrors). */
-    s_point mn = bp->min, mx = bp->max;
-    s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
-    double  hx = 0.5*(mx.x-mn.x), hy = 0.5*(mx.y-mn.y), hz = 0.5*(mx.z-mn.z);
-    double  h  = hx > hy ? (hx > hz ? hx : hz) : (hy > hz ? hy : hz);
-    if (h <= 0) h = 1.0;
-    const double FAR = 1000.0;
-    s_point aux[8];
-    for (int k = 0; k < 8; k++)
-        aux[k] = (s_point){ .x = c.x + ((k&1)?FAR:-FAR)*h,
-                            .y = c.y + ((k&2)?FAR:-FAR)*h,
-                            .z = c.z + ((k&4)?FAR:-FAR)*h };
-    s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
-    s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
+    const bool convex = domain->is_convex;
+    if (convex) merge_orphans = false;      /* convex cells are always connected */
+    /* The orphan-merge pass reads the surface accumulators, so it needs the
+     * surface machinery on regardless of the caller's want_surface. */
+    if (merge_orphans) want_surface = true;
 
-    s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max, NULL);
-    if (!builder._stack) {
-        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
-    }
-    s_points aux_pts = { .N = 8, .p = aux };
-    if (!dt_builder_extend(&builder, &aux_pts, TOL)) {
-        s_scplx tmp = dt_builder_end(&builder, false, NULL, NULL, 0);
-        free_complex(&tmp);
-        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
-    }
-    int Nreal = seeds->N;
-    s_scplx seed_dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
-                                     out_kept_idx ? n_kept_idx : 0);
-    if (!seed_dt.head || Nreal <= 0) {
-        free_complex(&seed_dt);
-        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
-    }
+    if (out_kept_idx) for (int i = 0; i < n_in; i++) out_kept_idx[i] = i;
 
-    int N = Nreal;
+    s_scplx seed_dt = {0};
+    int N = 0;
+    struct ncvx_cell_adjacency adj = {0};
+    bool have_adj = false;
+    s_vcell *vcells = NULL;
+
+    if (!build_seed_dt(seeds, weights, &domain->bpoly, TOL, rng, out_kept_idx,
+                       &seed_dt, &N))
+        goto fail;
     s_points real_seeds = { .N = N, .p = seed_dt.points.p };   /* real seeds packed first */
 
-    struct ncvx_cell_adjacency adj;
-    if (!build_cell_adjacency(&seed_dt, N, &adj)) {
-        free_complex(&seed_dt);
-        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
+    if (!build_cell_adjacency(&seed_dt, N, &adj)) goto fail;
+    have_adj = true;
+    if (!cell_adjacency_is_symmetric(&adj))
+        fprintf(stderr, "vor3d_diagram: cell adjacency is not symmetric "
+                        "(bug in build_cell_adjacency)\n");
+
+    vcells = calloc((size_t)N, sizeof(s_vcell));
+    if (!vcells) goto fail;
+    if (convex) {
+        if (!clip_convex_bp(&domain->bpoly, &real_seeds, &seed_dt, &adj, EPS_DEG, vcells)) {
+            for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
+            goto fail;
+        }
+        if (want_surface) convex_cell_surfaces(vcells, N);
+    } else if (!clip_domain(domain, &real_seeds, &seed_dt, &adj, EPS_DEG, want_surface,
+                            merge_orphans, vcells)) {
+        goto fail;
     }
 
-    s_vcell *vcells = calloc((size_t)N, sizeof(s_vcell));
-    if (!vcells || !clip_convex_bp(bp, &real_seeds, &seed_dt, &adj, EPS_DEG, vcells)) {
-        if (vcells) for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
-        free(vcells); free_cell_adjacency(&adj); free_complex(&seed_dt);
-        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
+    s_vdiagram out = {0};
+    out.seeds = copy_points(&real_seeds);
+    if (!out.seeds.p) {
+        for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
+        goto fail;
     }
-
-    s_vdiagram out;
-    out.seeds  = copy_points(&real_seeds);
-    out.bpoly  = bpoly_copy(bp);
     out.vcells = vcells;
-
+    /* Transfer the combinatorial adjacency (index-aligned with the compacted
+     * seeds) into the result; the per-cell duals are freed below. */
+    out.adj_offset   = adj.offset;
+    out.adj_neighbor = adj.neighbor;
+    adj.offset = NULL; adj.neighbor = NULL;
     free_cell_adjacency(&adj);
     free_complex(&seed_dt);
 
-    if (!out.seeds.p) {
-        free_vdiagram(&out);
-        if (out_kept_idx) for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
-    }
+    double sum = 0.0;
+    for (int i = 0; i < N; i++) sum += vcells[i].volume;
+    out.domain_volume = domain->volume;
+    out.vol_rel_err   = (domain->volume - sum) / domain->volume;
+    out.is_convex     = convex;
     return out;
+
+fail:
+    free(vcells);
+    if (have_adj) free_cell_adjacency(&adj);
+    if (seed_dt.head || seed_dt.points.p) free_complex(&seed_dt);
+    if (out_kept_idx) for (int i = 0; i < n_in; i++) out_kept_idx[i] = -1;
+    return (s_vdiagram){0};
 }

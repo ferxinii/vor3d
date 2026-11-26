@@ -18,8 +18,11 @@ typedef struct bounding_polyhedron {
     double volume;
 } s_bpoly;
 
-/* A Voronoi cell is represented as an array of convex pieces.
- * For convex domains N_pieces is always 1; for non-convex domains N_pieces >= 1. */
+/* A Voronoi cell is represented as an array of convex pieces: 1 piece in a
+ * convex domain, >= 1 in a non-convex one. An EMPTY cell (seed outside the
+ * domain whose cell misses it, or a weighted seed dominated everywhere in the
+ * domain) keeps its slot with N_pieces = 0, pieces = NULL, volume = 0 and no
+ * surface. */
 typedef struct vcell {
     int        seed_id;
     s_convh   *pieces;
@@ -33,52 +36,39 @@ typedef struct vcell {
 
 void free_vcell(s_vcell *c);
 
+/* ---- Domain ---- */
+
+/* The region a diagram is clipped to. Built by the vor3d_domain_from_* functions
+ * (vor3d.h), which also decide is_convex; the convex kernel is used iff
+ * is_convex, the non-convex (CDT) kernel otherwise. */
+typedef struct vor3d_domain {
+    bool       is_convex;
+    s_trimesh  surface;   /* boundary mesh (owns memory), always present */
+    s_bpoly    bpoly;     /* convex: the domain itself; non-convex: its convex hull */
+    s_scplx    cdt;       /* non-convex only: CDT of the interior (interior tets,
+                             plus flagged exterior pockets if built with
+                             keep_exterior); empty (head == NULL) when is_convex */
+    bool       cdt_has_exterior;  /* cdt was built with keep_exterior = 1 */
+    double     volume;    /* convex: bpoly.volume; non-convex: sum of interior tets */
+} s_vor3d_domain;
+
+
+/* ---- Diagram ---- */
+
 typedef struct vdiagram {
-    s_points seeds;
-    s_bpoly bpoly;
-    struct vcell *vcells;  // Array of vcells (size: seeds.N)
+    s_points  seeds;      /* kept seeds, compacted (see out_kept_idx in vor3d.h) */
+    s_vcell  *vcells;     /* length seeds.N, index-aligned with seeds */
+    /* Combinatorial cell adjacency (Delaunay dual of the seed DT): cells i and j
+     * are adjacent iff they share a Voronoi/power facet. CSR layout: cell i's
+     * neighbours are adj_neighbor[adj_offset[i] .. adj_offset[i+1]-1]. */
+    int      *adj_offset;     /* size seeds.N+1 */
+    int      *adj_neighbor;   /* size adj_offset[seeds.N] */
+    double    domain_volume;
+    double    vol_rel_err;    /* (domain_volume - sum of cell volumes) / domain_volume */
+    bool      is_convex;      /* kernel that built it */
 } s_vdiagram;
 
-
-/* ---- Non-convex domain and diagram ---- */
-
-typedef struct ncvx_domain {
-    s_trimesh   surface;        /* boundary mesh (owns memory) */
-    s_scplx     cdt;            /* CDT of the interior (interior tets; owns memory) */
-    double      domain_volume;  /* sum of interior tet volumes */
-    s_bpoly     bpoly;          /* convex hull of surface.points (AABB for the far-aux DT box) */
-    void       *spatial_index;  /* NULL in MVP */
-} s_ncvx_domain;
-
-typedef struct ncvx_vdiagram {
-    s_points      seeds;    /* copy of seeds */
-    s_ncvx_domain domain;   /* copy of domain */
-    s_vcell      *vcells;   /* array of length seeds.N */
-    /* Combinatorial cell adjacency (Delaunay dual of the seed DT): cell i and cell j
-     * are adjacent iff they share a Voronoi/power facet. CSR layout, index-aligned
-     * with seeds/vcells: cell i's neighbors are adj_neighbor[adj_offset[i] ..
-     * adj_offset[i+1]-1]. NULL/absent (adj_offset==NULL) only on a zeroed/failed
-     * diagram. Exposed for the weighted-Voronoi Newton solver's (approximate)
-     * Hessian -- see WEIGHTED_VORONOI_ASYMMETRY.md SS7 Step 2(a); no facet-area
-     * weighting, just the combinatorial graph. */
-    int          *adj_offset;    /* size seeds.N+1 */
-    int          *adj_neighbor;  /* size adj_offset[seeds.N] */
-} s_ncvx_vdiagram;
-
-/*
- * Build a domain from a trimesh.
- * Tetrahedralizes the interior and computes its convex hull (bpoly).
- * keep_exterior=0 stores only interior tets (lean); keep_exterior=1 stores the
- * full convex-hull complex (interior + exterior pockets flagged via
- * nc->interior). The Voronoi builder treats both identically; keep_exterior=1
- * additionally enables walk-based point location on domain.cdt.
- * Returns a zero-initialised s_ncvx_domain on error.
- */
-s_ncvx_domain ncvx_domain_from_trimesh(const s_trimesh *mesh,
-                                        double EPS_DEG, double TOL, int keep_exterior);
-int  ncvx_domain_is_valid(const s_ncvx_domain *d);
-void free_ncvx_domain(s_ncvx_domain *d);
-void free_ncvx_vdiagram(s_ncvx_vdiagram *vd);
+void free_vdiagram(s_vdiagram *vd);
 
 
 /* BOUNDING POLYHEDRON */
@@ -95,10 +85,6 @@ s_bpoly bpoly_copy_scaled_volume(const s_bpoly *bp, double objective_volume,
                                  double EPS_DEG);
 void free_bpoly(s_bpoly *bpoly);
 
-s_points generate_poisson_dist_inside(const s_bpoly *bpoly,
-                                      double (*rmax)(double*, void*), void *rmax_params,
-                                      double (*randd01)(void*), int (*randint)(void*, int),
-                                      void *rctx, double EPS_DEG);
 double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_DEG, s_point *out);
 
 void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color);
@@ -106,19 +92,13 @@ void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, ch
 
 
 /* VORONOI DIAGRAM */
-int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size,
-                       uint8_t **out);
-int deserialize_vdiagram(const uint8_t *data, s_vdiagram *out, size_t *bytes_read);
-int write_serialized_vdiagram(const char *file, const uint8_t *data, size_t size);
-int read_serialized_vdiagram(const char *file, uint8_t **outbuf, size_t *outsize);
-
 int vdiagram_is_valid(const s_vdiagram *vd);
-void free_vdiagram(s_vdiagram *vdiagram);
 void print_vcell(const s_vcell *vcell);
 void print_vdiagram(const s_vdiagram *vdiagram);
+/* Index of the cell containing x (any piece, boundary included), or -1. */
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_DEG, double TOL);
 
-void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, const s_point ranges[2]);
+void plot_vcell(const s_vor3d_domain *domain, const s_vcell *vcell, char *f_name, const s_point ranges[2]);
 void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2], char *view_command);
 void plot_vdiagram_differentviews(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2]);
 
