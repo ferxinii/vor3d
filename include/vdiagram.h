@@ -3,6 +3,7 @@
 
 #include <float.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include "scplx.h"
 #include "convh.h"
 #include "trimesh.h"

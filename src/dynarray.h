@@ -13,6 +13,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #define DYNARRAY_INIT_NMAX 10  /* User can change this */
 
