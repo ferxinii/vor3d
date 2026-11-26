@@ -26,11 +26,11 @@
     Fold in: weighted convex (vor3d_in_bp/_convh reject weights today; vor3d_convex_clip already supports them). Keep "seed strictly inside bp" filter as a modeling choice (weights ride along with kept seeds). Decide zero-volume weighted cells: allow vs out_kept_idx=-1 (valid_volumes rejects vol<=0; clip already returns convhull_NAN/0 for dominated cells, redundant seeds already -1). Validate weighted convex vs ncvx incl. dominated seeds.
     Also: the ncvx route has no volume check (vol_max_rel_diff was ignored, now removed) -- decide whether the unified API checks volume for both.
 
-[ ] Build defaults: vor3d and geometry CMakeLists set NO optimization (example/build compiles libvor3d at -O0; only example .c files get -O3). Add lung-style default (-O3 when no CMAKE_BUILD_TYPE) + LTO (CMAKE_INTERPROCEDURAL_OPTIMIZATION). LTO measured: bit-identical results, ncvx 25-40% faster, convex 5-20%. Lung has -O3 but no LTO -> add there too. tests/bench.sh uses -O2.
+[x] Build defaults (DONE 2026-11-26): vor3d, geometry and lung CMakeLists default (no CMAKE_BUILD_TYPE) to -O3 + LTO (check_ipo_supported, falls back to -O3), asserts kept. tests/bench.sh uses it (+ -g). example_basic 5.4s -> 2.7s; lung golden_ring_prism_vmad_9 still bit-exact (full lung suite not run).
 
-[ ] Stale untracked tests (already pre-dated the weights arg): tests/bench_suite.c (used by bench.sh -> broken), tests/washer_annulus.c, tests/bench_convex.c -> update to current signatures (vor3d_in_bp(seeds, NULL, bp, vol, EPS, TOL, kept); vor3d_in_ncvx_domain(seeds, NULL, dom, EPS, TOL, rng, kept, surf, merge)). bench_convex's mirror count column is meaningless now.
+[x] Stale untracked tests (DONE 2026-11-26): bench_suite, bench_convex, washer_annulus (vor3d API), acplx_attach, rt_hull_tiling, bench_suite dt_builder_begin (rng arg), predseam_convention (s_implicit_pred_reg API), test_orient3d_dd (predicates_basic.h) all compile -Wall -Wextra clean; washer ALL PASS. Header "Build:" comments in some tests still name old lib files (libvoronoi_predicates.a etc.).
 
-[ ] Lung sync after committing geometry (lp2_* removal) + vor3d (mirror route removal, API slimming): lung/src/bt_voronoi.c:24 drop the vol_max_rel_diff and buff_scratch args; config->voronoi_vol_max_rel_diff was never enforced -> remove or implement.
+[x] Lung sync (DONE 2026-11-26, lung 0d1e7ca + 7021115: submodules bumped, buff_scratch plumbing and voronoi_vol_max_rel_diff removed).
 
 [ ] Env debug flags that CHANGE results (not just print): MEDAX_NOGRID (medax.c), SV_TAU_REL (surf_vkey.h) -> consider removing. Print/validate-only flags (ASHAPE_PROFILE, MEDAX_PROFILE, CDT_VERBOSE, CDT_DUMP_WALLS, CDT_DBG_FACE, CDT_VALIDATE, CDT_CHECK_WALK, DT_TRACE, NCVX_ALL_BOUNDARY, NCVX_TETCHECK) are fine to keep.
 

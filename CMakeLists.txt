@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
 project(vor3d LANGUAGES C CXX)
 
+# Default build (no CMAKE_BUILD_TYPE): -O3 + link-time optimization, asserts kept
+# (they are load-bearing). An explicit CMAKE_BUILD_TYPE (e.g. Debug) overrides it.
+if (NOT CMAKE_BUILD_TYPE)
+    add_compile_options(-O3)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg LANGUAGES C)
+    if (_ipo_ok)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    else()
+        message(STATUS "LTO not supported, building without it: ${_ipo_msg}")
+    endif()
+endif()
+
 if (NOT TARGET geometry)
     # Optional parts of geometry that vor3d needs:
     #  TESTS_POWER    test_orthosphere/test_orthosphere_w (dt.c, acplx.c, ashape.c)
