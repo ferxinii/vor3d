@@ -23,7 +23,6 @@ find_package(OpenMP REQUIRED)
 add_subdirectory(../ vor3d_build)
 
 add_executable(example_basic example_basic.c)
-add_executable(example_lungs example_lungs.c)
 add_executable(example_nonconvex example_nonconvex.c)
 add_executable(example_bug_coplanar example_bug_coplanar.c)
 add_executable(example_lobe example_lobe.c)
@@ -33,9 +32,6 @@ add_executable(example_merge_orphans example_merge_orphans.c)
 add_executable(example_volsph example_volsph.c)
 
 target_link_libraries(example_basic 
-        PUBLIC vor3d OpenMP::OpenMP_C
-)
-target_link_libraries(example_lungs
         PUBLIC vor3d OpenMP::OpenMP_C
 )
 target_link_libraries(example_nonconvex
@@ -61,10 +57,6 @@ target_link_libraries(example_volsph
 )
 
 target_compile_options(example_basic 
-    PRIVATE
-        -Wall -Werror -Wextra -O3
-)
-target_compile_options(example_lungs
     PRIVATE
         -Wall -Werror -Wextra -O3
 )
@@ -95,14 +87,10 @@ target_compile_options(example_volsph
 
 # ------ SETUP INPUT / OUTPUT -------
 # Create symlink for the lobes directory
-# Both example_lungs and example_lobe live in the same build dir and want the
-# same `lobes` symlink; `cmake -E create_symlink` errors if it exists and the
-# two POST_BUILD steps race under -j.  `ln -sfn` is idempotent and atomic, so
+# Several examples live in the same build dir and want the same `lobes`
+# symlink; `cmake -E create_symlink` errors if it exists and the POST_BUILD
+# steps race under -j.  `ln -sfn` is idempotent and atomic, so
 # neither the existing-link nor the race can fail the build.
-add_custom_command(TARGET example_lungs POST_BUILD
-    COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_lungs>/lobes'"
-    COMMENT "Linking lobes directory into build"
-)
 add_custom_command(TARGET example_lobe POST_BUILD
     COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_lobe>/lobes'"
     COMMENT "Linking lobes directory into build"
@@ -112,10 +100,10 @@ add_custom_command(TARGET example_medax POST_BUILD
     COMMENT "Linking lobes directory into build"
 )
 # Create empty output directories
-foreach(dir plots virtual_population)
-    add_custom_command(TARGET example_lungs POST_BUILD
+foreach(dir plots)
+    add_custom_command(TARGET example_basic POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            $<TARGET_FILE_DIR:example_lungs>/${dir}
+            $<TARGET_FILE_DIR:example_basic>/${dir}
         COMMENT "Creating empty directory: ${dir}"
     )
 endforeach()

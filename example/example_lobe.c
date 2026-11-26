@@ -55,7 +55,7 @@ static s_points random_seeds_inside(const s_trimesh *m, int N)
 
 /* Write all lobes' diagrams into ONE vtk. Cells carry two scalars:
  * lobe_id (0..N_LOBES-1) and a globally-offset cell_id (unique across lobes). */
-static void write_vtk_all(const s_ncvx_vdiagram *vds, int n_lobes, const char *path)
+static void write_vtk_all(const s_vdiagram *vds, int n_lobes, const char *path)
 {
     FILE *f = fopen(path, "w");
     if (!f) { fprintf(stderr, "Cannot open %s for writing\n", path); return; }
@@ -118,35 +118,35 @@ static void write_vtk_all(const s_ncvx_vdiagram *vds, int n_lobes, const char *p
 
 /* Build the CDT domain for one lobe (heavy part, done once).  Keeps the surface
  * for seed generation; *mesh_volume_out returns the reference volume. */
-static s_ncvx_domain build_domain(const char *obj_path, double *mesh_volume_out)
+static s_vor3d_domain build_domain(const char *obj_path, double *mesh_volume_out)
 {
     printf("\n=== %s ===\n", obj_path);
     s_trimesh mesh = trimesh_from_obj(obj_path, EPS_DEG);
     if (!trimesh_is_valid(&mesh)) {
         fprintf(stderr, "Failed to load mesh %s\n", obj_path);
-        return (s_ncvx_domain){0};
+        return (s_vor3d_domain){0};
     }
     double mesh_volume = volume_trimesh(&mesh);
     printf("  Vertices: %d   Faces: %d   Volume: %.4f\n",
            mesh.points.N, mesh.Nf, mesh_volume);
 
     clock_t t0 = clock();
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
     clock_t t1 = clock();
     free_trimesh(&mesh);
-    if (!ncvx_domain_is_valid(&domain)) {
+    if (!vor3d_domain_is_valid(&domain)) {
         fprintf(stderr, "Failed to build domain for %s\n", obj_path);
-        return (s_ncvx_domain){0};
+        return (s_vor3d_domain){0};
     }
     printf("  Domain (CDT) volume: %.4f   built in %.2f s\n",
-           domain.domain_volume, (double)(t1 - t0) / CLOCKS_PER_SEC);
+           domain.volume, (double)(t1 - t0) / CLOCKS_PER_SEC);
     *mesh_volume_out = mesh_volume;
     return domain;
 }
 
 /* Run the Voronoi diagram of n_seeds random seeds inside an already-built
  * domain.  Returns a zeroed struct on failure. */
-static s_ncvx_vdiagram run_voronoi(const s_ncvx_domain *domain, double mesh_volume,
+static s_vdiagram run_voronoi(const s_vor3d_domain *domain, double mesh_volume,
                                    int n_seeds, const char *obj_path)
 {
     clock_t tsg0 = clock();
@@ -154,11 +154,11 @@ static s_ncvx_vdiagram run_voronoi(const s_ncvx_domain *domain, double mesh_volu
     clock_t tsg1 = clock();
     if (!seeds.p) {
         fprintf(stderr, "Failed to generate seeds for %s\n", obj_path);
-        return (s_ncvx_vdiagram){0};
+        return (s_vdiagram){0};
     }
 
     clock_t t0 = clock();
-    s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain,
+    s_vdiagram vd = vor3d_diagram(&seeds, NULL, domain,
                                               EPS_DEG, TOL, &rctx,
                                               NULL, false, false);
     clock_t t1 = clock();
@@ -167,7 +167,7 @@ static s_ncvx_vdiagram run_voronoi(const s_ncvx_domain *domain, double mesh_volu
     if (vd.seeds.N == 0) {
         fprintf(stderr, "Voronoi computation failed for %s (n_seeds=%d)\n",
                 obj_path, n_seeds);
-        return (s_ncvx_vdiagram){0};
+        return (s_vdiagram){0};
     }
 
     double vol_sum = 0.0, vol_min = 1e300, vol_max = 0.0;
@@ -191,18 +191,18 @@ int main(void)
     rctx = random_initialize((uint64_t)time(NULL));
 
     /* Build each lobe's CDT domain ONCE; the Voronoi tests below reuse it. */
-    s_ncvx_domain domains[N_LOBES];
+    s_vor3d_domain domains[N_LOBES];
     double mesh_vols[N_LOBES];
     int n_domains_ok = 0;
     for (int l = 0; l < N_LOBES; l++) {
         domains[l] = build_domain(LOBE_OBJS[l], &mesh_vols[l]);
-        if (ncvx_domain_is_valid(&domains[l])) n_domains_ok++;
+        if (vor3d_domain_is_valid(&domains[l])) n_domains_ok++;
     }
     if (n_domains_ok != N_LOBES) {
         fprintf(stderr, "\n%d / %d domains FAILED to build\n",
                 N_LOBES - n_domains_ok, N_LOBES);
         for (int l = 0; l < N_LOBES; l++)
-            if (ncvx_domain_is_valid(&domains[l])) free_ncvx_domain(&domains[l]);
+            if (vor3d_domain_is_valid(&domains[l])) free_vor3d_domain(&domains[l]);
         return 1;
     }
 
@@ -218,7 +218,7 @@ int main(void)
                tests[t].label, tests[t].n_seeds, tests[t].n_seeds * N_LOBES);
         printf("########################################################\n");
 
-        s_ncvx_vdiagram vds[N_LOBES];
+        s_vdiagram vds[N_LOBES];
         int failed = 0;
         for (int l = 0; l < N_LOBES; l++) {
             printf("--- %s ---\n", LOBE_OBJS[l]);
@@ -236,7 +236,7 @@ int main(void)
         }
 
         for (int l = 0; l < N_LOBES; l++)
-            if (vds[l].seeds.N > 0) free_ncvx_vdiagram(&vds[l]);
+            if (vds[l].seeds.N > 0) free_vdiagram(&vds[l]);
 
         if (failed) {
             fprintf(stderr, "%s: %d / %d lobes FAILED\n",
@@ -247,7 +247,7 @@ int main(void)
         }
     }
 
-    for (int l = 0; l < N_LOBES; l++) free_ncvx_domain(&domains[l]);
+    for (int l = 0; l < N_LOBES; l++) free_vor3d_domain(&domains[l]);
 
     if (total_failed) {
         fprintf(stderr, "\nSOME TESTS FAILED\n");

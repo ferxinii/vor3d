@@ -32,7 +32,10 @@ cmake --build build
 ```
 Then you may run from *example/build/* the *.example* executable.
 
-The most high-level interface is in *voronoi.h*. One can pass either an array of seeds or generate them inside of the Bounding Polyhedron using the method of *Poisson disc sampling* with a user specified sizing function (local minimum distance between points). The output is the corresponding Voronoi diagram structure (*vd_3d.h*). 
+The high-level interface is in *include/vor3d.h*. Build a domain once (`vor3d_domain_from_trimesh`, `vor3d_domain_from_convh` or `vor3d_domain_from_points`), then call `vor3d_diagram` with an array of seeds (and optional weights for a power/Laguerre diagram). The library detects whether the domain is convex and picks the clip kernel itself: convex domains use a fast direct clip, non-convex ones a constrained tetrahedralization of the interior. The output is the diagram structure in *include/vdiagram.h*. Seeds are not filtered by position; use `vor3d_domain_contains` to keep only interior seeds.
+
+## Known limitations
+- **Misaligned `double` accesses in the vendored implicit predicates** (`external/geometry/external/implicit_predicates`, Attene's indirect predicates). Its expansion memory pool (`memPool.h`, `MultiPool`) prefixes every block with a 4-byte header and returns the address after it, so `double` arrays taken from the pool start 4 bytes off an 8-byte boundary. This only happens on the slow exact fallback (near-degenerate inputs whose expansions outgrow 32 doubles). Results are unaffected and Apple Silicon / x86-64 handle unaligned `double` loads and stores in hardware, but it is undefined behaviour in C/C++: UBSan reports it (`numerics.hpp`, `expansionObject::Sub_product`), so sanitizer runs need `-fno-sanitize=alignment`, and it could fault on a strict-alignment platform. Fix if ever needed: an 8-byte block header in `memPool.h`.
 
 ### References
 Source for the Delaunay algorithm: *Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. Hugo Ledoux.*

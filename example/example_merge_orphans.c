@@ -1,7 +1,7 @@
 /* Validation harness for the orphan-merge post-pass (MERGING_ORPHANS.md).
  *
  * For each fixture (a small closed trimesh domain + a FIXED seed set) it runs
- * vor3d_in_ncvx_domain twice -- merge_orphans=false (raw per-cell components)
+ * vor3d_diagram twice -- merge_orphans=false (raw per-cell components)
  * and merge_orphans=true -- and asserts:
  *   - Volume conservation: sum of per-cell volumes == domain tet-sum volume.
  *   - Single component: with merge on, every non-empty seed has N_surface == 1.
@@ -133,24 +133,24 @@ static int surface_has_boundary_edge(const s_trimesh *m)
 }
 
 /* Count seeds whose cell reports > 1 surface component. */
-static int count_multi_surface(const s_ncvx_vdiagram *vd)
+static int count_multi_surface(const s_vdiagram *vd)
 {
     int c = 0;
     for (int i = 0; i < vd->seeds.N; i++) if (vd->vcells[i].N_surface > 1) c++;
     return c;
 }
 
-static double total_volume(const s_ncvx_vdiagram *vd)
+static double total_volume(const s_vdiagram *vd)
 {
     double s = 0;
     for (int i = 0; i < vd->seeds.N; i++) s += vd->vcells[i].volume;
     return s;
 }
 
-static s_ncvx_vdiagram run(const s_ncvx_domain *domain, const s_points *seeds,
+static s_vdiagram run(const s_vor3d_domain *domain, const s_points *seeds,
                            int want_surface, int merge_orphans)
 {
-    return vor3d_in_ncvx_domain(seeds, NULL, domain, EPS_DEG, TOL,
+    return vor3d_diagram(seeds, NULL, domain, EPS_DEG, TOL,
                                 NULL, NULL,
                                 want_surface != 0, merge_orphans != 0);
 }
@@ -167,24 +167,24 @@ static int test_fixture(const char *name, s_trimesh mesh,
         return 1;
     }
 
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
-    if (!ncvx_domain_is_valid(&domain)) {
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
+    if (!vor3d_domain_is_valid(&domain)) {
         printf("  [FAIL] domain construction\n");
-        free_trimesh(&mesh); free_ncvx_domain(&domain);
+        free_trimesh(&mesh); free_vor3d_domain(&domain);
         return 1;
     }
-    double domvol = domain.domain_volume;
+    double domvol = domain.volume;
     s_points seeds = { .N = N_seeds, .p = (s_point *)seed_pts };
 
     /* Raw (no merge) */
-    s_ncvx_vdiagram raw = run(&domain, &seeds, 1, 0);
+    s_vdiagram raw = run(&domain, &seeds, 1, 0);
     int raw_multi = count_multi_surface(&raw);
     double raw_vol = total_volume(&raw);
     printf("  raw:    multi-surface seeds = %d, volume = %.6f (domain %.6f)\n",
            raw_multi, raw_vol, domvol);
 
     /* Merged */
-    s_ncvx_vdiagram mg = run(&domain, &seeds, 1, 1);
+    s_vdiagram mg = run(&domain, &seeds, 1, 1);
     int mg_multi = count_multi_surface(&mg);
     double mg_vol = total_volume(&mg);
     printf("  merged: multi-surface seeds = %d, volume = %.6f\n", mg_multi, mg_vol);
@@ -223,7 +223,7 @@ static int test_fixture(const char *name, s_trimesh mesh,
     }
 
     /* Determinism: a second merged run must match volume + N_surface per seed. */
-    s_ncvx_vdiagram mg2 = run(&domain, &seeds, 1, 1);
+    s_vdiagram mg2 = run(&domain, &seeds, 1, 1);
     for (int i = 0; i < mg.seeds.N; i++) {
         if (mg.vcells[i].N_surface != mg2.vcells[i].N_surface ||
             fabs(mg.vcells[i].volume - mg2.vcells[i].volume) > 1e-12) {
@@ -232,10 +232,10 @@ static int test_fixture(const char *name, s_trimesh mesh,
     }
 
     if (!fail) printf("  [PASS] %s\n", name);
-    free_ncvx_vdiagram(&raw);
-    free_ncvx_vdiagram(&mg);
-    free_ncvx_vdiagram(&mg2);
-    free_ncvx_domain(&domain);
+    free_vdiagram(&raw);
+    free_vdiagram(&mg);
+    free_vdiagram(&mg2);
+    free_vor3d_domain(&domain);
     free_trimesh(&mesh);
     return fail;
 }
@@ -245,8 +245,8 @@ static int test_fixture(const char *name, s_trimesh mesh,
 static void search_orphans(const char *name, s_trimesh mesh, int N_seeds, int tries)
 {
     s_random_context rc = random_initialize(12345);
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
-    if (!ncvx_domain_is_valid(&domain)) { printf("search %s: bad domain\n", name); return; }
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
+    if (!vor3d_domain_is_valid(&domain)) { printf("search %s: bad domain\n", name); return; }
     s_point mn, mx; bounding_box_points(&mesh.points, &mn, &mx);
     printf("--- search %s (%d seeds, %d tries) ---\n", name, N_seeds, tries);
     for (int t = 0; t < tries; t++) {
@@ -259,21 +259,21 @@ static void search_orphans(const char *name, s_trimesh mesh, int N_seeds, int tr
             if (point_in_trimesh(&mesh, p, EPS_DEG, 20) == 1) pts[got++] = p;
         }
         s_points seeds = { .N = N_seeds, .p = pts };
-        s_ncvx_vdiagram raw = run(&domain, &seeds, 1, 0);
+        s_vdiagram raw = run(&domain, &seeds, 1, 0);
         int multi = count_multi_surface(&raw);
         if (multi > 0) {
             printf("  FOUND orphan (try %d, %d multi-surface seeds):\n", t, multi);
             for (int i = 0; i < N_seeds; i++)
                 printf("    {{{%.4f,%.4f,%.4f}}},  // seed %d N_surface=%d\n",
                        pts[i].x, pts[i].y, pts[i].z, i, raw.vcells[i].N_surface);
-            free_ncvx_vdiagram(&raw); free(pts);
-            free_ncvx_domain(&domain); free_trimesh(&mesh);
+            free_vdiagram(&raw); free(pts);
+            free_vor3d_domain(&domain); free_trimesh(&mesh);
             return;
         }
-        free_ncvx_vdiagram(&raw); free(pts);
+        free_vdiagram(&raw); free(pts);
     }
     printf("  no orphan found in %d tries\n", tries);
-    free_ncvx_domain(&domain); free_trimesh(&mesh);
+    free_vor3d_domain(&domain); free_trimesh(&mesh);
 }
 
 /* Randomized stress: run merge_orphans=1 over many random seed sets and assert
@@ -283,9 +283,9 @@ static void search_orphans(const char *name, s_trimesh mesh, int N_seeds, int tr
 static int stress(const char *name, s_trimesh mesh, int N_seeds, int trials)
 {
     s_random_context rc = random_initialize(999);
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
-    if (!ncvx_domain_is_valid(&domain)) { printf("stress %s: bad domain\n", name); return 1; }
-    double domvol = domain.domain_volume;
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
+    if (!vor3d_domain_is_valid(&domain)) { printf("stress %s: bad domain\n", name); return 1; }
+    double domvol = domain.volume;
     s_point mn, mx; bounding_box_points(&mesh.points, &mn, &mx);
     int fails = 0, orphan_trials = 0, pinch_trials = 0;
     for (int t = 0; t < trials; t++) {
@@ -298,11 +298,11 @@ static int stress(const char *name, s_trimesh mesh, int N_seeds, int trials)
             if (point_in_trimesh(&mesh, p, EPS_DEG, 20) == 1) pts[got++] = p;
         }
         s_points seeds = { .N = N_seeds, .p = pts };
-        s_ncvx_vdiagram raw = run(&domain, &seeds, 1, 0);
+        s_vdiagram raw = run(&domain, &seeds, 1, 0);
         if (count_multi_surface(&raw) > 0) orphan_trials++;
-        free_ncvx_vdiagram(&raw);
+        free_vdiagram(&raw);
 
-        s_ncvx_vdiagram mg = run(&domain, &seeds, 1, 1);
+        s_vdiagram mg = run(&domain, &seeds, 1, 1);
         /* Hard invariants (a real bug if violated): volume conservation and a
          * watertight, valid surface for every component. N_surface>1 for a
          * (verified spatially-connected) region is an inherent pinch, not a
@@ -329,12 +329,12 @@ static int stress(const char *name, s_trimesh mesh, int N_seeds, int trials)
                        pts[i].x, pts[i].y, pts[i].z,
                        mg.vcells[i].N_pieces, mg.vcells[i].N_surface, mg.vcells[i].volume);
         }
-        free_ncvx_vdiagram(&mg); free(pts);
+        free_vdiagram(&mg); free(pts);
     }
     printf("  stress %s (%d seeds x %d trials): %d hard fails, %d/%d trials had raw orphans, "
            "%d trials pinched (inherent)\n",
            name, N_seeds, trials, fails, orphan_trials, trials, pinch_trials);
-    free_ncvx_domain(&domain); free_trimesh(&mesh);
+    free_vor3d_domain(&domain); free_trimesh(&mesh);
     return fails;
 }
 

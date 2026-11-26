@@ -35,7 +35,7 @@ static double randd01(void *ctx)
 //         {{{-1,-1,-1}}}, {{{ 1,-1,-1}}}, {{{ 1, 1,-1}}}, {{{-1, 1,-1}}},
 //         {{{-1,-1, 1}}}, {{{ 1,-1, 1}}}, {{{ 1, 1, 1}}}, {{{-1, 1, 1}}},
 //     };
-//     /* 12 triangles (2 per face, outward winding — trimesh_from_arrays will correct if needed) */
+//     /* 12 triangles (2 per face, outward winding -- trimesh_from_arrays will correct if needed) */
 //     static const int faces[12*3] = {
 //         0,1,2, 0,2,3,   /* -z */
 //         4,6,5, 4,7,6,   /* +z */
@@ -209,10 +209,10 @@ static void check_point_in_trimesh(const char *name, const s_trimesh *m,
     else printf("  [OK] %s point_in_trimesh\n", name);
 }
 
-static void write_ncvx_vdiagram_vtk(const s_ncvx_vdiagram *vd, const char *path)
+static void write_vdiagram_vtk(const s_vdiagram *vd, const char *path)
 {
     FILE *f = fopen(path, "w");
-    if (!f) { fprintf(stderr, "write_ncvx_vdiagram_vtk: cannot open %s\n", path); return; }
+    if (!f) { fprintf(stderr, "write_vdiagram_vtk: cannot open %s\n", path); return; }
 
     int total_tris = 0;
     for (int i = 0; i < vd->seeds.N; i++)
@@ -257,13 +257,13 @@ static void write_ncvx_vdiagram_vtk(const s_ncvx_vdiagram *vd, const char *path)
 }
 
 
-static void check_domain_volume(const char *name, const s_ncvx_domain *domain,
+static void check_domain_volume(const char *name, const s_vor3d_domain *domain,
                                  double analytical_vol, int *fail, int *total)
 {
     (*total)++;
-    double rel_err = fabs(domain->domain_volume - analytical_vol) / analytical_vol;
+    double rel_err = fabs(domain->volume - analytical_vol) / analytical_vol;
     printf("  %s domain volume: analytical=%.4f tet_sum=%.4f rel_err=%.2e\n",
-           name, analytical_vol, domain->domain_volume, rel_err);
+           name, analytical_vol, domain->volume, rel_err);
     /* 1% tolerance: interior tet mesh only approximates the domain volume */
     if (rel_err > 0.01) {
         printf("  [FAIL] %s: domain volume rel_err=%.2e > 1%%\n", name, rel_err);
@@ -273,7 +273,7 @@ static void check_domain_volume(const char *name, const s_ncvx_domain *domain,
     }
 }
 
-static void check_ncvx_vdiagram(const char *name, const s_ncvx_vdiagram *vd,
+static void check_vdiagram(const char *name, const s_vdiagram *vd,
                                   double analytical_vol, int *fail, int *total)
 {
     (*total)++;
@@ -320,7 +320,7 @@ static s_points random_seeds_inside(const s_trimesh *m, int N)
 }
 
 static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
-                               const s_ncvx_domain *domain, double analytical_vol,
+                               const s_vor3d_domain *domain, double analytical_vol,
                                int *fail, int *total)
 {
     int local_fail = 0;
@@ -328,7 +328,7 @@ static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
         s_points seeds = random_seeds_inside(&domain->surface, N_seeds);
         if (!seeds.p) { local_fail++; continue; }
 
-        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain,
+        s_vdiagram vd = vor3d_diagram(&seeds, NULL, domain,
                                                    EPS_DEG, TOL, &rctx,
                                                    NULL, false, false);
         free_points(&seeds);
@@ -343,7 +343,7 @@ static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
         printf("  iter %2d: sum=%.6f rel_err=%.2e %s\n",
                ii, sum, rel_err, failed ? "[FAIL]" : "[OK]");
 
-        free_ncvx_vdiagram(&vd);
+        free_vdiagram(&vd);
     }
     printf("  %s stress (%d seeds): FAILED %d / %d\n",
            name, N_seeds, local_fail, iterations);
@@ -373,11 +373,11 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
                             fail, total);
 
     /* 3. Domain preparation */
-    s_ncvx_domain domain = ncvx_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
-    fprintf(stderr, "DEBUG: ncvx_domain_from_trimesh returned, valid=%d\n",
-            ncvx_domain_is_valid(&domain));
-    if (!ncvx_domain_is_valid(&domain)) {
-        printf("  [FAIL] %s: ncvx_domain_from_trimesh returned invalid domain\n", name);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
+    fprintf(stderr, "DEBUG: vor3d_domain_from_trimesh returned, valid=%d\n",
+            vor3d_domain_is_valid(&domain));
+    if (!vor3d_domain_is_valid(&domain)) {
+        printf("  [FAIL] %s: vor3d_domain_from_trimesh returned invalid domain\n", name);
         (*fail)++; (*total)++;
         free_trimesh(&mesh);
         return;
@@ -387,7 +387,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
     /* 4. Single Voronoi run */
     {
         s_points seeds = random_seeds_inside(&mesh, 8);
-        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, &domain,
+        s_vdiagram vd = vor3d_diagram(&seeds, NULL, &domain,
                                                EPS_DEG, TOL, &rctx,
                                                NULL, false, false);
         free_points(&seeds);
@@ -395,19 +395,19 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
             printf("  [FAIL] %s: single Voronoi run returned empty diagram\n", name);
             (*fail)++; (*total)++;
         } else {
-            check_ncvx_vdiagram(name, &vd, domain.domain_volume, fail, total);
+            check_vdiagram(name, &vd, domain.volume, fail, total);
             char vtk_path[256];
             snprintf(vtk_path, sizeof(vtk_path), "./%s_voronoi.vtk", name);
-            write_ncvx_vdiagram_vtk(&vd, vtk_path);
+            write_vdiagram_vtk(&vd, vtk_path);
         }
-        free_ncvx_vdiagram(&vd);
+        free_vdiagram(&vd);
     }
 
     /* 5. Stress iteration */
     iterate_nonconvex(name, stress_iters, stress_seeds, &domain,
-                      domain.domain_volume, fail, total);
+                      domain.volume, fail, total);
 
-    free_ncvx_domain(&domain);
+    free_vor3d_domain(&domain);
     free_trimesh(&mesh);
 }
 
@@ -416,7 +416,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
  * Degenerate seed checks
  * ----------------------------------------------------------------------- */
 
-// static void test_degenerate(const s_ncvx_domain *domain, double domain_vol,
+// static void test_degenerate(const s_vor3d_domain *domain, double domain_vol,
 //                              int *fail, int *total)
 // {
 //     printf("\n=== Degenerate seed configurations ===\n");
@@ -429,7 +429,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
 //         s_point pts[2] = {edge_seed, other};
 //         s_points seeds = { .N = 2, .p = pts };
 //         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
-//         s_ncvx_vdiagram vd = vor3d_nonconvex(&seeds, domain, VOL_REL_DIFF,
+//         s_vdiagram vd = vor3d_nonconvex(&seeds, domain, VOL_REL_DIFF,
 //                                                EPS_DEG, TOL, &rctx,
 //                                                &buff, NULL);
 //         dynarray_free(&buff);
@@ -446,7 +446,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
 //             if (rel > VOL_REL_DIFF)
 //                 { printf("  [FAIL] degenerate: volume rel_err=%.2e\n", rel); ok=0; }
 //         }
-//         free_ncvx_vdiagram(&vd);
+//         free_vdiagram(&vd);
 //         if (!ok) (*fail)++;
 //         else printf("  [OK] seed on concave edge\n");
 //     }
@@ -463,7 +463,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
 //         pts[3] = (s_point){{{0.25, 0.25, 0.5}}};
 //         s_points seeds = { .N = 4, .p = pts };
 //         s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
-//         s_ncvx_vdiagram vd = vor3d_nonconvex(&seeds, domain, VOL_REL_DIFF,
+//         s_vdiagram vd = vor3d_nonconvex(&seeds, domain, VOL_REL_DIFF,
 //                                                EPS_DEG, TOL, &rctx,
 //                                                &buff, NULL);
 //         dynarray_free(&buff);
@@ -476,7 +476,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
 //             if (rel > VOL_REL_DIFF)
 //                 { printf("  [FAIL] symmetric: volume rel_err=%.2e\n", rel); ok=0; }
 //         }
-//         free_ncvx_vdiagram(&vd);
+//         free_vdiagram(&vd);
 //         if (!ok) (*fail)++;
 //         else printf("  [OK] symmetric seeds\n");
 //     }
@@ -519,10 +519,10 @@ int main(void)
 
         /* Degenerate checks use a fresh L-shape domain */
         // s_trimesh lmesh2 = make_lshape();
-        // s_ncvx_domain ldom = ncvx_domain_from_trimesh(&lmesh2, EPS_DEG, TOL);
-        // if (ncvx_domain_is_valid(&ldom))
-        //     test_degenerate(&ldom, ldom.domain_volume, &fail, &total);
-        // free_ncvx_domain(&ldom);
+        // s_vor3d_domain ldom = vor3d_domain_from_trimesh(&lmesh2, EPS_DEG, TOL);
+        // if (vor3d_domain_is_valid(&ldom))
+        //     test_degenerate(&ldom, ldom.volume, &fail, &total);
+        // free_vor3d_domain(&ldom);
         // free_trimesh(&lmesh2);
     }
 

@@ -1,9 +1,9 @@
 /* Reproducer for the coplanar-input DT crash documented in ERROR.md.
  *
  * Trigger: 8 cube-corner mesh vertices (all on z=0 or z=1 planes) followed
- * by a 5×5×5 interior grid of 125 points, fed together to construct_dt_3d.
+ * by a 5x5x5 interior grid of 125 points, fed together to construct_dt_3d.
  * Expected: crash / assertion failure at point_id=12 (first interior point
- * inserted after all 8 coplanar corners occupy indices 4–11). */
+ * inserted after all 8 coplanar corners occupy indices 4-11). */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +19,7 @@ static void write_vdiagram_vtk(const s_vdiagram *vd, const char *path)
 
     int total_tris = 0;
     for (int i = 0; i < vd->seeds.N; i++)
-        total_tris += vd->vcells[i].pieces[0].Nf;
+        if (vd->vcells[i].N_pieces > 0) total_tris += vd->vcells[i].pieces[0].Nf;
 
     fprintf(f, "# vtk DataFile Version 2.0\n");
     fprintf(f, "Voronoi diagram\n");
@@ -28,6 +28,7 @@ static void write_vdiagram_vtk(const s_vdiagram *vd, const char *path)
 
     fprintf(f, "POINTS %d float\n", total_tris * 3);
     for (int i = 0; i < vd->seeds.N; i++) {
+        if (vd->vcells[i].N_pieces == 0) continue;   /* empty cell */
         const s_convh *ch = &vd->vcells[i].pieces[0];
         for (int fi = 0; fi < ch->Nf; fi++)
             for (int v = 0; v < 3; v++)
@@ -49,7 +50,7 @@ static void write_vdiagram_vtk(const s_vdiagram *vd, const char *path)
     fprintf(f, "SCALARS cell_id int 1\n");
     fprintf(f, "LOOKUP_TABLE default\n");
     for (int i = 0; i < vd->seeds.N; i++)
-        for (int fi = 0; fi < vd->vcells[i].pieces[0].Nf; fi++)
+        for (int fi = 0; vd->vcells[i].N_pieces > 0 && fi < vd->vcells[i].pieces[0].Nf; fi++)
             fprintf(f, "%d\n", i);
 
     fclose(f);
@@ -89,7 +90,7 @@ static void write_bpoly_vtk(const s_bpoly *bp, const char *path)
 
 int main(void)
 {
-    /* 8 cube corners — 4 on z=0, 4 on z=1 (two perfectly coplanar layers) */
+    /* 8 cube corners -- 4 on z=0, 4 on z=1 (two perfectly coplanar layers) */
     s_point mesh_verts[8] = {
         {{{0.0, 0.0, 0.0}}},
         {{{1.0, 0.0, 0.0}}},
@@ -101,7 +102,7 @@ int main(void)
         {{{1.0, 1.0, 1.0}}},
     };
 
-    /* 5×5×5 = 125 interior grid points, away from the faces */
+    /* 5x5x5 = 125 interior grid points, away from the faces */
     const int G = 5;
     s_point grid[125];
     int idx = 0;
@@ -112,7 +113,7 @@ int main(void)
                                           iy / (double)(G + 1),
                                           iz / (double)(G + 1)}}};
 
-    /* Combine: mesh vertices first (will become DT point-ids 4–11),
+    /* Combine: mesh vertices first (will become DT point-ids 4-11),
      * interior grid second (first at point-id 12). */
     const int N = 8 + 125;
     s_point *pts = malloc((size_t)N * sizeof(s_point));
@@ -134,34 +135,36 @@ int main(void)
         return 1;
     }
 
-    printf("construct_dt_3d succeeded — %d tetrahedra.\n", dt.N_ncells);
+    printf("construct_dt_3d succeeded -- %d tetrahedra.\n", dt.N_ncells);
 
-    s_bpoly bp = bpoly_from_points(&points, 1e-12);
-    write_bpoly_vtk(&bp, "bpoly.vtk");
-    s_vdiagram vd = vor3d_in_bp(&points, NULL, &bp, 1e-3, 1e-12, 1e-12, NULL);
+    s_vor3d_domain dom = vor3d_domain_from_points(&points, 1e-12);
+    write_bpoly_vtk(&dom.bpoly, "bpoly.vtk");
+    /* All points are seeds (no position filter): hull vertices included. */
+    s_vdiagram vd = vor3d_diagram(&points, NULL, &dom, 1e-12, 1e-12, NULL, NULL,
+                                  false, false);
 
     if (!vdiagram_is_valid(&vd)) {
-        fputs("vor3d_in_bp returned an invalid diagram.\n", stderr);
+        fputs("vor3d_diagram returned an invalid diagram.\n", stderr);
         free_vdiagram(&vd);
-        free_bpoly(&bp);
+        free_vor3d_domain(&dom);
         free_complex(&dt);
         free(pts);
         return 1;
     }
 
-    printf("vor3d_in_bp succeeded — %d Voronoi cells.\n", vd.seeds.N);
+    printf("vor3d_diagram succeeded - %d Voronoi cells.\n", vd.seeds.N);
 
     double sum_vol = 0.0;
     for (int i = 0; i < vd.seeds.N; i++)
         sum_vol += vd.vcells[i].volume;
-    double bp_vol = vd.bpoly.volume;
+    double bp_vol = vd.domain_volume;
     printf("BP volume: %.10f\nSum of vcell volumes: %.10f\nRelative error: %.6e\n",
            bp_vol, sum_vol, (bp_vol - sum_vol) / bp_vol);
 
     write_vdiagram_vtk(&vd, "voronoi_coplanar.vtk");
 
     free_vdiagram(&vd);
-    free_bpoly(&bp);
+    free_vor3d_domain(&dom);
     free_complex(&dt);
     free(pts);
     return 0;
