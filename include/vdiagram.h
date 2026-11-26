@@ -46,7 +46,7 @@ typedef struct ncvx_domain {
     s_trimesh   surface;        /* boundary mesh (owns memory) */
     s_scplx     cdt;            /* CDT of the interior (interior tets; owns memory) */
     double      domain_volume;  /* sum of interior tet volumes */
-    s_bpoly     bpoly;          /* convex hull of surface.points; used for mirroring */
+    s_bpoly     bpoly;          /* convex hull of surface.points (AABB for the far-aux DT box) */
     void       *spatial_index;  /* NULL in MVP */
 } s_ncvx_domain;
 
@@ -67,7 +67,7 @@ typedef struct ncvx_vdiagram {
 
 /*
  * Build a domain from a trimesh.
- * Tetrahedralizes the interior and computes the convex hull for mirroring.
+ * Tetrahedralizes the interior and computes its convex hull (bpoly).
  * keep_exterior=0 stores only interior tets (lean); keep_exterior=1 stores the
  * full convex-hull complex (interior + exterior pockets flagged via
  * nc->interior). The Voronoi builder treats both identically; keep_exterior=1
@@ -117,9 +117,6 @@ void free_vdiagram(s_vdiagram *vdiagram);
 void print_vcell(const s_vcell *vcell);
 void print_vdiagram(const s_vdiagram *vdiagram);
 int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_DEG, double TOL);
-
-s_vdiagram voronoi_from_delaunay_3d(const s_scplx *setup, const s_bpoly *bpoly, int Nreal,
-                                    double EPS_DEG, double TOL);
 
 void plot_vcell(const s_vdiagram *vdiag, const s_vcell *vcell, char *f_name, const s_point ranges[2]);
 void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2], char *view_command);

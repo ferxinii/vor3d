@@ -20,12 +20,12 @@ bool is_delaunay_3d(const s_scplx *scplx, e_delaunay_test_type type);
 
 /* Build a 3D Delaunay triangulation from points (copy stored in the returned s_scplx).
  * out_Nreal: pass non-NULL only when the first *out_Nreal entries of points are "real"
- *   seeds and the rest are mirror images.  On input *out_Nreal is that count; on return
+ *   seeds and the rest are auxiliary points.  On input *out_Nreal is that count; on return
  *   it holds how many of those real seeds survived deduplication and compaction inside
  *   the DT -- which may be less than the original value when seeds lie closer than
- *   TOL_duplicates to each other.  The caller must use this updated value as Nreal when
- *   calling voronoi_from_delaunay_3d, because the compacted dt->points array packs
- *   surviving real seeds first; if any were dropped, mirrored seeds slide into positions
+ *   TOL_duplicates to each other.  The caller must use this updated value as the real-seed
+ *   count, because the compacted dt->points array packs
+ *   surviving real seeds first; if any were dropped, auxiliary points slide into positions
  *   < original_Nreal and would be mistaken for real seeds.  Pass NULL to ignore. */
 s_scplx construct_dt_3d(const s_points *points, const double *weights,
                         bool keep_big_tetra, double TOL_duplicates, int *out_Nreal,
@@ -34,11 +34,11 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
 
 
 
-/* Incremental DT builder - allows inserting mirror points into an existing DT
+/* Incremental DT builder - allows inserting extra points into an existing DT
  * without rebuilding from scratch.  Typical use:
  *   s_dt_builder b = dt_builder_begin(seeds, NULL, TOL);
- *   // ... inspect b.dt for neighbor info, compute mirrors ...
- *   dt_builder_extend(&b, mirrors, TOL);
+ *   // ... inspect b.dt for neighbor info, compute extra points ...
+ *   dt_builder_extend(&b, extra, TOL);
  *   s_scplx dt = dt_builder_end(&b, false, &Nreal, NULL, 0);
  * The big-tetrahedron sentinels remain at indices [0..3] until dt_builder_end. */
 typedef struct {
@@ -56,7 +56,7 @@ typedef struct {
 /* Phase 1: build DT of seeds, keep big tetra in place.
  * Returns zero-initialised s_dt_builder (._stack == NULL) on error. */
 /* bb_min_hint / bb_max_hint: optional AABB hint (e.g. bounding-polytope AABB) that
- * expands the big-tetrahedron to safely contain future mirror points even when few
+ * expands the big-tetrahedron to safely contain future extra points even when few
  * seeds are provided.  Pass NULL for both to use the seed bounding box only. */
 /* rng: caller-owned PRNG that breaks point-location walk ties during construction
  * (stored on the returned complex; propagates through dt_builder_end). Pass NULL for
@@ -98,7 +98,7 @@ s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           s_random_context *rng,
                                           s_implicit_pred_reg *reg);
 
-/* Phase 2: insert additional points (e.g. mirrors) into the existing DT.
+/* Phase 2: insert additional points into the existing DT.
  * Returns false on error. */
 bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_dup);
 
@@ -112,8 +112,8 @@ bool dt_builder_extend_lnc(s_dt_builder *b, int v1, int v2, double s, double TOL
  * If kept_idx != NULL, it is composed in place over its first N_kept_idx
  * entries: any entry already holding a valid index into the pre-compaction
  * "seeds passed to dt_builder_begin" range is rewritten to that seed's index
- * in the compacted s_scplx.points (and hence, via voronoi_from_delaunay_3d,
- * in the resulting s_vdiagram's seeds/vcells); entries already < 0 are left
+ * in the compacted s_scplx.points (and hence in the resulting s_vdiagram's
+ * seeds/vcells); entries already < 0 are left
  * untouched. Lets a caller-built index array (e.g. one produced by an
  * earlier filtering stage) be updated to the final mapping with no extra
  * allocation -- this reuses the remap table dt_builder_end already builds

@@ -328,11 +328,9 @@ static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
         s_points seeds = random_seeds_inside(&domain->surface, N_seeds);
         if (!seeds.p) { local_fail++; continue; }
 
-        s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
-        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain, VOL_REL_DIFF,
+        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain,
                                                    EPS_DEG, TOL, &rctx,
-                                                   &buff, NULL, false, false);
-        dynarray_free(&buff);
+                                                   NULL, false, false);
         free_points(&seeds);
 
         if (vd.seeds.N == 0) { local_fail++; printf("  iter %d: EMPTY\n", ii); continue; }
@@ -389,11 +387,9 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
     /* 4. Single Voronoi run */
     {
         s_points seeds = random_seeds_inside(&mesh, 8);
-        s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
-        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, &domain, VOL_REL_DIFF,
+        s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, &domain,
                                                EPS_DEG, TOL, &rctx,
-                                               &buff, NULL, false, false);
-        dynarray_free(&buff);
+                                               NULL, false, false);
         free_points(&seeds);
         if (vd.seeds.N == 0) {
             printf("  [FAIL] %s: single Voronoi run returned empty diagram\n", name);

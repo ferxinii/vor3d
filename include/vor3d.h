@@ -14,10 +14,9 @@
 //
 // weights (all of the below, where present): NULL = unweighted (ordinary
 // Voronoi), else a power/Laguerre (weighted) diagram -- dist^2 - weight --
-// with weights index-aligned with seeds->p[]. vor3d_in_bp/vor3d_in_bp_dt
-// reject non-NULL weights (their legacy mirror path's clip predicates are
-// unweighted and would silently ignore them); use vor3d_convex_clip directly,
-// or vor3d_in_convh, for a weighted convex build.
+// with weights index-aligned with seeds->p[]. vor3d_in_bp/vor3d_in_convh do
+// not support weights yet (non-NULL is rejected); use vor3d_convex_clip
+// directly for a weighted convex build.
 //
 // vor3d_in_bp takes a pre-built s_bpoly -- use this when calling
 // repeatedly against the same boundary (e.g. growing a tree one bifurcation
@@ -26,31 +25,18 @@
 // bpoly from convh on every call and frees it before returning.
 s_vdiagram vor3d_in_bp(const s_points *seeds, const double *weights,
                        const s_bpoly *bp, double vol_max_rel_diff,
-                       double EPS_DEG, double TOL, int (*randint)(void*, int),
-                       void *rctx, s_dynarray *buff_points, int *out_kept_idx);
-
-// Same as vor3d_in_bp, but also transfers ownership of the seed DT to *out_dt
-// (caller must free_complex() it) instead of freeing it internally. Real seeds
-// occupy DT vertex ids 0..vd.seeds.N-1, matching vd.vcells[].seed_id -- so
-// vertex_neighbors() on this DT gives the Voronoi cell adjacency (Delaunay dual).
-// Internal use by Stage C (ncvx.c); not needed by ordinary callers.
-s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const double *weights,
-                          const s_bpoly *bp, double vol_max_rel_diff,
-                          double EPS_DEG, double TOL, int (*randint)(void*, int),
-                          void *rctx, s_dynarray *buff_points, int *out_kept_idx,
-                          s_scplx *out_dt);
+                       double EPS_DEG, double TOL, int *out_kept_idx);
 
 s_vdiagram vor3d_in_convh(const s_points *seeds, const double *weights,
                            const s_convh *convh, double vol_max_rel_diff,
-                           double EPS_DEG, double TOL, int (*randint)(void*, int),
-                           void *rctx, s_dynarray *buff_points, int *out_kept_idx);
+                           double EPS_DEG, double TOL, int *out_kept_idx);
 
-// Mirror-free convex Voronoi build (IMPROVE_CONVEX.md Idea C). Builds a lean
-// seeds-only DT (no mirror points) and clips each cell against the fan
-// tetrahedralization of bp with exact LP-feasibility predicates. `seeds` must be
-// the already interior-filtered seeds; out_kept_idx (nullable, length
-// n_kept_idx) is composed in place with the DT compaction remap, as in the
-// mirror path. Used internally by vor3d_core; exposed for the A/B benchmark.
+// Convex Voronoi build (IMPROVE_CONVEX.md Idea C). Builds a lean seeds-only DT
+// and clips each cell against bp with exact LP-feasibility predicates (N-face
+// clip, fan-clip fallback). `seeds` must be the already interior-filtered
+// seeds; out_kept_idx (nullable, length n_kept_idx) is composed in place with
+// the DT compaction remap. Used internally by vor3d_in_bp / vor3d_in_bp_pds;
+// call it directly for a weighted convex build.
 s_vdiagram vor3d_convex_clip(const s_points *seeds, const double *weights,
                              const s_bpoly *bp,
                              double EPS_DEG, double TOL,
@@ -60,8 +46,7 @@ s_vdiagram vor3d_convex_clip(const s_points *seeds, const double *weights,
 s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_params,
                             const s_bpoly *bp, double vol_max_rel_diff,
                             double EPS_DEG, double TOL,
-                            int (*randint)(void*, int), double (*randd01)(void*), void *rctx,
-                            s_dynarray *buff_points);
+                            int (*randint)(void*, int), double (*randd01)(void*), void *rctx);
                             // Deep copy of bp inside
 
 
@@ -88,18 +73,16 @@ s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_par
  * order. Must outlive the call. */
 s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const double *weights,
                                  const s_ncvx_domain *domain,
-                                 double vol_max_rel_diff,
                                  double EPS_DEG, double TOL,
                                  s_random_context *rng,
-                                 s_dynarray *buff_points, int *out_kept_idx,
+                                 int *out_kept_idx,
                                  bool want_surface, bool merge_orphans);
 
 s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const double *weights,
                                   const s_trimesh *mesh,
-                                  double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
                                   s_random_context *rng,
-                                  s_dynarray *buff_points, int *out_kept_idx,
+                                  int *out_kept_idx,
                                   bool want_surface, bool merge_orphans);
 
 #endif

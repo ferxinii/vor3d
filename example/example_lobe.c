@@ -20,7 +20,6 @@ static const char *LOBE_OBJS[N_LOBES] = {
 
 static double EPS_DEG    = 1e-9;
 static double TOL        = 1e-9;
-static double VOL_REL_DIFF = 1e-2;
 
 static s_random_context rctx;
 
@@ -158,13 +157,11 @@ static s_ncvx_vdiagram run_voronoi(const s_ncvx_domain *domain, double mesh_volu
         return (s_ncvx_vdiagram){0};
     }
 
-    s_dynarray buff = dynarray_initialize(sizeof(s_point), 0);
     clock_t t0 = clock();
-    s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain, VOL_REL_DIFF,
+    s_ncvx_vdiagram vd = vor3d_in_ncvx_domain(&seeds, NULL, domain,
                                               EPS_DEG, TOL, &rctx,
-                                              &buff, NULL, false, false);
+                                              NULL, false, false);
     clock_t t1 = clock();
-    dynarray_free(&buff);
     free_points(&seeds);
 
     if (vd.seeds.N == 0) {

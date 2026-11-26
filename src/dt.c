@@ -2498,8 +2498,8 @@ s_scplx construct_dt_3d(const s_points *points, const double *weights,
         return (s_scplx){0};
     }
     /* Preserve the old behaviour: *out_Nreal on entry specifies how many of the
-     * first points->N entries are "real" seeds (the rest are mirrors added by
-     * extend_sites_mirroring).  Store that count so dt_builder_end uses it. */
+     * first points->N entries are "real" seeds (the rest are auxiliary points).
+     * Store that count so dt_builder_end uses it. */
     if (out_Nreal != NULL && *out_Nreal <= points->N)
         b._N_original = *out_Nreal;
     return dt_builder_end(&b, keep_big_tetra, out_Nreal, NULL, 0);

@@ -105,8 +105,8 @@ s_ncvx_domain ncvx_domain_from_trimesh(const s_trimesh *mesh,
  * cell i and cell j are adjacent iff {i,j} is a Delaunay edge in the seed DT,
  * i.e. they share a Voronoi face F_ij. CSR layout: cell i's neighbors are
  * neighbor[offset[i] .. offset[i+1]-1]. Real seeds occupy DT vertex ids
- * 0..N-1 (see vor3d_in_bp_dt's contract); mirror/auxiliary points (id >= N)
- * are dropped since they are not real Voronoi cells. */
+ * 0..N-1; auxiliary points (id >= N) are dropped since they are not real
+ * Voronoi cells. */
 struct ncvx_cell_adjacency {
     int N;
     int *offset;    /* size N+1 */
@@ -977,9 +977,9 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     return r;
 }
 
-/* ====================== CONVEX MIRROR-FREE ROUTE =========================
+/* ============================ CONVEX ROUTE ================================
  * IMPROVE_CONVEX.md Idea C. Builds the convex Voronoi diagram with the same
- * exact LP-feasibility clip the non-convex route uses, and NO mirror points.
+ * exact LP-feasibility clip the non-convex route uses (no mirror points).
  * The convex bounding polytope bp is fan-tetrahedralized from an interior
  * center (bp->CM -- the vertex centroid of the hull points, strictly interior
  * to a convex hull): one tet {center, f0, f1, f2} per bp triangular face.
@@ -1683,7 +1683,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
     return 1;
 }
 
-/* Fill vcells[0..N-1] for the convex bp, mirror-free. Per cell: classify
+/* Fill vcells[0..N-1] for the convex bp. Per cell: classify
  * INTERIOR (bounded, every dual circumcentre within the seed's exact clearance
  * to the bp planes) vs BOUNDARY. Interior cells hull their circumcentres
  * directly. Boundary cells take the N-face clip: pool the surface-built
@@ -1692,7 +1692,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
  * evidence), and the inside-bp duals -- then hull once. Cells without surface
  * evidence (footprint interior to a single face), cells whose N-face hull
  * fails, and all cells after an edge-walk anomaly fall back to the fan clip
- * (fan_clip_pool). VOR3D_FANCLIP=1 forces the fan path for A/B. Returns 1 on
+ * (fan_clip_pool). Returns 1 on
  * success, 0 on failure. */
 static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                           s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
@@ -1743,7 +1743,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
 
     /* ---- N-face global passes: bp-vertex owners (type 1) + edge-walk (type 2).
      * force_fan drops the whole diagram to the fan path on any walk anomaly. */
-    int force_fan = getenv("VOR3D_FANCLIP") != NULL;
+    int force_fan = 0;
     if (!force_fan) {
         if (!compute_vertex_owners(&bp->convh.points, real_seeds, seed_dt, adj, N,
                                    &owner, &tie))
@@ -2825,13 +2825,11 @@ err_early:
 
 s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const double *weights,
                                   const s_ncvx_domain *domain,
-                                  double vol_max_rel_diff,
                                   double EPS_DEG, double TOL,
                                   s_random_context *rng,
-                                  s_dynarray *buff_points, int *out_kept_idx,
+                                  int *out_kept_idx,
                                   bool want_surface, bool merge_orphans)
 {
-    (void)vol_max_rel_diff; (void)buff_points;
     if (!seeds || seeds->N <= 0 || !ncvx_domain_is_valid(domain))
         return (s_ncvx_vdiagram){0};
     /* The orphan-merge pass reads the surface accumulators, so it needs the
@@ -2945,29 +2943,27 @@ s_ncvx_vdiagram vor3d_in_ncvx_domain(const s_points *seeds, const double *weight
 
 s_ncvx_vdiagram vor3d_in_trimesh(const s_points *seeds, const double *weights,
                                    const s_trimesh *mesh,
-                                   double vol_max_rel_diff,
                                    double EPS_DEG, double TOL,
                                    s_random_context *rng,
-                                   s_dynarray *buff_points, int *out_kept_idx,
+                                   int *out_kept_idx,
                                    bool want_surface, bool merge_orphans)
 {
     s_ncvx_domain domain = ncvx_domain_from_trimesh(mesh, EPS_DEG, TOL, 0);
     if (!ncvx_domain_is_valid(&domain)) return (s_ncvx_vdiagram){0};
-    s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, weights, &domain, vol_max_rel_diff,
-                                           EPS_DEG, TOL, rng,
-                                           buff_points, out_kept_idx,
+    s_ncvx_vdiagram out = vor3d_in_ncvx_domain(seeds, weights, &domain,
+                                           EPS_DEG, TOL, rng, out_kept_idx,
                                            want_surface, merge_orphans);
     free_ncvx_domain(&domain);  /* result owns its own copy */
     return out;
 }
 
 
-/* Mirror-free convex Voronoi diagram (IMPROVE_CONVEX.md Idea C). Same seed DT +
- * far-aux setup as vor3d_in_ncvx_domain (a lean seeds-only DT: no mirrors), then
+/* Convex Voronoi diagram (IMPROVE_CONVEX.md Idea C). Same seed DT +
+ * far-aux setup as vor3d_in_ncvx_domain (a lean seeds-only DT), then
  * clip_convex_bp fills the cells against the fan tetrahedralization of bp. Drops
  * seeds that dedup away in the DT; out_kept_idx (nullable, length n_kept_idx =
  * count of the caller's pre-filter input seeds) is composed in place by
- * dt_builder_end exactly as the mirror path does. Returns a zeroed s_vdiagram on
+ * dt_builder_end. Returns a zeroed s_vdiagram on
  * failure. `seeds` are the (already geometry-filtered) interior seeds. */
 s_vdiagram vor3d_convex_clip(const s_points *seeds, const double *weights,
                              const s_bpoly *bp,

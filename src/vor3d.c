@@ -1,10 +1,8 @@
 #include "vor3d.h"
 #include "scplx.h"
-#include "delaunay.h"
 #include "vdiagram.h"
 #include "points.h"
 #include "./hlibs/dynarray.h"
-#include "lp.h"
 
 #include <stdlib.h>
 #include <assert.h>
@@ -32,77 +30,6 @@ static int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd, double max_rel
         return 0;
     }
 }
-
-
-static int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
-                                   s_scplx *dt, int N_seeds,
-                                   int (*randint)(void *rctx, int), void *rctx,
-                                   s_dynarray *out_points)
-{   /* Use DT neighbor relationships as LP constraint set instead of all seeds.
-     * LP with fewer constraints has a larger feasible region, so we may generate
-     * extra mirrors (false positives) but never miss a needed one (no false negatives).
-     *
-     * Loop order: seed-outer, face-inner -- neighbors are collected once per seed and
-     * reused across all faces, rather than recomputed for every (face, seed) pair. */
-    out_points->N = 0;
-
-    /* seeds_idx holds [vi, neighbor_0, ..., neighbor_n] for the current seed.
-     * Reused across seeds; grows automatically via dynarray. */
-    s_dynarray seeds_idx  = dynarray_initialize(sizeof(int), 32);
-    s_dynarray scratch_cells = dynarray_initialize(sizeof(s_ncell *), 64);
-    if (!seeds_idx.items || !scratch_cells.items) goto error;
-
-    for (int i = 0; i < N_seeds; i++) {
-        int vi = 4 + i;
-        if (!dt->point2tet[vi]) continue;  /* deduplicated seed */
-
-        int vi_lid = -1;
-        for (int k = 0; k < 4; k++)
-            if (dt->point2tet[vi]->vertex_id[k] == vi) { vi_lid = k; break; }
-
-        /* Build seeds_idx = [vi, neighbors...] for this seed. */
-        seeds_idx.N = 0;
-        if (!dynarray_push(&seeds_idx, &vi)) goto error;
-        if (vertex_neighbors(dt, vi, dt->point2tet[vi], vi_lid,
-                             4, &seeds_idx, &scratch_cells) < 0) goto error;
-
-        /* seeds_idx.items is now a contiguous int[] usable by lp2_should_mirror.
-         * id=0 selects vi as the seed under test; all others are constraints. */
-        int  n_total   = (int)seeds_idx.N;
-        int *idx_array = (int *)seeds_idx.items;
-
-        s_point p = dt->points.p[vi];
-
-        for (int ff = 0; ff < bp->convh.Nf; ff++) {
-            s_point face[3];
-            convh_get_face(&bp->convh, ff, face);
-            s_point n = bp->convh.fnormals[ff];
-            double n2 = dot_prod(n, n);
-            if (n2 < EPS_degenerate * EPS_degenerate) continue;
-
-            if (!lp2_vcell_hits_face(face, &dt->points, n_total, idx_array, 0, randint, rctx))
-                continue;
-
-            double f = dot_prod(n, face[0]) - dot_prod(n, p);
-            s_point p_mirror = { .x = p.x + 2*(f/n2)*n.x,
-                                 .y = p.y + 2*(f/n2)*n.y,
-                                 .z = p.z + 2*(f/n2)*n.z };
-            if (!dynarray_push(out_points, &p_mirror)) goto error;
-        }
-    }
-
-    dynarray_free(&seeds_idx);
-    dynarray_free(&scratch_cells);
-    return 1;
-
-    error:
-        dynarray_free(&seeds_idx);
-        dynarray_free(&scratch_cells);
-        fprintf(stderr, "Error in extend_sites_mirroring_dt!\n");
-        return 0;
-}
-
-
 
 
 // GENERALISED SEED HANDLING
@@ -170,121 +97,37 @@ static s_points PDS_generator(const s_bpoly *bp, seed_userdata ud, int *out_kept
 
 
 /*
- * Single attempt: builds the diagram once and reports success/failure via
- * vdiagram_is_valid on the result -- no retries, no TOL/EPS_DEG escalation.
- *
- * out_dt (nullable): if non-NULL, ownership of the finalized seed DT (the one
- * voronoi_from_delaunay_3d was built from -- real seeds at vertex ids 0..Nreal-1,
- * matching vd.vcells[].seed_id) is transferred to *out_dt instead of being freed
- * here; the caller must free_complex() it. Used by Stage C (ncvx.c) to get the
- * Delaunay dual for cell adjacency.
+ * Single attempt: builds the diagram once (vor3d_convex_clip) and checks volume conservation -- no retries, no
+ * TOL/EPS_DEG escalation. out_kept_idx: see vor3d.h.
  */
 static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
-                             f_seed_generator f_seeds, seed_userdata ud, int (*randint)(void*, int),
-                             void *rctx, s_dynarray *buff_points, int *out_kept_idx,
-                             s_scplx *out_dt)
+                             f_seed_generator f_seeds, seed_userdata ud,
+                             int *out_kept_idx)
 {
-    /* Zeroed so every early-return path below (before the DT is even built)
-     * leaves *out_dt safe to free_complex() unconditionally in the caller. */
-    if (out_dt) *out_dt = (s_scplx){0};
-
+    int n_kept_idx = out_kept_idx ? ud.generator.seeds.N : 0;
     s_points seeds = f_seeds(bp, ud, out_kept_idx);
-    int Nreal = seeds.N;
-
-    /* Mirror-free convex route (IMPROVE_CONVEX.md Idea C), the default. It never
-     * builds mirrors or the seed-DT-with-mirrors, so it cannot supply out_dt
-     * (only Stage C's mirror path does); callers that request out_dt fall back to
-     * the mirror path. Set VOR3D_MIRRORS=1 to force the legacy mirror path (A/B). */
-    if (!out_dt && seeds.N > 0 && !getenv("VOR3D_MIRRORS")) {
-        /* weights always NULL here: callers reaching vor3d_core (vor3d_in_bp/
-         * vor3d_in_bp_dt/vor3d_in_convh) reject non-NULL weights up front. */
-        s_vdiagram vd = vor3d_convex_clip(&seeds, NULL, bp, ud.EPS_DEG, ud.TOL,
-                                          out_kept_idx,
-                                          out_kept_idx ? ud.generator.seeds.N : 0);
+    if (seeds.N <= 0) {
         free_points(&seeds);
-        if (vd.seeds.N == 0) {
-            fprintf(stderr, "vor3d: mirror-free convex build failed.\n");
-            return (s_vdiagram){0};
-        }
-        if (!valid_volumes(bp, &vd, vol_max_rel_diff)) {
-            free_vdiagram(&vd);
-            return (s_vdiagram){0};
-        }
-        return vd;
-    }
-
-    /* Phase 1: build initial DT from seeds only, keeping big tetra in place.
-     * Pass bp AABB as hint so the big tetra is large enough even with 1 seed. */
-    s_dt_builder builder = dt_builder_begin(&seeds, NULL, ud.TOL, &bp->min, &bp->max, NULL);
-    if (!builder._stack) {
-        fprintf(stderr, "vor3d: error building initial DT.\n");
-        free_points(&seeds);
-        if (out_kept_idx)
-            for (int i = 0; i < ud.generator.seeds.N; i++) out_kept_idx[i] = -1;
         return (s_vdiagram){0};
     }
 
-    /* Phase 2: identify mirrors using DT-neighbor-filtered LP */
-    if (!extract_mirrored_points(bp, ud.EPS_DEG, &builder.dt, seeds.N, randint, rctx, buff_points)) {
-        fprintf(stderr, "vor3d: error extending sites.\n");
-        s_scplx tmp = dt_builder_end(&builder, false, NULL, NULL, 0);
-        free_complex(&tmp);
-        free_points(&seeds);
-        if (out_kept_idx)
-            for (int i = 0; i < ud.generator.seeds.N; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
-    }
-
-    /* Phase 3: insert mirrors into the existing DT */
-    s_points mirrors = { .N = (int)buff_points->N,
-                         .p = (s_point *)buff_points->items };
-    if (mirrors.N > 0 && !dt_builder_extend(&builder, &mirrors, ud.TOL)) {
-        fprintf(stderr, "vor3d: error extending DT with mirrors.\n");
-        s_scplx tmp = dt_builder_end(&builder, false, NULL, NULL, 0);
-        free_complex(&tmp);
-        free_points(&seeds);
-        if (out_kept_idx)
-            for (int i = 0; i < ud.generator.seeds.N; i++) out_kept_idx[i] = -1;
-        return (s_vdiagram){0};
-    }
-
-    /* Phase 4: finalize DT (remove big tetra, compact). out_kept_idx already
-     * holds, per original input seed, its index into the geometrically-
-     * filtered `seeds` array (fixed_generator's stage), or -1. dt_builder_end
-     * composes that in place into the final vd.seeds/vd.vcells index, reusing
-     * its own compaction remap table -- no extra allocation needed here. */
-    s_scplx dt = dt_builder_end(&builder, false, &Nreal, out_kept_idx,
-                                out_kept_idx ? ud.generator.seeds.N : 0);
-    s_vdiagram vd = voronoi_from_delaunay_3d(&dt, bp, Nreal, ud.EPS_DEG, ud.TOL);
-    /* Ownership transfers to *out_dt (caller frees it) regardless of whether vd
-     * below turns out valid -- simpler contract than conditioning it on success. */
-    if (out_dt) *out_dt = dt;
-    else free_complex(&dt);
+    /* weights always NULL here: vor3d_in_bp / vor3d_in_convh reject non-NULL
+     * weights up front (see vor3d_in_bp). */
+    s_vdiagram vd = vor3d_convex_clip(&seeds, NULL, bp, ud.EPS_DEG, ud.TOL,
+                                      out_kept_idx, n_kept_idx);
     free_points(&seeds);
-
     if (vd.seeds.N == 0) {
-        fprintf(stderr, "vor3d: vdiagram is invalid.\n");
+        fprintf(stderr, "vor3d: convex build failed.\n");
         if (out_kept_idx)
-            for (int i = 0; i < ud.generator.seeds.N; i++) out_kept_idx[i] = -1;
+            for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
         return (s_vdiagram){0};
     }
-
     if (!valid_volumes(bp, &vd, vol_max_rel_diff)) {
-        printf("vd.seeds.N = %d, Nreal = %d\n", vd.seeds.N, Nreal);
-        write_points_to_csv("seeds.csv", "w", &vd.seeds);
-        for (int ii = 0; ii < vd.seeds.N; ii++) {
-            char buff[256];
-            snprintf(buff, 256, "v%d.m", ii);
-            write_convhull_to_m(&vd.vcells[ii].pieces[0], buff);
-        }
-        write_convhull_to_m(&vd.bpoly.convh, "bp.m");
         free_vdiagram(&vd);
         if (out_kept_idx)
-            for (int i = 0; i < ud.generator.seeds.N; i++) out_kept_idx[i] = -1;
-        exit(1);   // STOP FOR THE MOMENT  // TODO
+            for (int i = 0; i < n_kept_idx; i++) out_kept_idx[i] = -1;
         return (s_vdiagram){0};
     }
-
     return vd;
 }
 
@@ -292,54 +135,30 @@ static s_vdiagram vor3d_core(const s_bpoly *bp, double vol_max_rel_diff,
 
 s_vdiagram vor3d_in_bp(const s_points *seeds, const double *weights,
                       const s_bpoly *bp, double vol_max_rel_diff,
-                      double EPS_DEG, double TOL, int (*randint)(void*, int),
-                      void *rctx, s_dynarray *buff_points, int *out_kept_idx)
+                      double EPS_DEG, double TOL, int *out_kept_idx)
 {
-    /* The legacy mirror path's clip predicates (mirroring.c) are unweighted;
-     * silently building a weighted seed DT here would produce a diagram whose
-     * clip ignores the weights entirely. Reject loudly instead -- callers
-     * wanting a weighted convex build use vor3d_convex_clip directly. */
+    /* Not wired through yet: fixed_generator drops non-interior seeds, so the
+     * weights would need the same filtering. Reject loudly rather than build an
+     * unweighted diagram -- weighted convex builds use vor3d_convex_clip. */
     if (weights) {
-        fprintf(stderr, "vor3d_in_bp: non-NULL weights are not supported on this "
-                        "(legacy mirror) path; use vor3d_convex_clip directly.\n");
+        fprintf(stderr, "vor3d_in_bp: non-NULL weights are not supported here; "
+                        "use vor3d_convex_clip directly.\n");
         return (s_vdiagram){0};
     }
-    seed_userdata ud = {.generator.seeds = copy_points(seeds),
-                        .EPS_DEG = EPS_DEG, .TOL = TOL};
-    return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud,
-                      randint, rctx, buff_points, out_kept_idx, NULL);
-}
-
-
-/* Same as vor3d_in_bp, but also hands back the seed DT ownership in *out_dt
- * (caller must free_complex() it) instead of freeing it internally. Used by
- * Stage C (ncvx.c) to get the Delaunay dual for cell adjacency. */
-s_vdiagram vor3d_in_bp_dt(const s_points *seeds, const double *weights,
-                          const s_bpoly *bp, double vol_max_rel_diff,
-                          double EPS_DEG, double TOL, int (*randint)(void*, int),
-                          void *rctx, s_dynarray *buff_points, int *out_kept_idx,
-                          s_scplx *out_dt)
-{
-    if (weights) {  /* see vor3d_in_bp */
-        fprintf(stderr, "vor3d_in_bp_dt: non-NULL weights are not supported on this "
-                        "(legacy mirror) path; use vor3d_convex_clip directly.\n");
-        return (s_vdiagram){0};
-    }
-    seed_userdata ud = {.generator.seeds = copy_points(seeds),
-                        .EPS_DEG = EPS_DEG, .TOL = TOL};
-    return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud,
-                      randint, rctx, buff_points, out_kept_idx, out_dt);
+    /* Shallow view of the caller's seeds: fixed_generator only reads them and
+     * returns its own filtered copy. (The former deep copy here was leaked.) */
+    seed_userdata ud = {.generator.seeds = *seeds, .EPS_DEG = EPS_DEG, .TOL = TOL};
+    return vor3d_core(bp, vol_max_rel_diff, &fixed_generator, ud, out_kept_idx);
 }
 
 
 s_vdiagram vor3d_in_convh(const s_points *seeds, const double *weights,
                           const s_convh *convh, double vol_max_rel_diff,
-                          double EPS_DEG, double TOL, int (*randint)(void*, int),
-                          void *rctx, s_dynarray *buff_points, int *out_kept_idx)
+                          double EPS_DEG, double TOL, int *out_kept_idx)
 {
     s_bpoly bp = bpoly_from_convh(convh);
     s_vdiagram out = vor3d_in_bp(seeds, weights, &bp, vol_max_rel_diff, EPS_DEG, TOL,
-                                  randint, rctx, buff_points, out_kept_idx);
+                                  out_kept_idx);
     free_bpoly(&bp);
     return out;
 }
@@ -349,13 +168,12 @@ s_vdiagram vor3d_in_bp_pds(double (*f_radius_poiss)(double*, void*), void *f_par
                            const s_bpoly *bp, double vol_max_rel_diff,
                            double EPS_DEG, double TOL,
                            int (*randint)(void*, int), double (*randd01)(void*),
-                           void *rctx, s_dynarray *buff_points)
+                           void *rctx)
 {
     seed_userdata ud = {.generator.pds = { .f_radius_poiss = f_radius_poiss, .f_params = f_params,
                                            .randint = randint, .randd01 = randd01, .rctx = rctx },
                         .EPS_DEG = EPS_DEG, .TOL = TOL};
-    return vor3d_core(bp, vol_max_rel_diff, &PDS_generator, ud,
-                      randint, rctx, buff_points, NULL, NULL);
+    return vor3d_core(bp, vol_max_rel_diff, &PDS_generator, ud, NULL);
 }
 
 

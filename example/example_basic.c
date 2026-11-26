@@ -61,8 +61,7 @@ static void check_volume(const s_vdiagram *vd)
     printf("Vol = %f, Diff = %.16f, rel_diff = %.16f\n", vd->bpoly.volume, vd->bpoly.volume - sum_vol, (vd->bpoly.volume - sum_vol) / vd->bpoly.volume);
 }
 
-static void iterate(int iterations, bool print_progress, const s_bpoly *bp,
-                    s_dynarray *buff_points_omp)
+static void iterate(int iterations, bool print_progress, const s_bpoly *bp)
 {
     int fail = 0;
     #pragma omp parallel for
@@ -71,8 +70,7 @@ static void iterate(int iterations, bool print_progress, const s_bpoly *bp,
         if (print_progress && ii%100 == 0) printf("%d / %d\n", ii, iterations);
         s_vdiagram vd = vor3d_in_bp_pds(&r_const, NULL, bp, vol_max_rel_diff,
                                           EPS_degenerate, TOL,
-                                          randint, randd01, &rctx_omp[omp_get_thread_num()],
-                                          &buff_points_omp[omp_get_thread_num()]);
+                                          randint, randd01, &rctx_omp[omp_get_thread_num()]);
         if (vd.seeds.N == 0) {fail++; continue;}
         // check_volume(&vd);
         free_vdiagram(&vd);
@@ -145,10 +143,6 @@ int main(void)
     rctx_omp = malloc(sizeof(s_random_context) * omp_get_max_threads());
     random_initialize_threads(time(NULL), 1, omp_get_max_threads(), rctx_omp);
 
-    s_dynarray *buff_points_omp = malloc(sizeof(s_dynarray) * omp_get_max_threads());
-    for (int i=0; i<omp_get_max_threads(); i++) {
-        buff_points_omp[i] = dynarray_initialize(sizeof(s_point), 0);
-    }
     
     bool PLOT = false;
     (void)PLOT;
@@ -157,11 +151,10 @@ int main(void)
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_bpoly bp_tet = bpoly_from_csv(FILE_BP, EPS_degenerate);
     s_vdiagram vd_tet = vor3d_in_bp_pds(&r_const, NULL, &bp_tet, vol_max_rel_diff,
-                                          EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
-                                          buff_points_omp);
+                                          EPS_degenerate, TOL, randint, randd01, &rctx_omp[0]);
     check_volume(&vd_tet);
     free_vdiagram(&vd_tet);
-    iterate(10000, false, &bp_tet, buff_points_omp);
+    iterate(10000, false, &bp_tet);
     if (PLOT) plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
     free_bpoly(&bp_tet);
     // exit(1);
@@ -185,13 +178,12 @@ int main(void)
     generate_file_cube_bp(FILE_BP, 2);
     s_bpoly bp_cube = bpoly_from_csv(FILE_BP, EPS_degenerate);
     s_vdiagram vd_cube = vor3d_in_bp_pds(&r_const, NULL, &bp_cube, vol_max_rel_diff,
-                                           EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
-                                           buff_points_omp);
+                                           EPS_degenerate, TOL, randint, randd01, &rctx_omp[0]);
     if (!vdiagram_is_valid(&vd_cube)) { puts("Could not construct vd."); exit(1); }
     check_volume(&vd_cube);
     if (PLOT) plot_vdiagram_differentviews(&vd_cube, "plots/cube", NULL);
     free_vdiagram(&vd_cube);
-    iterate(10000, false, &bp_cube, buff_points_omp);
+    iterate(10000, false, &bp_cube);
     free_bpoly(&bp_cube);
     // exit(1);
 
@@ -200,14 +192,13 @@ int main(void)
     generate_file_sphere_bp(FILE_BP, 1.5, 15, 20);
     s_bpoly bp_sph = bpoly_from_csv(FILE_BP, EPS_degenerate);
     s_vdiagram vd_sph = vor3d_in_bp_pds(&r_const, NULL, &bp_sph, vol_max_rel_diff,
-                                          EPS_degenerate, TOL, randint, randd01, &rctx_omp[0],
-                                          buff_points_omp);
+                                          EPS_degenerate, TOL, randint, randd01, &rctx_omp[0]);
     write_convhull_to_m(&vd_sph.bpoly.convh, "test_bp.m");
     if (!vdiagram_is_valid(&vd_sph)) { puts("Could not construct vd."); exit(1); }
     check_volume(&vd_sph);
     if (PLOT) plot_vdiagram_differentviews(&vd_sph, "plots/sph", NULL);
     free_vdiagram(&vd_sph);
-    iterate(100, true, &bp_sph, buff_points_omp);
+    iterate(100, true, &bp_sph);
     free_bpoly(&bp_sph);
 
 
