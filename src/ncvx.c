@@ -2515,7 +2515,17 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
      * neighbouring bisectors -- observed as a multi-order-of-magnitude volume
      * outlier on real, non-convex anatomy). Close that gap directly: a seed that
      * fails the exact CDT point-location containment test can never be safely
-     * treated as interior, regardless of what the flood does or doesn't reach. */
+     * treated as interior, regardless of what the flood does or doesn't reach.
+     *
+     * Weighted (power) cells need one more condition: the seed must also lie in
+     * its OWN cell. Unweighted, that always holds; with weights a heavier
+     * neighbour can own the seed's location, and the cell may then lie wholly
+     * outside the domain without touching its surface (never flagged by Phase
+     * A, yet the seed passes the location test). A convex cell that contains a
+     * domain point (its seed) and never meets the surface lies inside the
+     * domain, so these two tests together make INTERIOR safe. Exact check over
+     * the DT neighbours (the cell is the intersection of their half-spaces):
+     * sign(pow_j(s) - pow_i(s)) < 0 means s lies strictly in j's cell. */
     for (int i = 0; i < N; i++) {
         int ne = adj->edge_off[i+1] - adj->edge_off[i];
         const int *ed = ne ? adj->edge + 4 * adj->edge_off[i] : NULL;
@@ -2524,6 +2534,18 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
         if (!cellkind[i]) {
             s_ncell *loc = in_ncell_walk(&domain->cdt, real_seeds->p[i]);
             if (!loc || !loc->interior) cellkind[i] = 1;
+        }
+        if (!cellkind[i] && seed_weights) {
+            s_point s = real_seeds->p[i];
+            for (int k = adj->offset[i]; k < adj->offset[i+1]; k++) {
+                int j = adj->neighbor[k];
+                if (j < 0 || j >= N) continue;
+                s_point t = real_seeds->p[j];
+                if (power_lp2_feasible_T0_T1_S(s.x,s.y,s.z, s.x,s.y,s.z, t.x,t.y,t.z,
+                                               seed_weights[i], seed_weights[j]) < 0) {
+                    cellkind[i] = 1; break;
+                }
+            }
         }
     }
 
