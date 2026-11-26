@@ -4,8 +4,8 @@
 #include "gtests.h"
 #include "dt_predseam.h"  /* Phase 1: id-based predicate seam (walk-by-id) */
 #include "gnuplotc.h"
-#include "dynarray.h"
-#include "random.h"       /* caller-owned PRNG for deterministic walk tie-breaking */
+#include "./hlibs/dynarray.h"
+#include "./hlibs/random.h"       /* caller-owned PRNG for deterministic walk tie-breaking */
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>

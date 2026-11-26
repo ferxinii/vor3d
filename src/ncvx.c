@@ -3,10 +3,13 @@
 #include "vor3d.h"
 #include "delaunay.h"
 #include "scplx.h"
-#include "dynarray.h"
+#include "hlibs/dynarray.h"
 #include "trimesh.h"
-#include "clip_lp.h"     /* Tier-B: 3D LP-feasibility dispatch (lp3_*) */
-#include "linalg.h"      /* solve_3x3_ppivot */
+#include "lp.h"                    /* lp3_feasible, lp3_vcell_maybe_hits_* (geometry) */
+#include "predicates_lp.h"         /* raw lp2_* / lp3_* predicates */
+#include "predicates_lp_power.h"   /* raw power_lp2_* / power_lp3_* predicates */
+#include "predicates_basic.h"      /* orient3d */
+#include "hlibs/linalg.h"      /* solve_3x3_ppivot */
 #include "volsph.h"      /* circumcentre_maybe_weighted */
 #include "surf_vkey.h"   /* combinatorial vertex keys + per-cell surface assembly */
 
@@ -495,7 +498,7 @@ static s_vlabel canonical_vv_label(int s, int j1, int j2, int j3,
 
 /* Canonical cocircular cluster of the Voronoi edge dual to DT triangle
  * {cell_seed, j1, j2}: the neighbour seeds lying on that triangle's circumcircle
- * (found EXACTLY with points_concyclic).  A cocircular seed subset is split by
+ * (found EXACTLY with test_points_concyclic).  A cocircular seed subset is split by
  * the simplicial DT into several triangles whose dual Voronoi edges are all
  * COLLINEAR (same perpendicular axis of the shared circle), so their crossings
  * of a common face/edge coincide exactly but would otherwise carry different EF
@@ -519,9 +522,9 @@ static int canonical_edge_cluster(int cell_seed, int j1, int j2,
         int u = nbr[k];
         if (u == j1 || u == j2) continue;
         int concyclic = seed_weights
-            ? power_points_concyclic(a, seed_weights[cell_seed], b, seed_weights[j1],
+            ? test_points_coorthocircular(a, seed_weights[cell_seed], b, seed_weights[j1],
                                      c, seed_weights[j2], seeds->p[u], seed_weights[u])
-            : points_concyclic(a, b, c, seeds->p[u]);
+            : test_points_concyclic(a, b, c, seeds->p[u]);
         if (!concyclic) continue;
         if (n < SV_NBIS) out[n++] = u;
         else fprintf(stderr, "canonical_edge_cluster: cocircular cluster >%d (dropped %d)\n",
@@ -654,7 +657,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
     lp3_tet_face_orient(tet, sigma_f);
 
     s_cid3 FC[4];
-    for (int f = 0; f < 4; f++) { FC[f].type = CT_TET; FC[f].idx = f; }
+    for (int f = 0; f < 4; f++) { FC[f].type = LP3_TET; FC[f].idx = f; }
 
     s_dynarray pts  = dynarray_initialize(sizeof(s_point), 64);
     s_dynarray cand = dynarray_initialize(sizeof(s_vlabel), 64);  /* labels aligned with pts */
@@ -672,7 +675,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             s_cid3 tri[3]; int n = 0;
             for (int f = 0; f < 4; f++) if (f != j) tri[n++] = FC[f];  /* 3 faces meeting at j */
             for (int k = 0; k < NB && keep; k++) {
-                s_cid3 q = { CT_SEED, nbr[k] };
+                s_cid3 q = { LP3_SEED, nbr[k] };
                 int r = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, tri[0], tri[1], tri[2], q);
                 if (r < 0) keep = 0;
                 /* V exactly ON B(s,nbr[k]) (e.g. a CDT Steiner vertex hit dead-on
@@ -748,7 +751,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
      * (inside 4 faces + all other bisectors) is retained. */
     for (int vi = 0; vi < n_vtx; vi++) {
         int j1 = vor_vtx[3*vi+0], j2 = vor_vtx[3*vi+1], j3 = vor_vtx[3*vi+2];
-        s_cid3 a = { CT_SEED, j1 }, b = { CT_SEED, j2 }, c = { CT_SEED, j3 };
+        s_cid3 a = { LP3_SEED, j1 }, b = { LP3_SEED, j2 }, c = { LP3_SEED, j3 };
         /* A DT-dual circumcentre is a Voronoi vertex, so by the empty-sphere
          * property it is inside every bisector -- only the 4 tet faces need
          * testing (no O(N) bisector filter).
@@ -802,7 +805,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         s_point n2 = subtract_points(t2, s);
         double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2);
         for (int f = 0; f < 4; f++) {
-            s_cid3 a = FC[f], b = { CT_SEED, j1 }, c = { CT_SEED, j2 };
+            s_cid3 a = FC[f], b = { LP3_SEED, j1 }, c = { LP3_SEED, j2 };
             int keep = 1;
             int zf[3], nzf = 0;      /* other faces the crossing lies exactly ON */
             for (int g = 0; g < 4 && keep; g++) {
@@ -817,7 +820,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             int zcap = -1;           /* cap the crossing coincides with exactly */
             for (int ci2 = 0; ci2 < 2 && keep; ci2++) {
                 if (cap[ci2] < 0) continue;
-                s_cid3 q = { CT_SEED, cap[ci2] };
+                s_cid3 q = { LP3_SEED, cap[ci2] };
                 int fe = lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, q);
                 if (fe < 0) keep = 0;
                 else if (fe == 0) zcap = cap[ci2];
@@ -1012,7 +1015,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
     lp3_tet_face_orient(tet, sigma_f);
 
     s_cid3 FC[4];
-    for (int f = 0; f < 4; f++) { FC[f].type = CT_TET; FC[f].idx = f; }
+    for (int f = 0; f < 4; f++) { FC[f].type = LP3_TET; FC[f].idx = f; }
 
     /* ---- (b) tet vertices inside the cell (exact per-bisector LP) ---- */
     for (int j = 0; j < 4; j++) {
@@ -1020,7 +1023,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         s_cid3 tri[3]; int n = 0;
         for (int f = 0; f < 4; f++) if (f != j) tri[n++] = FC[f];  /* 3 faces meeting at j */
         for (int k = 0; k < NB && keep; k++) {
-            s_cid3 q = { CT_SEED, nbr[k] };
+            s_cid3 q = { LP3_SEED, nbr[k] };
             if (lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, tri[0], tri[1], tri[2], q) < 0) keep = 0;
         }
         if (keep && !dynarray_push(pts, &tet[j])) return 0;
@@ -1073,7 +1076,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
     /* ---- (a) Voronoi vertices (circumcentres) inside the tet ---- */
     for (int vi = 0; vi < n_vtx; vi++) {
         int j1 = vor_vtx[3*vi+0], j2 = vor_vtx[3*vi+1], j3 = vor_vtx[3*vi+2];
-        s_cid3 a = { CT_SEED, j1 }, b = { CT_SEED, j2 }, c = { CT_SEED, j3 };
+        s_cid3 a = { LP3_SEED, j1 }, b = { LP3_SEED, j2 }, c = { LP3_SEED, j3 };
         int R = resolved_vtx[vi];
         if (R && R != tet_id) continue;                 /* strictly inside another fan tet */
         int keep = 1;
@@ -1113,7 +1116,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
         s_point n2 = subtract_points(t2, s);
         double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2);
         for (int f = 0; f < 4; f++) {
-            s_cid3 a = FC[f], b = { CT_SEED, j1 }, c = { CT_SEED, j2 };
+            s_cid3 a = FC[f], b = { LP3_SEED, j1 }, c = { LP3_SEED, j2 };
             int keep = 1;
             for (int g = 0; g < 4 && keep; g++) {
                 if (g == f) continue;
@@ -1121,7 +1124,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
             }
             for (int ci2 = 0; ci2 < 2 && keep; ci2++) {
                 if (cap[ci2] < 0) continue;
-                s_cid3 q = { CT_SEED, cap[ci2] };
+                s_cid3 q = { LP3_SEED, cap[ci2] };
                 if (lp3_feasible(tet, sigma_f, s, seeds, seed_weights, s_w, a, b, c, q) < 0) keep = 0;
             }
             if (!keep) continue;
@@ -1652,7 +1655,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
             int fi; dynarray_get_value(fqueue, qh, &fi);
             s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
-            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;  /* frontier */
+            if (!lp3_vcell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;  /* frontier */
             if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                           tet, resolved, fi + 1, EPS_DEG, pts))
                 return 0;
@@ -1671,7 +1674,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
         for (int fi = 0; fi < Nf; fi++) {
             s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
-            if (!lp3_cell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;
+            if (!lp3_vcell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;
             if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                           tet, resolved, fi + 1, EPS_DEG, pts))
                 return 0;
@@ -1977,7 +1980,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                 for (unsigned qh = 0; qh < fqueue.N; qh++) {
                     int fi; dynarray_get_value(&fqueue, qh, &fi);
                     s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
-                    int may = lp3_cell_maybe_hits_tri(fc, s, real_seeds, seed_weights, s_w, nbr, NB);
+                    int may = lp3_vcell_maybe_hits_tri(fc, s, real_seeds, seed_weights, s_w, nbr, NB);
                     if (may && !nface_face_crossings(&bp->convh, fi, i, real_seeds, seed_weights,
                                                      ve, n_edge, EPS_DEG, &pts)) goto err;
                     if (!may && qh >= n_seed_faces) continue;
@@ -2552,14 +2555,14 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
             int NB = adj->offset[i+1] - adj->offset[i];
             const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
             double wi = seed_weights ? seed_weights[i] : 0.0;
-            if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB))
+            if (!lp3_vcell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB))
                 continue;
             if (!cellkind[i]) {
                 for (int f = 0; f < 4; f++) {
                     if (!face_is_domain_boundary(nc, f)) continue;   /* interior face */
                     int fv[3]; lp3_face_idx(f, fv);
                     s_point tri[3] = { tv[fv[0]], tv[fv[1]], tv[fv[2]] };
-                    if (lp3_cell_maybe_hits_tri(tri, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB)) {
+                    if (lp3_vcell_maybe_hits_tri(tri, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB)) {
                         cellkind[i] = 1; break;
                     }
                 }
@@ -2623,7 +2626,7 @@ static int clip_domain(const s_ncvx_domain *domain, const s_points *real_seeds,
             int NB = adj->offset[i+1] - adj->offset[i];
             const int *nbr = NB ? adj->neighbor + adj->offset[i] : NULL;
             double wi = seed_weights ? seed_weights[i] : 0.0;
-            if (!lp3_cell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB))
+            if (!lp3_vcell_maybe_hits_tet(tv, real_seeds->p[i], real_seeds, seed_weights, wi, nbr, NB))
                 continue;                                 /* frontier */
 
             int do_expand = 0;

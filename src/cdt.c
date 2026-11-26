@@ -3,11 +3,11 @@
 #include "delaunay.h"
 #include "scplx.h"
 #include "trimesh.h"
-#include "dynarray.h"
-#include "hash.h"
+#include "./hlibs/dynarray.h"
+#include "./hlibs/hash.h"
 #include "gtests.h"
 #include "points.h"
-#include "cdt_predicates.h"
+#include "gtests_implicit.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -527,14 +527,16 @@ static int build_segments(const s_trimesh *mesh, s_cdt_scratch *sc)
 static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_DEG, double TOL,
                             s_cdt_scratch *sc)
 {
-    /* Registry: in exact mode dt_builder_begin_exact already cleared and
-     * registered every initial point; in coordinate mode we must populate it
-     * here (Phase B consumes it regardless of how the DT was built). */
+    /* Registry: in exact mode dt_builder_begin_exact already created and
+     * registered every initial point; in coordinate mode we must create and
+     * populate one here (Phase B consumes it regardless of how the DT was
+     * built). */
     if (!b->dt.exact_ids) {
-        cdt_predicates_clear();
+        b->dt.exact_ids = 1;
+        b->dt.pred_reg = itest_registry_create();
         for (int i = 0; i < b->dt.points.N; i++) {
             s_point *p = &b->dt.points.p[i];
-            cdt_point_set_explicit(i, p->x, p->y, p->z);
+            itest_point_set_explicit(b->dt.pred_reg, i, *p);
         }
     }
 
@@ -591,7 +593,7 @@ static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_D
             const double u = split_u(&b->dt, &cur, oe, refpt_id);
 
             const int new_id = b->dt.points.N;
-            /* Point = (1-u)*V[oe0] + u*V[oe1].  cdt_point_set_lnc's convention is
+            /* Point = (1-u)*V[oe0] + u*V[oe1].  itest_point_set_lnc's convention is
              * s*V[v1] + (1-s)*V[v2], hence s = 1-u. */
             if (b->dt.exact_ids) {
                 if (!dt_builder_extend_lnc(b, oe[0], oe[1], 1.0 - u, TOL)) return 0;
@@ -604,7 +606,7 @@ static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_D
                 s_points single = { .N = 1, .p = &M };
                 if (!dt_builder_extend(b, &single, TOL)) return 0;
                 if (b->dt.points.N > new_id)
-                    cdt_point_set_lnc(new_id, oe[0], oe[1], 1.0 - u);
+                    itest_point_set_lnc(b->dt.pred_reg, new_id, oe[0], oe[1], 1.0 - u);
             }
 
             /* Dropped as a near-duplicate of an existing vertex: the segment
@@ -823,12 +825,12 @@ static int facet_ring(s_cdt_scratch *sc, int fi, const int corner[3])
  *   3. a coplanar tet vertex lies strictly inside f (2D).
  * Any other improper contact would imply a DT edge/face crossing one of f's
  * protected edges, which cannot happen in a valid complex. */
-static bool tet_blocks_face(int va, int vb, int vc, const s_ncell *nc)
+static bool tet_blocks_face(s_implicit_pred_reg *reg, int va, int vb, int vc, const s_ncell *nc)
 {
     int ids[4], o[4];
     for (int j = 0; j < 4; j++) {
         ids[j] = nc->vertex_id[j];
-        o[j]   = cdt_orient3d(va, vb, vc, ids[j]);
+        o[j]   = itest_orient3d(reg, va, vb, vc, ids[j]);
     }
 
     for (int j = 0; j < 4; j++) {
@@ -840,15 +842,15 @@ static bool tet_blocks_face(int va, int vb, int vc, const s_ncell *nc)
 
             if (o[j] * o[k] < 0) {
                 /* Straddling edge piercing f's interior. */
-                if (cdt_inner_seg_crosses_inner_tri(u, v, va, vb, vc))
+                if (itest_inner_seg_crosses_inner_tri(reg, u, v, va, vb, vc))
                     return true;
             } else if (o[j] == 0 && o[k] == 0) {
                 /* Coplanar edge vs f's interior (2D). */
-                if (!u_corner && cdt_point_in_inner_tri(u, va, vb, vc)) return true;
-                if (!v_corner && cdt_point_in_inner_tri(v, va, vb, vc)) return true;
-                if (cdt_inner_segs_cross(u, v, va, vb)) return true;
-                if (cdt_inner_segs_cross(u, v, vb, vc)) return true;
-                if (cdt_inner_segs_cross(u, v, vc, va)) return true;
+                if (!u_corner && itest_point_in_inner_tri(reg, u, va, vb, vc)) return true;
+                if (!v_corner && itest_point_in_inner_tri(reg, v, va, vb, vc)) return true;
+                if (itest_inner_segs_cross(reg, u, v, va, vb)) return true;
+                if (itest_inner_segs_cross(reg, u, v, vb, vc)) return true;
+                if (itest_inner_segs_cross(reg, u, v, vc, va)) return true;
             }
         }
     }
@@ -857,7 +859,7 @@ static bool tet_blocks_face(int va, int vb, int vc, const s_ncell *nc)
     for (int j = 0; j < 4; j++) {
         if (o[j] != 0) continue;
         if (ids[j]==va || ids[j]==vb || ids[j]==vc) continue;
-        if (cdt_point_in_inner_tri(ids[j], va, vb, vc)) return true;
+        if (itest_point_in_inner_tri(reg, ids[j], va, vb, vc)) return true;
     }
     return false;
 }
@@ -1008,7 +1010,7 @@ static int find_region_R(s_scplx *dt,
         for (unsigned i = 0; i < sc->ring.N; i++) {
             s_ncell *nc; dynarray_get_value(&sc->ring, i, &nc);
             if (nc->mark_token == stamp) continue;
-            if (!tet_blocks_face(va, vb, vc, nc)) continue;
+            if (!tet_blocks_face(dt->pred_reg, va, vb, vc, nc)) continue;
             nc->mark_token = stamp;
             if (!dynarray_push(&sc->stack, &nc)) return 0;
         }
@@ -1017,7 +1019,7 @@ static int find_region_R(s_scplx *dt,
     /* Fallback for a blocked region not touching any facet vertex. */
     if (sc->stack.N == 0) {
         for (s_ncell *nc = dt->head; nc; nc = nc->next) {
-            if (tet_blocks_face(va, vb, vc, nc)) {
+            if (tet_blocks_face(dt->pred_reg, va, vb, vc, nc)) {
                 nc->mark_token = stamp;
                 if (!dynarray_push(&sc->stack, &nc)) return 0;
                 break;
@@ -1030,7 +1032,7 @@ static int find_region_R(s_scplx *dt,
         for (int fi = 0; fi < 4; fi++) {
             s_ncell *nb = cur->opposite[fi];
             if (!nb || nb->mark_token == stamp) continue;
-            if (!tet_blocks_face(va, vb, vc, nb)) continue;
+            if (!tet_blocks_face(dt->pred_reg, va, vb, vc, nb)) continue;
             nb->mark_token = stamp;
             if (!dynarray_push(&sc->stack, &nb)) return 0;
         }
@@ -1077,7 +1079,7 @@ static int build_half_cavities(s_scplx *dt,
                     nc->vertex_id[2], nc->vertex_id[3]);
             for (int j = 0; j < 4; j++)
                 fprintf(stderr, " %d", nc->vertex_id[j] < 4 ? 9 :
-                        cdt_orient3d(va_dt, vb_dt, vc_dt, nc->vertex_id[j]));
+                        itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, nc->vertex_id[j]));
             fprintf(stderr, "\n");
         }
     }
@@ -1118,7 +1120,7 @@ static int build_half_cavities(s_scplx *dt,
         s_ncell *nc; dynarray_get_value(&sc->in_R, i, &nc);
         bool above = false, below = false;
         for (int j = 0; j < 4; j++) {
-            int o = cdt_orient3d(va_dt, vb_dt, vc_dt, nc->vertex_id[j]);
+            int o = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, nc->vertex_id[j]);
             if (o > 0) above = true;
             if (o < 0) below = true;
         }
@@ -1127,7 +1129,7 @@ static int build_half_cavities(s_scplx *dt,
 
         for (int j = 0; j < 4; j++) {
             int v = nc->vertex_id[j];
-            int o = cdt_orient3d(va_dt, vb_dt, vc_dt, v);
+            int o = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, v);
             if (o >= 0 && !hash_get(&v1_set, &v)) {
                 hash_insert(&v1_set, &v, &dummy);
                 dynarray_push(&C1->verts, &v);
@@ -1153,9 +1155,9 @@ static int build_half_cavities(s_scplx *dt,
              * cavity; dropping it leaves the boundary open and gift-wrapping
              * can never close it (this caused the lung-lobe Phase B aborts). */
 
-            int o0 = cdt_orient3d(va_dt, vb_dt, vc_dt, fids[0]);
-            int o1 = cdt_orient3d(va_dt, vb_dt, vc_dt, fids[1]);
-            int o2 = cdt_orient3d(va_dt, vb_dt, vc_dt, fids[2]);
+            int o0 = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, fids[0]);
+            int o1 = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, fids[1]);
+            int o2 = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, fids[2]);
             int fids4[4] = {fids[0], fids[1], fids[2], nc->vertex_id[fi]};
 
             bool all_ge0 = (o0 >= 0 && o1 >= 0 && o2 >= 0);
@@ -1163,7 +1165,7 @@ static int build_half_cavities(s_scplx *dt,
 
             if (all_ge0 && all_le0) {
                 /* Plane face: route to one half only based on interior vertex side. */
-                int oi = cdt_orient3d(va_dt, vb_dt, vc_dt, nc->vertex_id[fi]);
+                int oi = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, nc->vertex_id[fi]);
                 if      (oi > 0) { if (!dynarray_push(&C1->boundary, fids4)) goto err; }
                 else if (oi < 0) { if (!dynarray_push(&C2->boundary, fids4)) goto err; }
                 /* oi == 0: all 4 verts coplanar -- degenerate, skip. */
@@ -1213,7 +1215,7 @@ typedef struct { int count; int void_sign; } s_bnd_face_val;
  * interior vertex), mirroring build_half_cavities: the wrong-side faces of
  * straddling tets belong to the OTHER half-cavity.
  * Like build_half_cavities, no separating-surface entry is appended. */
-static int rebuild_half_boundary(s_half_cavity *C,
+static int rebuild_half_boundary(s_implicit_pred_reg *reg, s_half_cavity *C,
                                   int va_dt, int vb_dt, int vc_dt, int side)
 {
     typedef struct { int count; int interior_v; } s_cnt_val;
@@ -1243,13 +1245,13 @@ static int rebuild_half_boundary(s_half_cavity *C,
             s_cnt_val *val = (s_cnt_val *)entry_value(&cnt, e);
             if (val->count == 1) {
                 const int *key3 = (const int *)entry_key(e);
-                int o0 = cdt_orient3d(va_dt, vb_dt, vc_dt, key3[0]);
-                int o1 = cdt_orient3d(va_dt, vb_dt, vc_dt, key3[1]);
-                int o2 = cdt_orient3d(va_dt, vb_dt, vc_dt, key3[2]);
+                int o0 = itest_orient3d(reg, va_dt, vb_dt, vc_dt, key3[0]);
+                int o1 = itest_orient3d(reg, va_dt, vb_dt, vc_dt, key3[1]);
+                int o2 = itest_orient3d(reg, va_dt, vb_dt, vc_dt, key3[2]);
                 bool keep;
                 if (o0 == 0 && o1 == 0 && o2 == 0) {
                     /* Plane face: belongs to the half its interior vertex is on. */
-                    keep = (cdt_orient3d(va_dt, vb_dt, vc_dt, val->interior_v) == side);
+                    keep = (itest_orient3d(reg, va_dt, vb_dt, vc_dt, val->interior_v) == side);
                 } else if (side > 0) {
                     keep = (o0 >= 0 && o1 >= 0 && o2 >= 0);
                 } else {
@@ -1295,7 +1297,7 @@ static int try_cavity_expansion(s_scplx *dt,
     }
     /* The local vertex order MUST be the restriction of the global order
      * (paper Sec 4.4): exact cospherical ties are broken symbolically by
-     * INDEX ORDER (cdt_perturbed_insphere), and both half-cavities share
+     * INDEX ORDER (itest_perturbed_insphere), and both half-cavities share
      * their on-plane vertices.  If each half enumerates them in its own
      * arbitrary cavity-scan order, ties break differently and the two local
      * DTs induce DIFFERENT middle walls (measured on sliver facets, whose
@@ -1369,7 +1371,7 @@ static int try_cavity_expansion(s_scplx *dt,
          * above-vertex, local DT empty). */
         s_dt_builder lb = dt->exact_ids
             ? dt_builder_begin_exact_local(&lpts, 0.0, l2g, n, dt->points.N,
-                                           &bb_lo, &bb_hi, NULL)
+                                           &bb_lo, &bb_hi, NULL, dt->pred_reg)
             : dt_builder_begin(&lpts, NULL, 0.0, &bb_lo, &bb_hi, NULL);
         free(lpts_arr);
         if (!lb._stack) { CDT_DBG("expand side=%d iter=%d: lb begin fail\n", side, dbg_iter); goto done; }
@@ -1471,7 +1473,7 @@ static int try_cavity_expansion(s_scplx *dt,
         if (new_v < 0) goto done;
 
         /* Side check: new vertex must not be on the wrong side of the plane. */
-        int o = cdt_orient3d(va_dt, vb_dt, vc_dt, new_v);
+        int o = itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, new_v);
         if (o != 0 && o != side) {
             CDT_DBG("expand side=%d iter=%d: wrong-side vertex %d (o=%d)\n",
                     side, dbg_iter, new_v, o);
@@ -1510,7 +1512,7 @@ static int try_cavity_expansion(s_scplx *dt,
         if (!dynarray_push(&C->tets, &expand_nb)) goto done;
         hash_insert(&removal_set, &expand_nb, &dummy);
 
-        if (!rebuild_half_boundary(C, va_dt, vb_dt, vc_dt, side)) goto done;
+        if (!rebuild_half_boundary(dt->pred_reg, C, va_dt, vb_dt, vc_dt, side)) goto done;
     }
 
 done:
@@ -1721,10 +1723,10 @@ static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
             sort3(&g[0], &g[1], &g[2]);
             int *iv = (int *)hash_get(&bnd, g);
             if (!iv) continue;
-            int s_int = cdt_orient3d(g[0], g[1], g[2], *iv);
+            int s_int = itest_orient3d(ldt->pred_reg, g[0], g[1], g[2], *iv);
             if (s_int == 0) continue;             /* degenerate wall: try others */
             int w = l2g[nc->vertex_id[fi] - 4];
-            if (cdt_orient3d(g[0], g[1], g[2], w) == s_int) {
+            if (itest_orient3d(ldt->pred_reg, g[0], g[1], g[2], w) == s_int) {
                 nc->mark_token = stamp;
                 if (!dynarray_push(out, &nc)) { hash_free(&bnd); return 0; }
                 nseeds++;
@@ -1772,7 +1774,8 @@ static int ldt_cavity_tets(s_scplx *ldt, const int *l2g,
  * Committing mismatched halves would leave cracks along the wall, so verify
  * agreement first and let the caller fall back to gift-wrapping when it fails.
  * Faces are compared as GLOBAL sorted triples of on-plane vertices. */
-static int middle_walls_agree(const s_dynarray *fl1, const int *l2g1,
+static int middle_walls_agree(s_implicit_pred_reg *reg,
+                              const s_dynarray *fl1, const int *l2g1,
                               const s_dynarray *fl2, const int *l2g2,
                               const s_half_cavity *C1, const s_half_cavity *C2,
                               int va, int vb, int vc)
@@ -1811,9 +1814,9 @@ static int middle_walls_agree(const s_dynarray *fl1, const int *l2g1,
                 int fids[3]; FACE_IDS(nc, fi, fids);
                 if (fids[0] < 4 || fids[1] < 4 || fids[2] < 4) continue; /* sentinel */
                 int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
-                if (cdt_orient3d(va, vb, vc, g[0]) != 0 ||
-                    cdt_orient3d(va, vb, vc, g[1]) != 0 ||
-                    cdt_orient3d(va, vb, vc, g[2]) != 0) continue;
+                if (itest_orient3d(reg, va, vb, vc, g[0]) != 0 ||
+                    itest_orient3d(reg, va, vb, vc, g[1]) != 0 ||
+                    itest_orient3d(reg, va, vb, vc, g[2]) != 0) continue;
                 sort3(&g[0], &g[1], &g[2]);
                 if (hash_get(&walls, g)) continue;   /* wall, not middle */
                 int *v = (int *)hash_get_or_create(&set, g);
@@ -1895,25 +1898,25 @@ static int commit_cavity_expansion(s_scplx *dt,
  * both endpoints coplanar, one endpoint coplanar, and non-coplanar.
  * Returns 1 if the interior of s1-s2 intersects the interior of <v0,v1,v2>
  * (including coplanar interior crossings). */
-static int seg_tri_exact(int s1, int s2, int v0, int v1, int v2)
+static int seg_tri_exact(s_implicit_pred_reg *reg, int s1, int s2, int v0, int v1, int v2)
 {
-    int o1 = cdt_orient3d(v0, v1, v2, s1);
-    int o2 = cdt_orient3d(v0, v1, v2, s2);
+    int o1 = itest_orient3d(reg, v0, v1, v2, s1);
+    int o2 = itest_orient3d(reg, v0, v1, v2, s2);
 
     if (o1 == 0 && o2 == 0) {
         /* Both coplanar: check if either endpoint is inside the triangle,
          * or if the segment crosses any triangle edge. */
-        if (cdt_point_in_inner_tri(s1, v0, v1, v2)) return 1;
-        if (cdt_point_in_inner_tri(s2, v0, v1, v2)) return 1;
-        if (cdt_inner_segs_cross(s1, s2, v0, v1))   return 1;
-        if (cdt_inner_segs_cross(s1, s2, v1, v2))   return 1;
-        if (cdt_inner_segs_cross(s1, s2, v2, v0))   return 1;
+        if (itest_point_in_inner_tri(reg, s1, v0, v1, v2)) return 1;
+        if (itest_point_in_inner_tri(reg, s2, v0, v1, v2)) return 1;
+        if (itest_inner_segs_cross(reg, s1, s2, v0, v1))   return 1;
+        if (itest_inner_segs_cross(reg, s1, s2, v1, v2))   return 1;
+        if (itest_inner_segs_cross(reg, s1, s2, v2, v0))   return 1;
         return 0;
     }
-    if (o1 == 0) return cdt_point_in_inner_tri(s1, v0, v1, v2);
-    if (o2 == 0) return cdt_point_in_inner_tri(s2, v0, v1, v2);
+    if (o1 == 0) return itest_point_in_inner_tri(reg, s1, v0, v1, v2);
+    if (o2 == 0) return itest_point_in_inner_tri(reg, s2, v0, v1, v2);
     if (o1 == o2) return 0;
-    return cdt_inner_seg_crosses_inner_tri(s1, s2, v0, v1, v2);
+    return itest_inner_seg_crosses_inner_tri(reg, s1, s2, v0, v1, v2);
 }
 
 /* Returns true if vertex v is occluded from tet <s0,s1,s2,w> by any triangle
@@ -1924,7 +1927,7 @@ static int seg_tri_exact(int s1, int s2, int v0, int v1, int v2)
  *   (b) 18 boundary-triangle edge vs cone-face {sigma-edge,v}/{apex-edge,v} checks
  *   (c) 9 boundary-triangle vertex inside non-sigma sub-tet {face,v} checks
  * Returns false (not occluded / visible) if no boundary triangle blocks the view. */
-static bool is_occluded(int v, int s0, int s1, int s2, int w,
+static bool is_occluded(s_implicit_pred_reg *reg, int v, int s0, int s1, int s2, int w,
                          const s_dynarray *original_bnd)
 {
     for (unsigned i = 0; i < original_bnd->N; i++) {
@@ -1938,56 +1941,56 @@ static bool is_occluded(int v, int s0, int s1, int s2, int w,
 
         /* Skip if v is coplanar with this boundary triangle (mirrors reference
          * bnd_o3dc==0 check: coplanar vertex is not occluded by the triangle). */
-        int hv = cdt_orient3d(u0, u1, u2, v);
+        int hv = itest_orient3d(reg, u0, u1, u2, v);
         if (hv == 0) continue;
 
         /* Half-space early exit: if {s0,s1,s2,w,v} are all on the same strict side
          * of the boundary triangle's plane, no intersection is possible. */
-        int hs0 = cdt_orient3d(u0, u1, u2, s0);
-        int hs1 = cdt_orient3d(u0, u1, u2, s1);
-        int hs2 = cdt_orient3d(u0, u1, u2, s2);
-        int hw  = cdt_orient3d(u0, u1, u2, w);
+        int hs0 = itest_orient3d(reg, u0, u1, u2, s0);
+        int hs1 = itest_orient3d(reg, u0, u1, u2, s1);
+        int hs2 = itest_orient3d(reg, u0, u1, u2, s2);
+        int hw  = itest_orient3d(reg, u0, u1, u2, w);
         if (hv==hs0 && hv==hs1 && hv==hs2 && hv==hw) continue;
 
         /* (a) Segments v->{s0,s1,s2,w} vs inner triangle (u0,u1,u2). */
-        if (seg_tri_exact(v, s0, u0, u1, u2)) return true;
-        if (seg_tri_exact(v, s1, u0, u1, u2)) return true;
-        if (seg_tri_exact(v, s2, u0, u1, u2)) return true;
-        if (seg_tri_exact(v, w,  u0, u1, u2)) return true;
+        if (seg_tri_exact(reg, v, s0, u0, u1, u2)) return true;
+        if (seg_tri_exact(reg, v, s1, u0, u1, u2)) return true;
+        if (seg_tri_exact(reg, v, s2, u0, u1, u2)) return true;
+        if (seg_tri_exact(reg, v, w,  u0, u1, u2)) return true;
 
         /* (b) Tri edges vs "cone" faces: sigma edges paired with v, and apex
          *     edges paired with v.  These are the faces of the cone from v to
          *     the tet, excluding sigma itself. */
-        if (seg_tri_exact(u0,u1, s0,s1,v)) return true;
-        if (seg_tri_exact(u0,u1, s1,s2,v)) return true;
-        if (seg_tri_exact(u0,u1, s2,s0,v)) return true;
-        if (seg_tri_exact(u0,u1, s0,w, v)) return true;
-        if (seg_tri_exact(u0,u1, s1,w, v)) return true;
-        if (seg_tri_exact(u0,u1, s2,w, v)) return true;
-        if (seg_tri_exact(u1,u2, s0,s1,v)) return true;
-        if (seg_tri_exact(u1,u2, s1,s2,v)) return true;
-        if (seg_tri_exact(u1,u2, s2,s0,v)) return true;
-        if (seg_tri_exact(u1,u2, s0,w, v)) return true;
-        if (seg_tri_exact(u1,u2, s1,w, v)) return true;
-        if (seg_tri_exact(u1,u2, s2,w, v)) return true;
-        if (seg_tri_exact(u2,u0, s0,s1,v)) return true;
-        if (seg_tri_exact(u2,u0, s1,s2,v)) return true;
-        if (seg_tri_exact(u2,u0, s2,s0,v)) return true;
-        if (seg_tri_exact(u2,u0, s0,w, v)) return true;
-        if (seg_tri_exact(u2,u0, s1,w, v)) return true;
-        if (seg_tri_exact(u2,u0, s2,w, v)) return true;
+        if (seg_tri_exact(reg, u0,u1, s0,s1,v)) return true;
+        if (seg_tri_exact(reg, u0,u1, s1,s2,v)) return true;
+        if (seg_tri_exact(reg, u0,u1, s2,s0,v)) return true;
+        if (seg_tri_exact(reg, u0,u1, s0,w, v)) return true;
+        if (seg_tri_exact(reg, u0,u1, s1,w, v)) return true;
+        if (seg_tri_exact(reg, u0,u1, s2,w, v)) return true;
+        if (seg_tri_exact(reg, u1,u2, s0,s1,v)) return true;
+        if (seg_tri_exact(reg, u1,u2, s1,s2,v)) return true;
+        if (seg_tri_exact(reg, u1,u2, s2,s0,v)) return true;
+        if (seg_tri_exact(reg, u1,u2, s0,w, v)) return true;
+        if (seg_tri_exact(reg, u1,u2, s1,w, v)) return true;
+        if (seg_tri_exact(reg, u1,u2, s2,w, v)) return true;
+        if (seg_tri_exact(reg, u2,u0, s0,s1,v)) return true;
+        if (seg_tri_exact(reg, u2,u0, s1,s2,v)) return true;
+        if (seg_tri_exact(reg, u2,u0, s2,s0,v)) return true;
+        if (seg_tri_exact(reg, u2,u0, s0,w, v)) return true;
+        if (seg_tri_exact(reg, u2,u0, s1,w, v)) return true;
+        if (seg_tri_exact(reg, u2,u0, s2,w, v)) return true;
 
         /* (c) Tri vertices inside non-sigma sub-tets {face,v} (mirrors
          *     intersectionTEST_3 for the three non-sigma tet faces). */
-        if (cdt_point_in_tet(u0, s0,s1,w,v)) return true;
-        if (cdt_point_in_tet(u1, s0,s1,w,v)) return true;
-        if (cdt_point_in_tet(u2, s0,s1,w,v)) return true;
-        if (cdt_point_in_tet(u0, s1,s2,w,v)) return true;
-        if (cdt_point_in_tet(u1, s1,s2,w,v)) return true;
-        if (cdt_point_in_tet(u2, s1,s2,w,v)) return true;
-        if (cdt_point_in_tet(u0, s2,s0,w,v)) return true;
-        if (cdt_point_in_tet(u1, s2,s0,w,v)) return true;
-        if (cdt_point_in_tet(u2, s2,s0,w,v)) return true;
+        if (itest_point_in_tet(reg, u0, s0,s1,w,v)) return true;
+        if (itest_point_in_tet(reg, u1, s0,s1,w,v)) return true;
+        if (itest_point_in_tet(reg, u2, s0,s1,w,v)) return true;
+        if (itest_point_in_tet(reg, u0, s1,s2,w,v)) return true;
+        if (itest_point_in_tet(reg, u1, s1,s2,w,v)) return true;
+        if (itest_point_in_tet(reg, u2, s1,s2,w,v)) return true;
+        if (itest_point_in_tet(reg, u0, s2,s0,w,v)) return true;
+        if (itest_point_in_tet(reg, u1, s2,s0,w,v)) return true;
+        if (itest_point_in_tet(reg, u2, s2,s0,w,v)) return true;
     }
     return false;
 }
@@ -1996,21 +1999,21 @@ static bool is_occluded(int v, int s0, int s1, int s2, int w,
  * the boundary triangle <u0,u1,u2>. The sigma face is <t0,t1,t2>.
  * Mirrors the reference isTetIntersecting: 5 half-space early exits first,
  * then vertex-in-tet, apex edges vs triangle, triangle edges vs non-sigma faces. */
-static int no_spurious_intersect(int t0, int t1, int t2, int t3,
+static int no_spurious_intersect(s_implicit_pred_reg *reg, int t0, int t1, int t2, int t3,
                                   int u0, int u1, int u2)
 {
     int uv[3] = {u0, u1, u2};
 
     /* Apex sign: orient3D(sigma, apex). Positive = apex on cavity side. */
-    int apex_sign = cdt_orient3d(t0, t1, t2, t3);
+    int apex_sign = itest_orient3d(reg, t0, t1, t2, t3);
 
     /* Half-space early exit 1 (sigma face, reference check 1, uses <=):
      * All u vertices on the non-apex side of sigma -> no intersection possible.
      * Shared u vertices have orient=0 which satisfies the condition. */
     {
-        int s0 = cdt_orient3d(t0, t1, t2, u0);
-        int s1 = cdt_orient3d(t0, t1, t2, u1);
-        int s2 = cdt_orient3d(t0, t1, t2, u2);
+        int s0 = itest_orient3d(reg, t0, t1, t2, u0);
+        int s1 = itest_orient3d(reg, t0, t1, t2, u1);
+        int s2 = itest_orient3d(reg, t0, t1, t2, u2);
         if (s0 * apex_sign <= 0 && s1 * apex_sign <= 0 && s2 * apex_sign <= 0)
             return 1;
     }
@@ -2022,23 +2025,23 @@ static int no_spurious_intersect(int t0, int t1, int t2, int t3,
      * orient3D(t0,t2,t3,t1) = apex_sign  (face opp t1)
      * orient3D(t1,t0,t3,t2) = apex_sign  (face opp t2) */
     {
-        int e0 = cdt_orient3d(t2,t1,t3,u0), e1 = cdt_orient3d(t2,t1,t3,u1), e2 = cdt_orient3d(t2,t1,t3,u2);
+        int e0 = itest_orient3d(reg, t2,t1,t3,u0), e1 = itest_orient3d(reg, t2,t1,t3,u1), e2 = itest_orient3d(reg, t2,t1,t3,u2);
         if (e0 * apex_sign < 0 && e1 * apex_sign < 0 && e2 * apex_sign < 0) return 1;
     }
     {
-        int f0 = cdt_orient3d(t0,t2,t3,u0), f1 = cdt_orient3d(t0,t2,t3,u1), f2 = cdt_orient3d(t0,t2,t3,u2);
+        int f0 = itest_orient3d(reg, t0,t2,t3,u0), f1 = itest_orient3d(reg, t0,t2,t3,u1), f2 = itest_orient3d(reg, t0,t2,t3,u2);
         if (f0 * apex_sign < 0 && f1 * apex_sign < 0 && f2 * apex_sign < 0) return 1;
     }
     {
-        int g0 = cdt_orient3d(t1,t0,t3,u0), g1 = cdt_orient3d(t1,t0,t3,u1), g2 = cdt_orient3d(t1,t0,t3,u2);
+        int g0 = itest_orient3d(reg, t1,t0,t3,u0), g1 = itest_orient3d(reg, t1,t0,t3,u1), g2 = itest_orient3d(reg, t1,t0,t3,u2);
         if (g0 * apex_sign < 0 && g1 * apex_sign < 0 && g2 * apex_sign < 0) return 1;
     }
 
     /* Half-space early exit 5 (triangle plane, reference check at lines 415-416):
      * All T vertices on the same side (or plane) of u -> no intersection. */
     {
-        int h0 = cdt_orient3d(u0,u1,u2,t0), h1 = cdt_orient3d(u0,u1,u2,t1);
-        int h2 = cdt_orient3d(u0,u1,u2,t2), h3 = cdt_orient3d(u0,u1,u2,t3);
+        int h0 = itest_orient3d(reg, u0,u1,u2,t0), h1 = itest_orient3d(reg, u0,u1,u2,t1);
+        int h2 = itest_orient3d(reg, u0,u1,u2,t2), h3 = itest_orient3d(reg, u0,u1,u2,t3);
         if ((h0 <= 0 && h1 <= 0 && h2 <= 0 && h3 <= 0) ||
             (h0 >= 0 && h1 >= 0 && h2 >= 0 && h3 >= 0)) return 1;
     }
@@ -2046,20 +2049,20 @@ static int no_spurious_intersect(int t0, int t1, int t2, int t3,
     /* Triangle vertices strictly inside tet (skip vertices shared with tet). */
     for (int i = 0; i < 3; i++) {
         if (uv[i] == t0 || uv[i] == t1 || uv[i] == t2 || uv[i] == t3) continue;
-        if (cdt_point_in_tet(uv[i], t0, t1, t2, t3)) return 0;
+        if (itest_point_in_tet(reg, uv[i], t0, t1, t2, t3)) return 0;
     }
 
     /* Apex edges (t0-t3, t1-t3, t2-t3) vs triangle. */
-    if (seg_tri_exact(t0, t3, u0, u1, u2)) return 0;
-    if (seg_tri_exact(t1, t3, u0, u1, u2)) return 0;
-    if (seg_tri_exact(t2, t3, u0, u1, u2)) return 0;
+    if (seg_tri_exact(reg, t0, t3, u0, u1, u2)) return 0;
+    if (seg_tri_exact(reg, t1, t3, u0, u1, u2)) return 0;
+    if (seg_tri_exact(reg, t2, t3, u0, u1, u2)) return 0;
 
     /* Triangle edges vs 3 non-sigma tet faces {t1,t2,t3}, {t0,t2,t3}, {t0,t1,t3}. */
     for (int ei = 0; ei < 3; ei++) {
         int a = uv[ei], b = uv[(ei+1)%3];
-        if (seg_tri_exact(a, b, t1, t2, t3)) return 0;
-        if (seg_tri_exact(a, b, t0, t2, t3)) return 0;
-        if (seg_tri_exact(a, b, t0, t1, t3)) return 0;
+        if (seg_tri_exact(reg, a, b, t1, t2, t3)) return 0;
+        if (seg_tri_exact(reg, a, b, t0, t2, t3)) return 0;
+        if (seg_tri_exact(reg, a, b, t0, t1, t3)) return 0;
     }
 
     return 1;
@@ -2069,7 +2072,7 @@ static int no_spurious_intersect(int t0, int t1, int t2, int t3,
  * Returns 1 if their interiors overlap improperly: identical triples and
  * triangles sharing only an edge/vertex return 0.  Needed because
  * no_spurious_intersect's half-space early exit cannot see coplanar overlap. */
-static int coplanar_tris_improper_overlap(int a0, int a1, int a2,
+static int coplanar_tris_improper_overlap(s_implicit_pred_reg *reg, int a0, int a1, int a2,
                                            int b0, int b1, int b2)
 {
     int a[3] = {a0, a1, a2}, b[3] = {b0, b1, b2};
@@ -2080,12 +2083,12 @@ static int coplanar_tris_improper_overlap(int a0, int a1, int a2,
     if (shared == 3) return 0;
 
     for (int i = 0; i < 3; i++) {
-        if (cdt_point_in_inner_tri(a[i], b0, b1, b2)) return 1;
-        if (cdt_point_in_inner_tri(b[i], a0, a1, a2)) return 1;
+        if (itest_point_in_inner_tri(reg, a[i], b0, b1, b2)) return 1;
+        if (itest_point_in_inner_tri(reg, b[i], a0, a1, a2)) return 1;
     }
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
-            if (cdt_inner_segs_cross(a[i], a[(i+1)%3], b[j], b[(j+1)%3]))
+            if (itest_inner_segs_cross(reg, a[i], a[(i+1)%3], b[j], b[(j+1)%3]))
                 return 1;
     return 0;
 }
@@ -2110,13 +2113,13 @@ static int toggle_boundary_face(s_hash_table *toggle, int a, int b, int c, int v
 /* Relative orientation of a triangle (f0,f1,f2) lying in the constraint plane
  * wrt the constraint triangle (va,vb,vc): returns k in {-1,+1} such that
  * orient3d(f0,f1,f2,x) == k * orient3d(va,vb,vc,x) for any point x. */
-static int coplanar_rel_orientation(int f0, int f1, int f2,
+static int coplanar_rel_orientation(s_implicit_pred_reg *reg, int f0, int f1, int f2,
                                      int va_dt, int vb_dt, int vc_dt)
 {
     for (int s = 0; s < 4; s++) {  /* sentinels: at least one is off-plane */
-        int os = cdt_orient3d(va_dt, vb_dt, vc_dt, s);
+        int os = itest_orient3d(reg, va_dt, vb_dt, vc_dt, s);
         if (os == 0) continue;
-        int cs = cdt_orient3d(f0, f1, f2, s);
+        int cs = itest_orient3d(reg, f0, f1, f2, s);
         return (cs == os) ? 1 : -1;
     }
     return 0; /* unreachable: the 4 sentinels cannot all lie in one plane */
@@ -2172,12 +2175,12 @@ static int gw_half(s_scplx *dt,
                 if (val->count % 2 == 0) continue;
                 const int *k = (const int *)entry_key(e);
                 if (comm_out &&
-                    cdt_orient3d(va_dt, vb_dt, vc_dt, k[0]) == 0 &&
-                    cdt_orient3d(va_dt, vb_dt, vc_dt, k[1]) == 0 &&
-                    cdt_orient3d(va_dt, vb_dt, vc_dt, k[2]) == 0) {
+                    itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, k[0]) == 0 &&
+                    itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, k[1]) == 0 &&
+                    itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, k[2]) == 0) {
                     /* On-plane face: defer to the lower fill unless its void
                      * is above the plane (then this fill must consume it). */
-                    int krel = coplanar_rel_orientation(k[0], k[1], k[2],
+                    int krel = coplanar_rel_orientation(dt->pred_reg, k[0], k[1], k[2],
                                                         va_dt, vb_dt, vc_dt);
                     if (val->void_sign != krel) {
                         if (!dynarray_push(&sc->comm_cur, k)) return 0;
@@ -2226,10 +2229,10 @@ static int gw_half(s_scplx *dt,
                 int w; dynarray_get_value(usable_v, vi, &w);
                 if (w < 0) continue;
                 /* (i) Correct side. */
-                int o_i = cdt_orient3d(sigma[0], sigma[1], sigma[2], w);
+                int o_i = itest_orient3d(dt->pred_reg, sigma[0], sigma[1], sigma[2], w);
                 if (dbg) CDT_DBG("gw:   candidate w=%d o_sigma=%d (want %d) o_constraint=%d\n",
                                  w, o_i, int_sign,
-                                 cdt_orient3d(va_dt, vb_dt, vc_dt, w));
+                                 itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, w));
                 if (o_i != int_sign) { n_i++; continue; }
 
                 /* (ii) No spurious intersections with active faces or the
@@ -2238,13 +2241,13 @@ static int gw_half(s_scplx *dt,
                 bool ok = true;
                 for (unsigned ai = 0; ai < sc->active.N && ok; ai++) {
                     const int *u = (const int *)dynarray_get_ptr(&sc->active, ai);
-                    if (!no_spurious_intersect(sigma[0], sigma[1], sigma[2], w,
+                    if (!no_spurious_intersect(dt->pred_reg, sigma[0], sigma[1], sigma[2], w,
                                                u[0], u[1], u[2]))
                         ok = false;
                 }
                 for (unsigned ci = 0; ci < sc->comm_cur.N && ok; ci++) {
                     const int *u = (const int *)dynarray_get_ptr(&sc->comm_cur, ci);
-                    if (!no_spurious_intersect(sigma[0], sigma[1], sigma[2], w,
+                    if (!no_spurious_intersect(dt->pred_reg, sigma[0], sigma[1], sigma[2], w,
                                                u[0], u[1], u[2]))
                         ok = false;
                 }
@@ -2255,24 +2258,24 @@ static int gw_half(s_scplx *dt,
                  * wall itself is NOT steered towards any prescribed tiling: it
                  * emerges from the fill, and membership (facet_conforming)
                  * verifies the result afterwards. */
-                if (ok && cdt_orient3d(va_dt, vb_dt, vc_dt, w) == 0) {
+                if (ok && itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, w) == 0) {
                     for (int nf = 0; nf < 3 && ok; nf++) {
                         int p0 = sigma[nf], p1 = sigma[(nf+1)%3], p2 = w;
-                        if (cdt_orient3d(va_dt, vb_dt, vc_dt, p0) != 0) continue;
-                        if (cdt_orient3d(va_dt, vb_dt, vc_dt, p1) != 0) continue;
+                        if (itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, p0) != 0) continue;
+                        if (itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, p1) != 0) continue;
                         for (unsigned ai = 0; ai < sc->active.N && ok; ai++) {
                             const int *u = (const int *)dynarray_get_ptr(&sc->active, ai);
-                            if (cdt_orient3d(va_dt, vb_dt, vc_dt, u[0]) != 0 ||
-                                cdt_orient3d(va_dt, vb_dt, vc_dt, u[1]) != 0 ||
-                                cdt_orient3d(va_dt, vb_dt, vc_dt, u[2]) != 0)
+                            if (itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, u[0]) != 0 ||
+                                itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, u[1]) != 0 ||
+                                itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, u[2]) != 0)
                                 continue;
-                            if (coplanar_tris_improper_overlap(p0, p1, p2,
+                            if (coplanar_tris_improper_overlap(dt->pred_reg, p0, p1, p2,
                                                                u[0], u[1], u[2]))
                                 ok = false;
                         }
                         for (unsigned ci = 0; ci < sc->comm_cur.N && ok; ci++) {
                             const int *u = (const int *)dynarray_get_ptr(&sc->comm_cur, ci);
-                            if (coplanar_tris_improper_overlap(p0, p1, p2,
+                            if (coplanar_tris_improper_overlap(dt->pred_reg, p0, p1, p2,
                                                                u[0], u[1], u[2]))
                                 ok = false;
                         }
@@ -2288,11 +2291,11 @@ static int gw_half(s_scplx *dt,
                     int v; dynarray_get_value(usable_v, ui, &v);
                     if (v < 0 || v==sigma[0] || v==sigma[1] || v==sigma[2] || v==w)
                         continue;
-                    int ov = cdt_orient3d(sigma[0], sigma[1], sigma[2], v);
+                    int ov = itest_orient3d(dt->pred_reg, sigma[0], sigma[1], sigma[2], v);
                     if (ov != 0 && ov != int_sign) continue; /* wrong side -> not visible */
-                    if (is_occluded(v, sigma[0], sigma[1], sigma[2], w, original_bnd))
+                    if (is_occluded(dt->pred_reg, v, sigma[0], sigma[1], sigma[2], w, original_bnd))
                         continue; /* blocked by cavity wall -> not visible */
-                    if (cdt_perturbed_insphere(sigma[0], sigma[1], sigma[2], w, v) == 1)
+                    if (itest_perturbed_insphere(dt->pred_reg, sigma[0], sigma[1], sigma[2], w, v) == 1)
                         ok = false;
                 }
                 if (!ok) { n_iii++; continue; }
@@ -2335,9 +2338,9 @@ static int gw_half(s_scplx *dt,
             int f01[3] = {sigma[0], sigma[1], apex}; sort3(&f01[0],&f01[1],&f01[2]);
             int f12[3] = {sigma[1], sigma[2], apex}; sort3(&f12[0],&f12[1],&f12[2]);
             int f20[3] = {sigma[2], sigma[0], apex}; sort3(&f20[0],&f20[1],&f20[2]);
-            int vs01 = -cdt_orient3d(f01[0],f01[1],f01[2], sigma[2]);
-            int vs12 = -cdt_orient3d(f12[0],f12[1],f12[2], sigma[0]);
-            int vs20 = -cdt_orient3d(f20[0],f20[1],f20[2], sigma[1]);
+            int vs01 = -itest_orient3d(dt->pred_reg, f01[0],f01[1],f01[2], sigma[2]);
+            int vs12 = -itest_orient3d(dt->pred_reg, f12[0],f12[1],f12[2], sigma[0]);
+            int vs20 = -itest_orient3d(dt->pred_reg, f20[0],f20[1],f20[2], sigma[1]);
             if (!toggle_boundary_face(toggle, sigma[0], sigma[1], sigma[2], 0) ||
                 !toggle_boundary_face(toggle, f01[0],   f01[1],   f01[2],   vs01) ||
                 !toggle_boundary_face(toggle, f12[0],   f12[1],   f12[2],   vs12) ||
@@ -2379,7 +2382,7 @@ static int gw_half_cavity(s_scplx *dt,
          * wall is not known a priori: it EMERGES as the on-plane faces created
          * by the upper fill, which are deferred to comm_out and seeded into
          * the lower fill via comm_in. */
-        int vs = cdt_orient3d(f[0],f[1],f[2],f[3]);
+        int vs = itest_orient3d(dt->pred_reg, f[0],f[1],f[2],f[3]);
         if (!toggle_boundary_face(&toggle, f[0], f[1], f[2], vs)) {
             hash_free(&toggle); return 0;
         }
@@ -2390,7 +2393,7 @@ static int gw_half_cavity(s_scplx *dt,
             /* Void side of a middle-wall face for this fill: on this fill's
              * side of the plane, i.e. side*krel
              * (orient3d(f,w) = krel * orient3d(corner-plane, w)). */
-            int vs = side * coplanar_rel_orientation(f[0], f[1], f[2],
+            int vs = side * coplanar_rel_orientation(dt->pred_reg, f[0], f[1], f[2],
                                                      va_dt, vb_dt, vc_dt);
             if (!toggle_boundary_face(&toggle, f[0], f[1], f[2], vs)) {
                 hash_free(&toggle); return 0;
@@ -2431,17 +2434,17 @@ static int gift_wrap_face(s_scplx *dt,
             for (unsigned i = 0; i < C->tets.N; i++) {
                 s_ncell *nc; dynarray_get_value(&C->tets, i, &nc);
                 CDT_DBG("  tet (%d[%d],%d[%d],%d[%d],%d[%d])\n",
-                        nc->vertex_id[0], cdt_orient3d(va_dt,vb_dt,vc_dt,nc->vertex_id[0]),
-                        nc->vertex_id[1], cdt_orient3d(va_dt,vb_dt,vc_dt,nc->vertex_id[1]),
-                        nc->vertex_id[2], cdt_orient3d(va_dt,vb_dt,vc_dt,nc->vertex_id[2]),
-                        nc->vertex_id[3], cdt_orient3d(va_dt,vb_dt,vc_dt,nc->vertex_id[3]));
+                        nc->vertex_id[0], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,nc->vertex_id[0]),
+                        nc->vertex_id[1], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,nc->vertex_id[1]),
+                        nc->vertex_id[2], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,nc->vertex_id[2]),
+                        nc->vertex_id[3], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,nc->vertex_id[3]));
             }
             for (unsigned i = 0; i < C->boundary.N; i++) {
                 int *f = (int *)dynarray_get_ptr(&C->boundary, i);
                 CDT_DBG("  bnd (%d[%d],%d[%d],%d[%d]) int_v=%d\n",
-                        f[0], cdt_orient3d(va_dt,vb_dt,vc_dt,f[0]),
-                        f[1], cdt_orient3d(va_dt,vb_dt,vc_dt,f[1]),
-                        f[2], cdt_orient3d(va_dt,vb_dt,vc_dt,f[2]), f[3]);
+                        f[0], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,f[0]),
+                        f[1], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,f[1]),
+                        f[2], itest_orient3d(dt->pred_reg, va_dt,vb_dt,vc_dt,f[2]), f[3]);
             }
         }
     }
@@ -2528,9 +2531,9 @@ static int commit_mixed(s_scplx *dt,
             int fids[3]; FACE_IDS(lnc, fi, fids);
             if (fids[0] < 4 || fids[1] < 4 || fids[2] < 4) continue;  /* sentinel */
             int g[3] = { l2g[fids[0]-4], l2g[fids[1]-4], l2g[fids[2]-4] };
-            if (cdt_orient3d(va_dt, vb_dt, vc_dt, g[0]) != 0 ||
-                cdt_orient3d(va_dt, vb_dt, vc_dt, g[1]) != 0 ||
-                cdt_orient3d(va_dt, vb_dt, vc_dt, g[2]) != 0) continue;
+            if (itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, g[0]) != 0 ||
+                itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, g[1]) != 0 ||
+                itest_orient3d(dt->pred_reg, va_dt, vb_dt, vc_dt, g[2]) != 0) continue;
             sort3(&g[0], &g[1], &g[2]);
             if (hash_get(&walls, g)) continue;       /* wall, not middle */
             bool dup = false;
@@ -2816,11 +2819,13 @@ static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
     cdt_scratch_free(&sc);
     free_trimesh(&working);
 
-    /* The build ran in exact_ids mode against the cdt_predicates registry, which
-     * is cleared once construction finishes. Reset the returned complex to
-     * coordinate predicates so it is safe to walk / point-locate afterwards
-     * (dtp_orient in exact mode would dereference the freed registry). */
+    /* The build ran in exact_ids mode against a s_implicit_pred_reg that is
+     * destroyed once construction finishes (see cdt_attempt). Reset the
+     * returned complex to coordinate predicates so it is safe to walk /
+     * point-locate afterwards (dtp_orient in exact mode would dereference the
+     * freed registry). */
     result.exact_ids = 0;
+    result.pred_reg = NULL;
     return result;
 }
 
@@ -2846,16 +2851,16 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
 {
     /* Phase A: DT + segment recovery, in exact-id mode -- ONE exact geometry
      * end-to-end.  The builder and Phase B (blocker test, cavity expansion,
-     * gift-wrap) all reason on the cdt_predicates registry by vertex id, over
+     * gift-wrap) all reason on a s_implicit_pred_reg by vertex id, over
      * the true implicit LNC Steiner positions.  (The float DT builder remains
      * for the Voronoi seed / weighted paths; only the CDT is exact.) */
-    cdt_predicates_init();  /* FPU rounding mode; idempotent */
+    itest_init();  /* FPU rounding mode; idempotent */
     s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL, NULL);
     if (!b._stack) return (s_scplx){0};
 
     if (!segment_recovery(&b, working, EPS_DEG, TOL, sc)) {
         s_scplx tmp = dt_builder_end(&b, false, NULL, NULL, 0);
-        free_complex(&tmp); return (s_scplx){0};
+        itest_registry_destroy(tmp.pred_reg); free_complex(&tmp); return (s_scplx){0};
     }
 
     /* Keep the big tetra: the CDT relies on sentinels staying at indices 0-3
@@ -2864,14 +2869,14 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
      * keep_big_tetra=false would compact point indices to 0-based and shrink
      * point2tet, making every +4 access out of bounds. */
     s_scplx dt = dt_builder_end(&b, true, NULL, NULL, 0);
-    if (!dt.head) return (s_scplx){0};
+    if (!dt.head) { itest_registry_destroy(dt.pred_reg); return (s_scplx){0}; }
 
     /* Sync working->points with the DT point set (0-based: skip sentinels),
      * so faces indices stay aligned and Phase A Steiner coords are present. */
     {
         int n_real = dt.points.N - 4;
         s_point *p = malloc((size_t)n_real * sizeof(s_point));
-        if (!p) { free_complex(&dt); return (s_scplx){0}; }
+        if (!p) { itest_registry_destroy(dt.pred_reg); free_complex(&dt); return (s_scplx){0}; }
         memcpy(p, dt.points.p + 4, (size_t)n_real * sizeof(s_point));
         free(working->points.p);
         working->points.p = p;
@@ -2883,14 +2888,14 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
     if (!hash_init(&constrained, sizeof(int[3]), sizeof(int),
                    (size_t)(working->Nf * 4 + 1), (size_t)(working->Nf * 2),
                    face_triple_hash, face_triple_eq, NULL)) {
-        free_complex(&dt); return (s_scplx){0};
+        itest_registry_destroy(dt.pred_reg); free_complex(&dt); return (s_scplx){0};
     }
 
 #define PHASE_B_ABORT() do { \
         half_cavity_free(&C1); half_cavity_free(&C2); \
         *fail_fi = fi; \
         hash_free(&constrained); \
-        free_complex(&dt); cdt_predicates_clear(); \
+        itest_registry_destroy(dt.pred_reg); free_complex(&dt); \
         return (s_scplx){0}; \
     } while (0)
 
@@ -2919,7 +2924,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                 }
             }
             hash_free(&constrained);
-            free_complex(&dt); cdt_predicates_clear();
+            itest_registry_destroy(dt.pred_reg); free_complex(&dt);
             return (s_scplx){0};
         }
 
@@ -2939,7 +2944,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                 CDT_DBG("PHASE B: could not build facet fi=%d (%d,%d,%d)\n", fi, va, vb, vc);
                 *fail_fi = fi;
                 hash_free(&constrained);
-                free_complex(&dt); cdt_predicates_clear();
+                itest_registry_destroy(dt.pred_reg); free_complex(&dt);
                 return (s_scplx){0};
             }
             const s_dynarray *ring = &sc->f_ring;
@@ -2948,7 +2953,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
             if (!facet_conforming(&dt, ring, sc, &conforms)) {
                 *fail_fi = fi;
                 hash_free(&constrained);
-                free_complex(&dt); cdt_predicates_clear();
+                itest_registry_destroy(dt.pred_reg); free_complex(&dt);
                 return (s_scplx){0};
             }
             if (conforms) {
@@ -3038,7 +3043,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                     break;
                 }
 
-                walls_agree = middle_walls_agree(&sc->fl1, l2g1, &sc->fl2, l2g2,
+                walls_agree = middle_walls_agree(dt.pred_reg, &sc->fl1, l2g1, &sc->fl2, l2g2,
                                                  &C1, &C2, va, vb, vc);
                 if (walls_agree) break;
 
@@ -3049,7 +3054,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
                     const int  n  = half ? n2 : n1;
                     for (int q = 0; q < n; q++) {
                         int v = l2g[q];
-                        if (cdt_orient3d(va, vb, vc, v) != 0) continue;
+                        if (itest_orient3d(dt.pred_reg, va, vb, vc, v) != 0) continue;
                         if (iarr_contains(&onp, v)) continue;
                         if (!dynarray_push(&onp, &v)) { dynarray_free(&onp); PHASE_B_ABORT(); }
                         /* growth only counts if the OTHER half lacks it */
@@ -3147,7 +3152,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
     classify_interior_exterior(&dt, &constrained, sc, keep_exterior);
 
     hash_free(&constrained);
-    cdt_predicates_clear();
+    itest_registry_destroy(dt.pred_reg);
 
     return dt;
 }

@@ -3,8 +3,8 @@
 #include "points.h"
 #include "scplx.h"
 #include "delaunay.h"
-#include "linalg.h"
-#include "hash.h"
+#include "hlibs/linalg.h"
+#include "./hlibs/hash.h"
 #include <math.h>
 #include <float.h>
 #include <assert.h>

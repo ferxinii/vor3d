@@ -24,11 +24,16 @@ typedef struct simplical_complex {  // May in stack
                          // Any start tet is valid, so a stale hint (post-compaction id
                          // reuse) is harmless; out-of-range/NULL falls back to random.
     struct ncell **point2tet;  // [v] = one tet containing vertex v; NULL if unused
-    int exact_ids;  // 0 = coordinate predicates (default); 1 = cdt_predicates by vertex id.
-                    // Set only for CDT builds (see dt_predseam.h); must be zero for weighted.
+    int exact_ids;  // 0 = coordinate predicates (default); 1 = exact predicates by vertex id
+                    // (see dt_predseam.h), resolved against *pred_reg below.
+                    // Set only for CDT builds; must be zero for weighted.
     const int *l2g_ids;  // exact mode only: translate this scplx's local vertex id ->
-                         // cdt_predicates registry id.  NULL = identity (the global CDT DT).
+                         // pred_reg registry id.  NULL = identity (the global CDT DT).
                          // Non-NULL for Phase B local cavity DTs (their ids are local).
+    struct implicit_predicate_registry *pred_reg;  // exact mode only (see gtests_implicit.h):
+                    // caller-owned registry, no global state. The global CDT DT and its
+                    // Phase B local cavity DTs all SHARE one registry pointer (l2g_ids
+                    // above translates between them); NULL when exact_ids == 0.
     struct ncell_pool *pool;  // slab allocator for this complex's ncells (scplx.c).
                               // Lazily created by malloc_ncell, so (s_scplx){0} stays a
                               // valid empty complex and by-value transfers keep working.
@@ -62,6 +67,7 @@ typedef struct ncell {  // Must live in heap
 
 typedef struct dynarray s_dynarray;
 typedef struct hash_table s_hash_table;
+typedef struct implicit_predicate_registry s_implicit_pred_reg;  /* geometry/gtests_implicit.h */
 
 void free_complex(s_scplx *scplx);
 void assert_point2tet(const s_scplx *scplx);

@@ -104,10 +104,6 @@ double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_DEG, s_
 void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color);
 void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, char *view_command);
 
-int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
-                            s_scplx *dt, int N_seeds,
-                            int (*randint)(void *rctx, int), void *rctx,
-                            s_dynarray *out_points);
 
 /* VORONOI DIAGRAM */
 int serialize_vdiagram(const s_vdiagram *vd, uint8_t *buff_write, size_t *size,

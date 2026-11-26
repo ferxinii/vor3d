@@ -13,10 +13,10 @@ static double VOL_REL_DIFF = 1e-2;   /* looser than convex: accounts for tet dis
 
 static s_random_context rctx;
 
-static int randint_fn(void *ctx, int N)
-{
-    return (int)random_uniform_range_u64(ctx, (uint64_t)N);
-}
+// static int randint_fn(void *ctx, int N)
+// {
+//     return (int)random_uniform_range_u64(ctx, (uint64_t)N);
+// }
 
 static double randd01(void *ctx)
 {

@@ -11,8 +11,8 @@
 #include "scplx.h"
 #include "delaunay.h"
 #include "gtests.h"
-#include "dynarray.h"
-#include "hash.h"
+#include "./hlibs/dynarray.h"
+#include "./hlibs/hash.h"
 #include <float.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -292,7 +292,7 @@ static int repair_manifold(s_scplx *dt)
 
 static int count_components(s_scplx *dt)
 {
-    s_hash_table seen;   /* hash.h tables never grow: size for one entry per tet */
+    s_hash_table seen;   /* ./hlibs/hash.h tables never grow: size for one entry per tet */
     if (!hash_init(&seen, sizeof(s_ncell *), sizeof(bool),
                    (size_t)dt->N_ncells + 16, 0, hash_ptr, eq_ptr, NULL))
         return -1;

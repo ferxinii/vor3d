@@ -5,9 +5,9 @@
 #include "vdiagram.h"
 #include "volsph.h"
 #include "convh.h"
-#include "dynarray.h"
+#include "./hlibs/dynarray.h"
 #include "gnuplotc.h"
-#include "random.h"
+#include "./hlibs/random.h"
 #include <float.h>
 #include <stdlib.h>
 #include <stdio.h>

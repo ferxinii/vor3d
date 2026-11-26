@@ -65,30 +65,38 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
                                const s_point *bb_min_hint, const s_point *bb_max_hint,
                                s_random_context *rng);
 
-/* Exact-id build (CDT): all builder predicates run on the cdt_predicates
- * registry (registry index == scplx point index), no weights.  Requires
- * cdt_predicates_init() to have been called; clears and repopulates the
- * registry for the seeds.  Add Steiners with dt_builder_extend_lnc. */
+/* Exact-id build (CDT): all builder predicates run on a fresh, caller-owned
+ * s_implicit_pred_reg (registry index == scplx point index; see
+ * geometry/gtests_implicit.h), no weights.  Requires itest_init() to have
+ * been called once per process (FPU rounding mode).  Creates the registry;
+ * the caller owns its lifetime from here on (destroy via
+ * itest_registry_destroy(b.dt.pred_reg) once the whole exact build --
+ * including any local cavity DTs sharing it -- is done, success or failure).
+ * Fetch it via the returned builder's b.dt.pred_reg to share it with local
+ * cavity DTs (dt_builder_begin_exact_local).  Add Steiners with
+ * dt_builder_extend_lnc. */
 s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
                                     const s_point *bb_min_hint, const s_point *bb_max_hint,
                                     s_random_context *rng);
 
 /* Exact-id build of a LOCAL cavity DT (Phase B): predicates run on the SAME
- * cdt_predicates registry as the global CDT DT, without clearing it.  seeds are
- * the cavity vertex coords; l2g_real[i] is the registry id of seed i.  The 4
- * local big-tetra sentinels are registered into scratch registry slots
- * [scratch_base .. scratch_base+3] (reserve them past the global point count).
- * Vertex ids stay local (sentinels 0..3, seeds 4+i); the seam translates.
- * bb_min_hint/bb_max_hint (NULL = seed bbox) override the big-tetra bounding
- * box: cavity fills pass an INFLATED box so the finite sentinels behave like
- * points at infinity -- near-degenerate slab cavities have sliver
- * circumspheres of radius ~L^2/h that would otherwise swallow bbox-scale
- * sentinels, leaving the local DT with no real tets at all. */
+ * s_implicit_pred_reg as the global CDT DT (reg, typically the outer build's
+ * b.dt.pred_reg), without clearing it -- this builder does NOT own reg's
+ * lifetime.  seeds are the cavity vertex coords; l2g_real[i] is the registry
+ * id of seed i.  The 4 local big-tetra sentinels are registered into scratch
+ * registry slots [scratch_base .. scratch_base+3] (reserve them past the
+ * global point count).  Vertex ids stay local (sentinels 0..3, seeds 4+i);
+ * the seam translates.  bb_min_hint/bb_max_hint (NULL = seed bbox) override
+ * the big-tetra bounding box: cavity fills pass an INFLATED box so the finite
+ * sentinels behave like points at infinity -- near-degenerate slab cavities
+ * have sliver circumspheres of radius ~L^2/h that would otherwise swallow
+ * bbox-scale sentinels, leaving the local DT with no real tets at all. */
 s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           const int *l2g_real, int n, int scratch_base,
                                           const s_point *bb_min_hint,
                                           const s_point *bb_max_hint,
-                                          s_random_context *rng);
+                                          s_random_context *rng,
+                                          s_implicit_pred_reg *reg);
 
 /* Phase 2: insert additional points (e.g. mirrors) into the existing DT.
  * Returns false on error. */

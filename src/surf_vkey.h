@@ -8,7 +8,7 @@
  * for the "same" seam vertex, computed independently in two adjacent pieces,
  * therefore carry the same key and stitch exactly -- no coordinate tolerance.
  *
- * Header-only (static inline), same style as dynarray.h / hash.h.
+ * Header-only (static inline), same style as ./hlibs/dynarray.h / ./hlibs/hash.h.
  */
 #ifndef VOR3D_SURF_VKEY_H
 #define VOR3D_SURF_VKEY_H
@@ -21,9 +21,9 @@
 
 #include "points.h"
 #include "trimesh.h"
-#include "dynarray.h"
-#include "hash.h"
-#include "UF.h"         /* Union-Find for connected-component splitting */
+#include "hlibs/dynarray.h"
+#include "hlibs/hash.h"
+#include "hlibs/UF.h"
 #include "gtests.h"     /* exact orient2d + test_insphere, test_orthosphere */
 #include "predicates_lp.h"   /* exact lp3_* feasibility for edge ordering */
 #include "predicates_lp_power.h"   /* power_lp3_*: weighted edge ordering */
@@ -155,7 +155,7 @@ static inline s_vkey vkey_EE(int s, int j1, int j2, int e0, int e1)
 }
 
 
-/* ---- hash.h callbacks -------------------------------------------------- */
+/* ---- ./hlibs/hash.h callbacks -------------------------------------------------- */
 
 static inline size_t vkey_hash(const void *k)
 {

@@ -1,7 +1,7 @@
 
 #include "scplx.h"
-#include "hash.h"
-#include "dynarray.h"
+#include "./hlibs/hash.h"
+#include "./hlibs/dynarray.h"
 #include "gtests.h"
 #include <float.h>
 

@@ -7,7 +7,7 @@
 #include "gtests.h"
 #include "dt_predseam.h"  /* Phase 1: id-based predicate seam (dead exact branch until Phase 2) */
 #include "predicates_basic.h"  /* orient3d_dd for the sentinel regularity reductions */
-#include "dynarray.h"     /* star enumeration in the edge-unsplit preconditions */
+#include "hlibs/dynarray.h"     /* star enumeration in the edge-unsplit preconditions */
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1986,8 +1986,8 @@ static int insert_one_point(s_scplx *scplx, int point_id, s_dstack *stack, doubl
         for (int i = 0; i < 4 && inside; i++) {
             int f[3], k = 0;
             for (int j = 0; j < 4; j++) if (j != i) f[k++] = V[j];
-            int oo = cdt_orient3d(f[0], f[1], f[2], V[i]);
-            int oq = cdt_orient3d(f[0], f[1], f[2], point_id);
+            int oo = itest_orient3d(scplx->pred_reg, f[0], f[1], f[2], V[i]);
+            int oq = itest_orient3d(scplx->pred_reg, f[0], f[1], f[2], point_id);
             if (oo != 0 && oq != 0 && oo != oq) inside = false;
         }
         if (!inside)
@@ -2144,7 +2144,7 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
                               double TOL_dup, const s_point *bb_min_hint,
                               const s_point *bb_max_hint, bool exact,
                               const int *l2g_real, int scratch_base,
-                              s_random_context *rng)
+                              s_random_context *rng, s_implicit_pred_reg *shared_reg)
 {
     s_dt_builder b = {0};
     assert(!(exact && weights) && "exact-id mode does not support weights");
@@ -2165,21 +2165,23 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
     b.dt.rng = rng;
 
     if (exact && !l2g_real) {
-        /* Exact GLOBAL DT: OWN the registry -- register every point (sentinels
-         * 0..3 + seeds) as an explicit entry.  Registry index == scplx point
-         * index.  initialize_scplx already filled points.p[] completely. */
+        /* Exact GLOBAL DT: OWN a fresh registry -- register every point
+         * (sentinels 0..3 + seeds) as an explicit entry.  Registry index ==
+         * scplx point index.  initialize_scplx already filled points.p[]
+         * completely. */
         b.dt.exact_ids = 1;
-        cdt_predicates_clear();
+        b.dt.pred_reg = itest_registry_create();
         for (int i = 0; i < b.dt.points.N; i++) {
             s_point *p = &b.dt.points.p[i];
-            cdt_point_set_explicit(i, p->x, p->y, p->z);
+            itest_point_set_explicit(b.dt.pred_reg, i, *p);
         }
     } else if (exact) {
-        /* Exact LOCAL cavity DT: SHARE the global registry (do not clear it).
-         * Vertex ids stay local; the seam translates via l2g_ids.  Real seeds
-         * map to their existing global ids; the 4 local sentinels are registered
-         * into scratch registry slots [scratch_base..scratch_base+3]. */
+        /* Exact LOCAL cavity DT: SHARE the caller's registry (do not own its
+         * lifetime).  Vertex ids stay local; the seam translates via l2g_ids.
+         * Real seeds map to their existing global ids; the 4 local sentinels
+         * are registered into scratch registry slots [scratch_base..scratch_base+3]. */
         b.dt.exact_ids = 1;
+        b.dt.pred_reg = shared_reg;
         int local_N = b.dt.points.N;            /* 4 + n */
         int *l2g = malloc((size_t)local_N * sizeof(int));
         if (!l2g) { free(ignored); stack_free(stack); free(stack);
@@ -2189,14 +2191,17 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
         b.dt.l2g_ids = l2g;
         b._l2g_ids   = l2g;
         for (int j = 0; j < 4; j++)
-            cdt_point_set_explicit(scratch_base + j, b.dt.points.p[j].x,
-                                   b.dt.points.p[j].y, b.dt.points.p[j].z);
+            itest_point_set_explicit(b.dt.pred_reg, scratch_base + j, b.dt.points.p[j]);
     }
 
     for (int ii = 4; ii < b.dt.points.N; ii++) {
         if (insert_one_point(&b.dt, ii, stack, TOL_dup, ignored) == -1) {
             free(ignored); stack_free(stack); free(stack);
-            free(b._l2g_ids); free_complex(&b.dt);
+            free(b._l2g_ids);
+            /* Only the GLOBAL branch above owns pred_reg; a LOCAL/shared
+             * builder must leave the caller's registry alone. */
+            if (exact && !l2g_real) itest_registry_destroy(b.dt.pred_reg);
+            free_complex(&b.dt);
             return (s_dt_builder){0};
         }
         if (dt_trace_on()) {
@@ -2252,30 +2257,31 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
                               s_random_context *rng)
 {
     return dt_builder_begin_impl(seeds, weights, TOL_dup, bb_min_hint, bb_max_hint,
-                                 false, NULL, 0, rng);
+                                 false, NULL, 0, rng, NULL);
 }
 
-/* Exact-id build: predicates run on the cdt_predicates registry (no weights).
- * The registry must be init'd (cdt_predicates_init) beforehand; this clears and
- * repopulates it for the seeds.  Steiners are then added via
- * dt_builder_extend_lnc, real points via dt_builder_extend. */
+/* Exact-id build: predicates run on a fresh s_implicit_pred_reg (no weights).
+ * itest_init() must have been called once per process beforehand (FPU
+ * rounding mode).  Steiners are then added via dt_builder_extend_lnc, real
+ * points via dt_builder_extend. */
 s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
                                     const s_point *bb_min_hint, const s_point *bb_max_hint,
                                     s_random_context *rng)
 {
     return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
-                                 true, NULL, 0, rng);
+                                 true, NULL, 0, rng, NULL);
 }
 
 s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           const int *l2g_real, int n, int scratch_base,
                                           const s_point *bb_min_hint,
                                           const s_point *bb_max_hint,
-                                          s_random_context *rng)
+                                          s_random_context *rng,
+                                          s_implicit_pred_reg *reg)
 {
     (void)n;  /* n == seeds->N; the map is sized from points.N inside the impl */
     return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
-                                 true, l2g_real, scratch_base, rng);
+                                 true, l2g_real, scratch_base, rng, reg);
 }
 
 
@@ -2305,7 +2311,7 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
         /* Exact mode: sentinels moved -> refresh their registry coords. */
         if (b->dt.exact_ids)
             for (int i = 0; i < 4; i++)
-                cdt_point_set_explicit(i, b->dt.points.p[i].x, b->dt.points.p[i].y, b->dt.points.p[i].z);
+                itest_point_set_explicit(b->dt.pred_reg, i, b->dt.points.p[i]);
     }
 
     int N_old = b->dt.points.N;
@@ -2340,7 +2346,7 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
     /* Exact mode: new explicit points must be in the registry before insertion. */
     if (b->dt.exact_ids)
         for (int i = N_old; i < N_new; i++)
-            cdt_point_set_explicit(i, b->dt.points.p[i].x, b->dt.points.p[i].y, b->dt.points.p[i].z);
+            itest_point_set_explicit(b->dt.pred_reg, i, b->dt.points.p[i]);
 
     s_dstack *stack = (s_dstack *)b->_stack;
     for (int i = N_old; i < N_new; i++)
@@ -2350,7 +2356,7 @@ bool dt_builder_extend(s_dt_builder *b, const s_points *new_points, double TOL_d
     return true;
 }
 
-/* Insert one implicit Steiner point s*V[v1] + (1-s)*V[v2] (cdt_point_set_lnc
+/* Insert one implicit Steiner point s*V[v1] + (1-s)*V[v2] (itest_point_set_lnc
  * convention) into an exact-id builder.  Registers the exact LNC BEFORE
  * insertion (so the insertion predicates see the true implicit position) and
  * stores the rounded double in points.p (the output representation, consumed by
@@ -2384,7 +2390,7 @@ bool dt_builder_extend_lnc(s_dt_builder *b, int v1, int v2, double s, double TOL
         }
         b->_sentinel_inradius = needed;
         for (int i = 0; i < 4; i++)
-            cdt_point_set_explicit(i, b->dt.points.p[i].x, b->dt.points.p[i].y, b->dt.points.p[i].z);
+            itest_point_set_explicit(b->dt.pred_reg, i, b->dt.points.p[i]);
     }
 
     int new_id = b->dt.points.N;
@@ -2408,7 +2414,7 @@ bool dt_builder_extend_lnc(s_dt_builder *b, int v1, int v2, double s, double TOL
         b->dt.point2tet[new_id] = NULL;
     }
 
-    cdt_point_set_lnc(new_id, v1, v2, s);   /* before insertion */
+    itest_point_set_lnc(b->dt.pred_reg, new_id, v1, v2, s);   /* before insertion */
 
     s_dstack *stack = (s_dstack *)b->_stack;
     if (insert_one_point(&b->dt, new_id, stack, TOL_dup, b->_ignored) == -1)

@@ -50,8 +50,8 @@
 
 #include "delaunay.h"
 #include "scplx.h"
-#include "dynarray.h"
-#include "hash.h"
+#include "./hlibs/dynarray.h"
+#include "./hlibs/hash.h"
 #include "volsph.h"
 
 #include <math.h>

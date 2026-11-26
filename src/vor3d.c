@@ -3,7 +3,8 @@
 #include "delaunay.h"
 #include "vdiagram.h"
 #include "points.h"
-#include "dynarray.h"
+#include "./hlibs/dynarray.h"
+#include "lp.h"
 
 #include <stdlib.h>
 #include <assert.h>
@@ -31,6 +32,76 @@ static int valid_volumes(const s_bpoly *bp, const s_vdiagram *vd, double max_rel
         return 0;
     }
 }
+
+
+static int extract_mirrored_points(const s_bpoly *bp, double EPS_degenerate,
+                                   s_scplx *dt, int N_seeds,
+                                   int (*randint)(void *rctx, int), void *rctx,
+                                   s_dynarray *out_points)
+{   /* Use DT neighbor relationships as LP constraint set instead of all seeds.
+     * LP with fewer constraints has a larger feasible region, so we may generate
+     * extra mirrors (false positives) but never miss a needed one (no false negatives).
+     *
+     * Loop order: seed-outer, face-inner -- neighbors are collected once per seed and
+     * reused across all faces, rather than recomputed for every (face, seed) pair. */
+    out_points->N = 0;
+
+    /* seeds_idx holds [vi, neighbor_0, ..., neighbor_n] for the current seed.
+     * Reused across seeds; grows automatically via dynarray. */
+    s_dynarray seeds_idx  = dynarray_initialize(sizeof(int), 32);
+    s_dynarray scratch_cells = dynarray_initialize(sizeof(s_ncell *), 64);
+    if (!seeds_idx.items || !scratch_cells.items) goto error;
+
+    for (int i = 0; i < N_seeds; i++) {
+        int vi = 4 + i;
+        if (!dt->point2tet[vi]) continue;  /* deduplicated seed */
+
+        int vi_lid = -1;
+        for (int k = 0; k < 4; k++)
+            if (dt->point2tet[vi]->vertex_id[k] == vi) { vi_lid = k; break; }
+
+        /* Build seeds_idx = [vi, neighbors...] for this seed. */
+        seeds_idx.N = 0;
+        if (!dynarray_push(&seeds_idx, &vi)) goto error;
+        if (vertex_neighbors(dt, vi, dt->point2tet[vi], vi_lid,
+                             4, &seeds_idx, &scratch_cells) < 0) goto error;
+
+        /* seeds_idx.items is now a contiguous int[] usable by lp2_should_mirror.
+         * id=0 selects vi as the seed under test; all others are constraints. */
+        int  n_total   = (int)seeds_idx.N;
+        int *idx_array = (int *)seeds_idx.items;
+
+        s_point p = dt->points.p[vi];
+
+        for (int ff = 0; ff < bp->convh.Nf; ff++) {
+            s_point face[3];
+            convh_get_face(&bp->convh, ff, face);
+            s_point n = bp->convh.fnormals[ff];
+            double n2 = dot_prod(n, n);
+            if (n2 < EPS_degenerate * EPS_degenerate) continue;
+
+            if (!lp2_vcell_hits_face(face, &dt->points, n_total, idx_array, 0, randint, rctx))
+                continue;
+
+            double f = dot_prod(n, face[0]) - dot_prod(n, p);
+            s_point p_mirror = { .x = p.x + 2*(f/n2)*n.x,
+                                 .y = p.y + 2*(f/n2)*n.y,
+                                 .z = p.z + 2*(f/n2)*n.z };
+            if (!dynarray_push(out_points, &p_mirror)) goto error;
+        }
+    }
+
+    dynarray_free(&seeds_idx);
+    dynarray_free(&scratch_cells);
+    return 1;
+
+    error:
+        dynarray_free(&seeds_idx);
+        dynarray_free(&scratch_cells);
+        fprintf(stderr, "Error in extend_sites_mirroring_dt!\n");
+        return 0;
+}
+
 
 
 
