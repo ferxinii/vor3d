@@ -2,7 +2,7 @@
 #include "points.h"
 #include "convh.h"
 #include "scplx.h"
-#include "vdiagram.h"
+#include "vor3d.h"
 #include "volsph.h"
 #include "convh.h"
 #include "./hlibs/dynarray.h"
@@ -28,10 +28,9 @@ void free_vcell(s_vcell *c)
 
 
 /* Memory of vdiagram, printing, and other utilities. */
-int vdiagram_is_valid(const s_vdiagram *vd)
+bool vdiagram_is_valid(const s_vdiagram *vd)
 {
-    if (vd->vcells == NULL) return 0;
-    else return 1;
+    return vd->vcells != NULL;
 }
 
 void free_vdiagram(s_vdiagram *vd)
@@ -46,6 +45,8 @@ void free_vdiagram(s_vdiagram *vd)
     memset(vd, 0, sizeof(s_vdiagram));
 }
 
+/* Debugger helpers (e.g. lldb: call print_vdiagram(&vd)); intentionally in no
+ * header, and not static so they are kept when unused. */
 void print_vcell(const s_vcell *vcell)
 {
     puts("VCELL");

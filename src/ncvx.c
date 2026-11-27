@@ -1,5 +1,4 @@
 /* WARNING: This was built with claude code */
-#include "vdiagram.h"
 #include "vor3d.h"
 #include "delaunay.h"
 #include "scplx.h"

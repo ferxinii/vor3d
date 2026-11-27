@@ -2,7 +2,6 @@
  * The diagram entry point vor3d_diagram lives in ncvx.c next to both clip
  * kernels. */
 #include "vor3d.h"
-#include "vdiagram.h"
 #include "delaunay.h"
 #include "scplx.h"
 #include "convh.h"
