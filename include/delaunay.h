@@ -127,10 +127,6 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
 int N_ncells_not_big_tetra(s_scplx *scplx);  /* Only makes sense if scplx has kept big_tetra */
 
 
-void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_dynarray *buff_ncellPTR,
-                           s_hash_table *out_faces, s_hash_table *out_edges,
-                           bool *out_vertices);
-
 
 
 /* Build a Constrained Delaunay Tetrahedralization of the interior of a closed

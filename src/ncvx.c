@@ -10,7 +10,6 @@
 #include "predicates_lp_power.h"   /* raw power_lp2_* / power_lp3_* predicates */
 #include "predicates_basic.h"      /* orient3d */
 #include "hlibs/linalg.h"      /* solve_3x3_ppivot */
-#include "volsph.h"      /* circumcentre_maybe_weighted */
 #include "surf_vkey.h"   /* combinatorial vertex keys + per-cell surface assembly */
 
 #include <stdlib.h>
@@ -704,7 +703,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                 tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                 tetc_w_ptr = tetc_w;
             }
-            if (circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &Pt)) {
+            if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &Pt)) {
                 s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, seed_weights, nbr, NB);
                 if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
             }
@@ -872,7 +871,7 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
             tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
             tetc_w_ptr = tetc_w;
         }
-        int ok = circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &Pt);
+        int ok = circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &Pt);
         if (ok) {
             /* interior cell: all faces are Voronoi walls, so every vertex is a
              * VV point on the bisectors of its (possibly cospherical) cluster. */
@@ -1021,7 +1020,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
                 tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                 tetc_w_ptr = tetc_w;
             }
-            if (circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &Pt))
+            if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &Pt))
                 if (!dynarray_push(pts, &Pt)) return 0;
         }
     }
@@ -1771,7 +1770,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                     tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                     tetc_w_ptr = tetc_w;
                 }
-                if (!circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &cc)) { boundary = 1; break; }
+                if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &cc)) { boundary = 1; break; }
                 if (norm_squared(subtract_points(cc, s)) >= clear2) { boundary = 1; break; }
                 if (!dynarray_push(&ccbuf, &cc)) goto err;
             }
@@ -1812,7 +1811,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                         tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                         tetc_w_ptr = tetc_w;
                     }
-                    if (!circumcentre_maybe_weighted(tetc, tetc_w_ptr, EPS_DEG, &cc)) continue;
+                    if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &cc)) continue;
                     double r2 = norm_squared(subtract_points(cc, s));
                     if (r2 >= clear2 * (1.0 - 1e-9) &&
                         !nface_dual_in_bp(&bp->convh, fadj, &geom, center, cc, s,
@@ -1855,8 +1854,8 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                             e1_w[3] = seed_weights[c1]; e2_w[3] = seed_weights[c2];
                             e1_wp = e1_w; e2_wp = e2_w;
                         }
-                        if (!circumcentre_maybe_weighted(e1, e1_wp, EPS_DEG, &cc1) ||
-                            !circumcentre_maybe_weighted(e2, e2_wp, EPS_DEG, &cc2)) continue;
+                        if (!circumcentre_tetrahedron_w(e1, e1_wp, EPS_DEG, &cc1) ||
+                            !circumcentre_tetrahedron_w(e2, e2_wp, EPS_DEG, &cc2)) continue;
                         if (norm_squared(subtract_points(cc1, s)) < clear2m &&
                             norm_squared(subtract_points(cc2, s)) < clear2m)
                             continue;                        /* whole edge inside bp */
@@ -1872,7 +1871,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                             e1_w[0] = s_w; e1_w[1] = wt1; e1_w[2] = wt2; e1_w[3] = seed_weights[a];
                             e1_wp = e1_w;
                         }
-                        if (!circumcentre_maybe_weighted(e1, e1_wp, EPS_DEG, &cc1)) continue;
+                        if (!circumcentre_tetrahedron_w(e1, e1_wp, EPS_DEG, &cc1)) continue;
                         s_point u = cross_prod(subtract_points(t1, s),
                                                subtract_points(t2, s));
                         if (dot_prod(u, subtract_points(real_seeds->p[a], s)) > 0)

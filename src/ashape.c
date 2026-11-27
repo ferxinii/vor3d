@@ -1,13 +1,15 @@
 /*
- * Alpha-shape surface extraction for unweighted point sets.
+ * Alpha-shape surface extraction for (optionally weighted) point sets.
  *
- * Builds the Delaunay triangulation, marks each tetrahedron in/out by the
- * squared-circumradius test (r^2 <= alpha), repairs the in-set so its boundary
- * is edge-manifold, and returns that outward-oriented boundary as a closed
- * s_trimesh.  See include/ashape.h and ALPHA_SHAPE_PLAN.md.
+ * Builds the (weighted) Delaunay triangulation, marks each tetrahedron in/out
+ * by the squared power-radius test (r^2 <= alpha, the alpha complex tet test
+ * acplx_tet_in), repairs the in-set so its boundary is edge-manifold, and
+ * returns that outward-oriented boundary as a closed s_trimesh.  See
+ * include/alpha.h and CLAUDE/ALPHA_SHAPE_PLAN.md.
  */
 
-#include "ashape.h"
+#include "alpha.h"
+#include "acplx.h"
 #include "scplx.h"
 #include "delaunay.h"
 #include "gtests.h"
@@ -31,22 +33,16 @@ static inline bool tet_touches_sentinel(const s_ncell *nc)
            nc->vertex_id[2] < 4 || nc->vertex_id[3] < 4;
 }
 
-/* True iff nc is a real tet whose squared circumradius is <= alpha. */
-static bool tet_in_complex(const s_scplx *dt, const s_ncell *nc, double alpha)
-{
-    if (tet_touches_sentinel(nc)) return false;
-    s_point p[4]; extract_vertices_ncell(dt, nc, p);
-    double  w[4] = {0.0, 0.0, 0.0, 0.0};
-    return test_orthosphere_w(4, p, w, alpha) <= 0;   /* r^2 <= alpha */
-}
-
-/* Squared circumradius of a real tet (DBL_MAX if degenerate/flat). */
-static double tet_circumradius2(const s_scplx *dt, const s_ncell *nc)
+/* Squared power radius of a real tet: |c - p0|^2 - w0 with c the (power)
+ * circumcentre (w0 = 0 and the plain circumcentre when unweighted).  May be
+ * negative when weighted.  DBL_MAX if degenerate/flat. */
+static double tet_power_radius2(const s_scplx *dt, const s_ncell *nc)
 {
     s_point p[4]; extract_vertices_ncell(dt, nc, p);
+    double  w[4]; extract_weights_ncell(dt, nc, w);
     s_point cc;
-    if (!circumcentre_tetrahedron(p, 1e-20, &cc)) return DBL_MAX;
-    return distance_squared(cc, p[0]);
+    if (!circumcentre_tetrahedron_w(p, dt->weights ? w : NULL, 1e-20, &cc)) return DBL_MAX;
+    return dt->weights ? distance_squared(cc, p[0]) - w[0] : distance_squared(cc, p[0]);
 }
 
 
@@ -54,22 +50,16 @@ static double tet_circumradius2(const s_scplx *dt, const s_ncell *nc)
 /* Marking + simple aggregates                                         */
 /* ------------------------------------------------------------------ */
 
-/* Set nc->mask_alpha for every tet by the radius test; return in-count. */
+/* Set nc->mask_alpha for every tet by the alpha complex tet test; return
+ * in-count. */
 static int mark_by_alpha(s_scplx *dt, double alpha)
 {
     int count = 0;
     for (s_ncell *nc = dt->head; nc; nc = nc->next) {
-        nc->mask_alpha = tet_in_complex(dt, nc, alpha);
+        nc->mask_alpha = acplx_tet_in(dt, nc, alpha, /*has_big_tetra=*/true);
         if (nc->mask_alpha) count++;
     }
     return count;
-}
-
-static int count_in(const s_scplx *dt)
-{
-    int c = 0;
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) if (nc->mask_alpha) c++;
-    return c;
 }
 
 /* Total volume of all in-tets (mask_alpha). */
@@ -319,23 +309,18 @@ static int count_components(s_scplx *dt)
     return comps;
 }
 
-/* Number of real DT points (id >= 4) that are not a vertex of any in-tet. */
-static int count_dropped_points(const s_scplx *dt)
+/* Input points that are not a vertex of any in-tet: kept[i] is the DT vid of
+ * input i, or -1 (near-duplicate / redundant weighted point -> dropped too). */
+static int count_dropped_points(const s_scplx *dt, const int *kept, int N_in)
 {
-    int Npts = dt->points.N;
-    bool *used = calloc(Npts, sizeof(bool));
-    bool *real = calloc(Npts, sizeof(bool));
-    if (!used || !real) { free(used); free(real); return 0; }
-    for (s_ncell *nc = dt->head; nc; nc = nc->next) {
-        for (int i = 0; i < 4; i++) {
-            int v = nc->vertex_id[i];
-            if (v >= 4) real[v] = true;          /* appears in some real-ish tet */
-            if (nc->mask_alpha && v >= 4) used[v] = true;
-        }
-    }
+    bool *used = calloc(dt->points.N, sizeof(bool));
+    if (!used) return -1;
+    for (s_ncell *nc = dt->head; nc; nc = nc->next)
+        if (nc->mask_alpha)
+            for (int i = 0; i < 4; i++) used[nc->vertex_id[i]] = true;
     int dropped = 0;
-    for (int i = 4; i < Npts; i++) if (real[i] && !used[i]) dropped++;
-    free(used); free(real);
+    for (int i = 0; i < N_in; i++) if (kept[i] < 0 || !used[kept[i]]) dropped++;
+    free(used);
     return dropped;
 }
 
@@ -371,8 +356,9 @@ static bool covers_all(s_scplx *dt, double alpha, const double *r2cache,
     return true;
 }
 
-/* Smallest alpha (from the sorted real circumradii^2) covering all coverable
- * points.  Returns -1 if there is no real tet. */
+/* Smallest alpha (from the sorted real squared power radii) covering all
+ * coverable points.  May be <= 0 when weighted.  Returns NAN if there is no
+ * real non-degenerate tet or on allocation failure. */
 static double auto_alpha(s_scplx *dt)
 {
     int Npts = dt->points.N;
@@ -382,7 +368,7 @@ static double auto_alpha(s_scplx *dt)
     s_dynarray vals = dynarray_initialize(sizeof(double), 256);
     if (!coverable || !cov || !r2cache || !vals.items) {
         free(coverable); free(cov); free(r2cache); dynarray_free(&vals);
-        return -1.0;
+        return NAN;
     }
 
     int idx = 0;
@@ -390,12 +376,12 @@ static double auto_alpha(s_scplx *dt)
         r2cache[idx] = DBL_MAX;
         if (tet_touches_sentinel(nc)) continue;
         for (int i = 0; i < 4; i++) coverable[nc->vertex_id[i]] = true;
-        double r2 = tet_circumradius2(dt, nc);
+        double r2 = tet_power_radius2(dt, nc);
         if (r2 < DBL_MAX) { dynarray_push(&vals, &r2); r2cache[idx] = r2; }
     }
     if (vals.N == 0) {
         free(coverable); free(cov); free(r2cache); dynarray_free(&vals);
-        return -1.0;
+        return NAN;
     }
 
     qsort(vals.items, vals.N, sizeof(double), cmp_double);
@@ -407,7 +393,10 @@ static double auto_alpha(s_scplx *dt)
         if (covers_all(dt, v[mid], r2cache, coverable, cov, Npts)) { ans = mid; hi = mid - 1; }
         else lo = mid + 1;
     }
-    double alpha = v[ans] * (1.0 + 1e-9);
+    /* Nudge up by a relative 1e-9 so the exact predicate includes the tet
+     * whose radius set the threshold (towards +inf also when weighted and
+     * negative). */
+    double alpha = v[ans] >= 0 ? v[ans] * (1.0 + 1e-9) : v[ans] * (1.0 - 1e-9);
 
     free(coverable); free(cov); free(r2cache); dynarray_free(&vals);
     return alpha;
@@ -418,7 +407,9 @@ static double auto_alpha(s_scplx *dt)
 /* Boundary extraction + trimesh assembly                              */
 /* ------------------------------------------------------------------ */
 
-static s_trimesh boundary_to_trimesh(s_scplx *dt)
+/* old2new_out (length dt->points.N, nullable): DT vid -> surface vertex
+ * index, or -1 (left untouched on failure). */
+static s_trimesh boundary_to_trimesh(s_scplx *dt, int *old2new_out)
 {
     s_dynarray faces = dynarray_initialize(sizeof(int) * 3, 64);
     if (!faces.items) return trimesh_NAN;
@@ -469,6 +460,8 @@ static s_trimesh boundary_to_trimesh(s_scplx *dt)
     }
 
     s_trimesh out = trimesh_from_arrays(verts, Nv, tris, (int)faces.N, 0.0);
+    if (old2new_out && out.points.N > 0)   /* points are copied verbatim */
+        memcpy(old2new_out, old2new, sizeof(int) * Npts);
 
     free(old2new); free(verts); free(tris);
     dynarray_free(&faces);
@@ -480,11 +473,21 @@ static s_trimesh boundary_to_trimesh(s_scplx *dt)
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
 
-s_trimesh alpha_shape_3d(const s_points *pts, double alpha, double TOL_dup,
-                         s_ashape_info *info, s_random_context *rng)
+void free_alpha_shape(s_alpha_shape *as)
 {
-    if (info) *info = (s_ashape_info){0};
-    if (!pts || pts->N < 4) return trimesh_NAN;
+    if (!as) return;
+    free_trimesh(&as->surface);
+    *as = (s_alpha_shape){ .surface = trimesh_NAN, .alpha = NAN };
+}
+
+s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
+                             double alpha, double TOL_dup,
+                             s_random_context *rng, int *out_kept_idx)
+{
+    const s_alpha_shape FAIL = { .surface = trimesh_NAN, .alpha = NAN };
+    int N_in = pts ? pts->N : 0;
+    if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;
+    if (!pts || pts->N < 4) return FAIL;
 
     struct timespec _at; clock_gettime(CLOCK_MONOTONIC, &_at);
     double _t0 = _at.tv_sec + 1e-9 * _at.tv_nsec, _t1;
@@ -496,41 +499,61 @@ s_trimesh alpha_shape_3d(const s_points *pts, double alpha, double TOL_dup,
         _t0 = _t1; \
     } while (0)
 
-    s_scplx dt = construct_dt_3d(pts, NULL, true, TOL_dup, NULL, rng);
-    if (dt.N_ncells == 0) return trimesh_NAN;   /* degenerate / coplanar */
+    /* DT with the sentinels kept; kept[i] = DT vid of input i, or -1. */
+    int *kept = malloc(pts->N * sizeof(int));
+    if (!kept) return FAIL;
+    for (int i = 0; i < pts->N; i++) kept[i] = i;
+    s_dt_builder b = dt_builder_begin(pts, weights, TOL_dup, NULL, NULL, rng);
+    if (!b._stack) { free(kept); return FAIL; }
+    s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/true, NULL, kept, pts->N);
     ASHAPE_TICK("dt");
 
+    s_alpha_shape as = FAIL;
+    int *old2new = NULL;
+
     double alpha_used = alpha;
-    if (alpha_used <= 0.0) {
-        alpha_used = auto_alpha(&dt);
-        if (alpha_used <= 0.0) { free_complex(&dt); return trimesh_NAN; }
+    if (isnan(alpha_used)) {
+        alpha_used = auto_alpha(&dt);   /* NAN: degenerate (no real tet) / alloc */
+        if (isnan(alpha_used)) goto done;
     }
     ASHAPE_TICK("auto_alpha");
 
-    int n_in = mark_by_alpha(&dt, alpha_used);
-    if (n_in == 0) { free_complex(&dt); return trimesh_NAN; }
+    if (mark_by_alpha(&dt, alpha_used) == 0) goto done;   /* empty / degenerate */
     ASHAPE_TICK("mark");
 
     int promoted = repair_manifold(&dt);
     ASHAPE_TICK("repair");
 
-    s_trimesh mesh = boundary_to_trimesh(&dt);
+    old2new = malloc(dt.points.N * sizeof(int));
+    if (!old2new) goto done;
+    s_trimesh mesh = boundary_to_trimesh(&dt, old2new);
+    if (mesh.points.N == 0) goto done;
     ASHAPE_TICK("boundary");
 
-    if (info) {
-        info->alpha_used    = alpha_used;
-        info->N_promoted    = promoted;
-        info->N_tets_in     = count_in(&dt);
-        ASHAPE_TICK("count_in");
-        info->N_components  = count_components(&dt);
-        ASHAPE_TICK("components");
-        info->N_pts_dropped = count_dropped_points(&dt);
-        ASHAPE_TICK("dropped");
-        info->volume        = in_set_volume(&dt);
-        ASHAPE_TICK("volume");
-    }
+    int comps = count_components(&dt);
+    ASHAPE_TICK("components");
+    int dropped = count_dropped_points(&dt, kept, pts->N);
+    ASHAPE_TICK("dropped");
+    if (comps < 0 || dropped < 0) { free_trimesh(&mesh); goto done; }
+
+    as = (s_alpha_shape){
+        .surface       = mesh,
+        .alpha         = alpha_used,
+        .volume        = in_set_volume(&dt),
+        .N_components  = comps,
+        .N_promoted    = promoted,
+        .N_pts_dropped = dropped,
+    };
+    ASHAPE_TICK("volume");
+
+    if (out_kept_idx)
+        for (int i = 0; i < pts->N; i++)
+            out_kept_idx[i] = kept[i] >= 0 ? old2new[kept[i]] : -1;
 #undef ASHAPE_TICK
 
+done:
+    free(old2new);
+    free(kept);
     free_complex(&dt);
-    return mesh;
+    return as;
 }

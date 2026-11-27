@@ -16,7 +16,7 @@ endif()
 
 if (NOT TARGET geometry)
     # Optional parts of geometry that vor3d needs:
-    #  TESTS_POWER    test_orthosphere/test_orthosphere_w (dt.c, acplx.c, ashape.c)
+    #  TESTS_POWER    test_orthosphere/test_orthosphere_w (dt.c, acplx.c)
     #  LP             lp2_*/lp3_* LP feasibility, lp.h (vor3d.c, ncvx.c)
     #  TESTS_IMPLICIT itest_* exact implicit predicates (dt.c, cdt.c)
     set(GEOMETRY_COMPILE_TESTS_POWER ON CACHE BOOL "" FORCE)

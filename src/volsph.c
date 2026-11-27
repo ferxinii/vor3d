@@ -3,6 +3,7 @@
 #include "points.h"
 #include "scplx.h"
 #include "delaunay.h"
+#include "acplx.h"
 #include "hlibs/linalg.h"
 #include "./hlibs/hash.h"
 #include <math.h>
@@ -187,17 +188,27 @@ static void caps_intersection_2_spheres(double rA, double rB, double dAB,
     *cap_B = M_PI/3.0 * (t2 * t2 * (2*rB + lBA));
 }
 
+/* Per-ball caps of the 2-ball lens.  check_intersection: a contained ball
+ * takes the whole lens (B in A -> cap_B = vol(B), cap_A = 0), disjoint balls
+ * take nothing; without it the raw radical-plane caps are returned (caller
+ * guarantees a proper intersection).  cap_A + cap_B ==
+ * volume_intersection_2_spheres(rA, rB, dAB, check_intersection), bit-exact. */
+static void caps_2_spheres(double rA, double rB, double dAB, bool check_intersection,
+                           double *cap_A, double *cap_B)
+{
+    if (check_intersection) {
+        if (dAB + rB <= rA) { *cap_A = 0.0;              *cap_B = volume_sphere(rB); return; } /* B in A */
+        if (dAB + rA <= rB) { *cap_A = volume_sphere(rA); *cap_B = 0.0;             return; } /* A in B */
+        if (rA + rB <= dAB) { *cap_A = 0.0;              *cap_B = 0.0;              return; } /* disjoint */
+    }
+    caps_intersection_2_spheres(rA, rB, dAB, cap_A, cap_B);
+}
+
 double volume_intersection_2_spheres(double rA, double rB, double dAB,
                                      bool check_intersection)
 {
-    if (check_intersection) {
-        if (dAB + rB <= rA) return volume_sphere(rB);  /* B contained in A */
-        if (dAB + rA <= rB) return volume_sphere(rA);  /* A contained in B */
-        if (rA + rB <= dAB) return 0;
-    }
-
     double cap_A, cap_B;
-    caps_intersection_2_spheres(rA, rB, dAB, &cap_A, &cap_B);
+    caps_2_spheres(rA, rB, dAB, check_intersection, &cap_A, &cap_B);
     return cap_A + cap_B;
 }
 
@@ -341,57 +352,6 @@ static bool radical_center_face(s_point A, s_point B, s_point C,
     return true;
 }
 
-/* Radical center (equal-power point) of four balls: 3x3 solve with rows
- * 2(c_k - c_0), rhs (c_k - c_0).(c_k + c_0) - (w_k - w_0); rows scaled to
- * unit norm before partial pivoting.  For K-tets |Y - c_i| <= r_i (the in-K
- * condition), so Y is always local to the balls.  Returns 0 for
- * (near-)coplanar centers.  This is the weighted analogue of
- * circumcentre_tetrahedron (external/geometry) -- a separate numerical solve
- * (unit-row-normalized pivoting vs. centered/scaled), not guaranteed
- * bit-identical to it at zero weight, so the two are kept as distinct
- * functions rather than merged.  Each row's geometric part is normalized to
- * unit length before pivoting, so a pivot magnitude after partial pivoting is
- * a well-scaled quantity (bounded in [0,1], not an arbitrary-scale value) --
- * comparing it against EPS_degenerate is exactly the same kind of check
- * circumcentre_tetrahedron makes, just on a differently-conditioned solve.
- * A near-zero (not just exactly-zero) pivot means the four balls' radical
- * planes are nearly parallel: solving anyway would divide by a near-zero
- * number and silently return a wildly unstable point (seen in practice on
- * dense/large-N configurations with big weight spreads -- a plain double
- * solve like this one has no other way to signal that instability), so it
- * must be rejected the same way a truly-zero pivot already is. */
-int power_circumcentre_tetrahedron(const s_point c[4], const double w[4],
-                                   double EPS_degenerate, s_point *out)
-{
-    double A[3][4];
-    for (int k = 1; k <= 3; k++) {
-        s_point dk = subtract_points(c[k], c[0]);
-        s_point sk = sum_points(c[k], c[0]);
-        A[k-1][0] = 2*dk.x; A[k-1][1] = 2*dk.y; A[k-1][2] = 2*dk.z;
-        A[k-1][3] = dot_prod(dk, sk) - (w[k] - w[0]);
-        double n = sqrt(A[k-1][0]*A[k-1][0] + A[k-1][1]*A[k-1][1] + A[k-1][2]*A[k-1][2]);
-        if (n <= EPS_degenerate) return 0;
-        for (int j = 0; j < 4; j++) A[k-1][j] /= n;
-    }
-    for (int col = 0; col < 3; col++) {
-        int piv = col;
-        for (int r_ = col+1; r_ < 3; r_++)
-            if (fabs(A[r_][col]) > fabs(A[piv][col])) piv = r_;
-        if (piv != col)
-            for (int j = 0; j < 4; j++) { double t = A[col][j]; A[col][j] = A[piv][j]; A[piv][j] = t; }
-        if (fabs(A[col][col]) <= EPS_degenerate) return 0;
-        for (int r_ = 0; r_ < 3; r_++) {
-            if (r_ == col) continue;
-            double f = A[r_][col]/A[col][col];
-            for (int j = col; j < 4; j++) A[r_][j] -= f*A[col][j];
-        }
-    }
-    out->x = A[0][3]/A[0][0];
-    out->y = A[1][3]/A[1][1];
-    out->z = A[2][3]/A[2][2];
-    return 1;
-}
-
 /* Triple-intersection point P of three spheres (above the centers plane).
  * Returns false if the centers are (near-)collinear. */
 static bool triple_point_xyz(s_point A, s_point B, s_point C,
@@ -454,27 +414,41 @@ static void caps_intersection_3_spheres_xyz(s_point A, s_point B, s_point C,
 }
 
 
+/* Per-ball caps of the triple intersection.  check_intersection: same
+ * early-outs as before the split existed -- pairwise containment first (the
+ * triple reduces to the lens of the surviving two, via caps_2_spheres), then
+ * no pairwise overlap / no triple point -> all zero; without it the raw caps
+ * (caller guarantees a proper triple intersection).
+ * cap[0] + cap[1] + cap[2] == volume_intersection_3_spheres(..., check, ...),
+ * bit-exact (the padding zeros are exact). */
+static void caps_3_spheres(double rA, double rB, double rC,
+                           double dAB, double dAC, double dBC,
+                           bool check_intersection, double EPS_DEGEN, double cap[3])
+{
+    if (check_intersection) {
+        cap[0] = cap[1] = cap[2] = 0.0;
+        /* Pairwise containment, must come first before checking intersection existence */
+        if (dAB + rB <= rA) { caps_2_spheres(rB, rC, dBC, true, &cap[1], &cap[2]); return; }
+        if (dAB + rA <= rB) { caps_2_spheres(rA, rC, dAC, true, &cap[0], &cap[2]); return; }
+        if (dAC + rC <= rA) { caps_2_spheres(rB, rC, dBC, true, &cap[1], &cap[2]); return; }
+        if (dAC + rA <= rC) { caps_2_spheres(rA, rB, dAB, true, &cap[0], &cap[1]); return; }
+        if (dBC + rC <= rB) { caps_2_spheres(rA, rC, dAC, true, &cap[0], &cap[2]); return; }
+        if (dBC + rB <= rC) { caps_2_spheres(rA, rB, dAB, true, &cap[0], &cap[1]); return; }
+        /* Check all pairs intersect */
+        if (dAB >= rA + rB) return;
+        if (dAC >= rA + rC) return;
+        if (dBC >= rB + rC) return;
+        /* Check triple intersection */
+        if (!has_triple_intersection(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN)) return;
+    }
+    caps_intersection_3_spheres(rA, rB, rC, dAB, dAC, dBC, cap);
+}
+
 double volume_intersection_3_spheres(double rA, double rB, double rC, double dAB, double dAC, double dBC,
                                      bool check_intersection, double EPS_DEGEN)
 {
-    if (check_intersection) {
-        /* Pairwise containment, must come first before checking intersection existence */
-        if (dAB + rB <= rA) return volume_intersection_2_spheres(rB, rC, dBC, true);
-        if (dAB + rA <= rB) return volume_intersection_2_spheres(rA, rC, dAC, true);
-        if (dAC + rC <= rA) return volume_intersection_2_spheres(rB, rC, dBC, true);
-        if (dAC + rA <= rC) return volume_intersection_2_spheres(rA, rB, dAB, true);
-        if (dBC + rC <= rB) return volume_intersection_2_spheres(rA, rC, dAC, true);
-        if (dBC + rB <= rC) return volume_intersection_2_spheres(rA, rB, dAB, true);
-        /* Check all pairs intersect */
-        if (dAB >= rA + rB) return 0.0;
-        if (dAC >= rA + rC) return 0.0;
-        if (dBC >= rB + rC) return 0.0;
-        /* Check triple intersection */
-        if (!has_triple_intersection(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN)) return 0.0;
-    }
-
     double cap[3];
-    caps_intersection_3_spheres(rA, rB, rC, dAB, dAC, dBC, cap);
+    caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, EPS_DEGEN, cap);
     return cap[0] + cap[1] + cap[2];
 }
 
@@ -488,20 +462,27 @@ double volume_sphere(double r)
 
 double volume_union_2_spheres(s_point pA, double rA,
                               s_point pB, double rB,
-                              bool check_intersection)
+                              bool check_intersection, double *out_contrib)
 {   /* Inclusion-Exclusion principle */
     double VA = volume_sphere(rA);
     double VB = volume_sphere(rB);
 
     double dAB = distance(pA, pB);
-    double V_iAB = volume_intersection_2_spheres(rA, rB, dAB, check_intersection);
+    double cA, cB;
+    caps_2_spheres(rA, rB, dAB, check_intersection, &cA, &cB);
+    if (out_contrib) {
+        out_contrib[0] = VA - cA;
+        out_contrib[1] = VB - cB;
+    }
+    double V_iAB = cA + cB;
     return VA + VB - V_iAB;
 }
 
 double volume_union_3_spheres(s_point pA, double rA,
                               s_point pB, double rB,
                               s_point pC, double rC,
-                              bool check_intersection, double EPS_DEGEN)
+                              bool check_intersection, double EPS_DEGEN,
+                              double *out_contrib)
 {   /* Inclusion-Exclusion principle */
     double VA = volume_sphere(rA);
     double VB = volume_sphere(rB);
@@ -511,13 +492,24 @@ double volume_union_3_spheres(s_point pA, double rA,
     double dAC = distance(pA, pC);
     double dBC = distance(pB, pC);
 
-    double V_iAB = volume_intersection_2_spheres(rA, rB, dAB, check_intersection);
-    double V_iAC = volume_intersection_2_spheres(rA, rC, dAC, check_intersection);
-    double V_iBC = volume_intersection_2_spheres(rB, rC, dBC, check_intersection);
+    double cAB[2], cAC[2], cBC[2], c3[3];
+    caps_2_spheres(rA, rB, dAB, check_intersection, &cAB[0], &cAB[1]);
+    caps_2_spheres(rA, rC, dAC, check_intersection, &cAC[0], &cAC[1]);
+    caps_2_spheres(rB, rC, dBC, check_intersection, &cBC[0], &cBC[1]);
+    caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, EPS_DEGEN, c3);
 
-    double V_iABC = volume_intersection_3_spheres(rA, rB, rC, dAB, dAC, dBC, 
-                                                  check_intersection, EPS_DEGEN);
+    if (out_contrib) {   /* each ball: its sphere - its caps of the 3 lenses + its triple cap */
+        out_contrib[0] = VA; out_contrib[1] = VB; out_contrib[2] = VC;
+        out_contrib[0] -= cAB[0]; out_contrib[1] -= cAB[1];
+        out_contrib[0] -= cAC[0]; out_contrib[2] -= cAC[1];
+        out_contrib[1] -= cBC[0]; out_contrib[2] -= cBC[1];
+        out_contrib[0] += c3[0];  out_contrib[1] += c3[1];  out_contrib[2] += c3[2];
+    }
 
+    double V_iAB = cAB[0] + cAB[1];
+    double V_iAC = cAC[0] + cAC[1];
+    double V_iBC = cBC[0] + cBC[1];
+    double V_iABC = c3[0] + c3[1] + c3[2];
     return VA + VB + VC - V_iAB - V_iAC - V_iBC + V_iABC;
 }
 
@@ -593,7 +585,7 @@ static void tet_volume_split_power(const s_point c[4], const double r[4],
 
     s_point Y;
     s_point X[4];   /* X[k] = radical center of the face OMITTING vertex k */
-    bool ok = power_circumcentre_tetrahedron(c, w, EPS_DEGEN, &Y);
+    bool ok = circumcentre_tetrahedron_w(c, w, EPS_DEGEN, &Y);
     for (int k = 0; ok && k < 4; k++) {
         int f[3], n = 0;
         for (int t = 0; t < 4; t++) if (t != k) f[n++] = t;
@@ -678,8 +670,12 @@ static double union_core(const s_points *centers, const double radii[],
 
     s_hash_table ht_faces, ht_edges;
     bool *vertex_mark = malloc(dt.points.N * sizeof(bool));
-    extract_alpha_complex(&dt, true, 0, buff_ncellPTR,
-                          &ht_faces, &ht_edges, vertex_mark);
+    if (!vertex_mark || !alpha_complex_mark(&dt, true, 0, buff_ncellPTR,
+                                            &ht_faces, &ht_edges, vertex_mark)) {
+        free(weights); free(ball_of_point); free(ball_of_vid);
+        free_complex(&dt); free(vertex_mark);
+        return NAN;
+    }
 
     /* Compute volume of union.  Degenerate (near-zero-volume) tets MUST be
      * processed IN FULL: the formula distributes each lens/ball among incident
@@ -786,105 +782,25 @@ static double union_core(const s_points *centers, const double radii[],
 }
 
 
-/* 2-ball caps WITH the check_intersection early-outs of
- * volume_intersection_2_spheres: a contained (redundant) ball takes the whole
- * lens, disjoint balls take nothing.  cap_A + cap_B ==
- * volume_intersection_2_spheres(rA,rB,dAB, true). */
-static void caps_intersection_2_spheres_checked(double rA, double rB, double dAB,
-                                                double *cap_A, double *cap_B)
-{
-    if (dAB + rB <= rA) { *cap_A = 0.0;              *cap_B = volume_sphere(rB); return; } /* B in A */
-    if (dAB + rA <= rB) { *cap_A = volume_sphere(rA); *cap_B = 0.0;             return; } /* A in B */
-    if (rA + rB <= dAB) { *cap_A = 0.0;              *cap_B = 0.0;              return; } /* disjoint */
-    caps_intersection_2_spheres(rA, rB, dAB, cap_A, cap_B);
-}
-
-/* 3-ball caps WITH the check_intersection early-outs of
- * volume_intersection_3_spheres (same branch order / reductions): under
- * pairwise containment the triple reduces to the lens of the surviving two.
- * cap[0]+cap[1]+cap[2] == volume_intersection_3_spheres(...,true,...). */
-static void caps_intersection_3_spheres_checked(double rA, double rB, double rC,
-        double dAB, double dAC, double dBC, double EPS_DEGEN, double cap[3])
-{
-    cap[0] = cap[1] = cap[2] = 0.0;
-    if (dAB + rB <= rA) { caps_intersection_2_spheres_checked(rB, rC, dBC, &cap[1], &cap[2]); return; }
-    if (dAB + rA <= rB) { caps_intersection_2_spheres_checked(rA, rC, dAC, &cap[0], &cap[2]); return; }
-    if (dAC + rC <= rA) { caps_intersection_2_spheres_checked(rB, rC, dBC, &cap[1], &cap[2]); return; }
-    if (dAC + rA <= rC) { caps_intersection_2_spheres_checked(rA, rB, dAB, &cap[0], &cap[1]); return; }
-    if (dBC + rC <= rB) { caps_intersection_2_spheres_checked(rA, rC, dAC, &cap[0], &cap[2]); return; }
-    if (dBC + rB <= rC) { caps_intersection_2_spheres_checked(rA, rB, dAB, &cap[0], &cap[1]); return; }
-    if (dAB >= rA + rB) return;
-    if (dAC >= rA + rC) return;
-    if (dBC >= rB + rC) return;
-    if (!has_triple_intersection(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN)) return;
-    caps_intersection_3_spheres(rA, rB, rC, dAB, dAC, dBC, cap);
-}
-
-
 double volume_union_spheres(const s_points *centers, const double radii[centers->N],
-                            double EPS_DEGEN, double TOL_dup, s_dynarray *buff_ncellPTR)
+                            double EPS_DEGEN, double TOL_dup, s_dynarray *buff_ncellPTR,
+                            double *out_contrib)
 {
     int N = centers->N;
     if (N == 1) {
+        if (out_contrib) out_contrib[0] = volume_sphere(radii[0]);
         return volume_sphere(radii[0]);
     } else if (N == 2) {
         return volume_union_2_spheres(centers->p[0], radii[0],
                                       centers->p[1], radii[1],
-                                      true);
+                                      true, out_contrib);
     } else if (N == 3) {
         return volume_union_3_spheres(centers->p[0], radii[0],
                                       centers->p[1], radii[1],
                                       centers->p[2], radii[2],
-                                      true, EPS_DEGEN);
+                                      true, EPS_DEGEN, out_contrib);
     }
-    return union_core(centers, radii, EPS_DEGEN, TOL_dup, buff_ncellPTR, NULL);
-}
-
-
-void volume_contribution_spheres(const s_points *centers, const double radii[centers->N],
-                                 double EPS_DEGEN, double TOL_dup,
-                                 s_dynarray *buff_ncellPTR, double out_contrib[centers->N])
-{
-    int N = centers->N;
-    for (int i = 0; i < N; i++) out_contrib[i] = 0.0;
-
-    /* N=1,2,3 mirror the analytic totals of volume_union_spheres term by term,
-     * splitting every inclusion-exclusion intersection into its per-ball caps.
-     * Because the operations match exactly, sum_i out_contrib[i] equals the
-     * analytic union total, and the per-ball values are the power (Laguerre)
-     * partition (a redundant/contained ball gets 0). */
-    if (N == 1) {
-        out_contrib[0] = volume_sphere(radii[0]);
-        return;
-    }
-    if (N == 2) {
-        double cA, cB;
-        caps_intersection_2_spheres_checked(radii[0], radii[1],
-                distance(centers->p[0], centers->p[1]), &cA, &cB);
-        out_contrib[0] = volume_sphere(radii[0]) - cA;
-        out_contrib[1] = volume_sphere(radii[1]) - cB;
-        return;
-    }
-    if (N == 3) {
-        double rA = radii[0], rB = radii[1], rC = radii[2];
-        const s_point *P = centers->p;
-        double dAB = distance(P[0], P[1]);
-        double dAC = distance(P[0], P[2]);
-        double dBC = distance(P[1], P[2]);
-        out_contrib[0] = volume_sphere(rA);
-        out_contrib[1] = volume_sphere(rB);
-        out_contrib[2] = volume_sphere(rC);
-        double ca, cb;
-        caps_intersection_2_spheres_checked(rA, rB, dAB, &ca, &cb); out_contrib[0] -= ca; out_contrib[1] -= cb;
-        caps_intersection_2_spheres_checked(rA, rC, dAC, &ca, &cb); out_contrib[0] -= ca; out_contrib[2] -= cb;
-        caps_intersection_2_spheres_checked(rB, rC, dBC, &ca, &cb); out_contrib[1] -= ca; out_contrib[2] -= cb;
-        double c3[3];
-        caps_intersection_3_spheres_checked(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN, c3);
-        out_contrib[0] += c3[0]; out_contrib[1] += c3[1]; out_contrib[2] += c3[2];
-        return;
-    }
-
-    /* N >= 4: general RT + alpha-complex path.
-     * sum_i out_contrib[i] == volume_union_spheres total. */
-    union_core(centers, radii, EPS_DEGEN, TOL_dup, buff_ncellPTR, out_contrib);
+    /* N >= 4: general RT + alpha-complex path.  The returned total does not
+     * depend on out_contrib (the split only adds a parallel accumulation). */
+    return union_core(centers, radii, EPS_DEGEN, TOL_dup, buff_ncellPTR, out_contrib);
 }

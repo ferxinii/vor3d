@@ -5,10 +5,10 @@
  * checks: mesh validity, positive volume, the volume invariant (enclosed
  * volume == sum of in-tet volumes), the Euler characteristic / genus of closed
  * fixtures, connected-component counts, and auto-alpha coverage.  Writes each
- * surface to a .obj in the working directory.
+ * input cloud and surface to .vtk files in the working directory.
  */
 
-#include "ashape.h"
+#include "alpha.h"
 #include "trimesh.h"
 #include "points.h"
 #include "random.h"
@@ -75,22 +75,21 @@ static int euler_char(const s_trimesh *m)
     return m->points.N - (m->Nf * 3) / 2 + m->Nf;
 }
 
-static void print_info(const s_ashape_info *info)
+static void print_info(const s_alpha_shape *as)
 {
-    printf("        alpha=%.5g  tets_in=%d  promoted=%d  comps=%d  dropped=%d  vol=%.6g\n",
-           info->alpha_used, info->N_tets_in, info->N_promoted,
-           info->N_components, info->N_pts_dropped, info->volume);
+    printf("        alpha=%.5g  promoted=%d  comps=%d  dropped=%d  vol=%.6g\n",
+           as->alpha, as->N_promoted, as->N_components, as->N_pts_dropped, as->volume);
 }
 
 /* Common checks for every mesh expected to be a valid closed solid. */
-static void basic_checks(const s_trimesh *m, const s_ashape_info *info)
+static void basic_checks(const s_trimesh *m, const s_alpha_shape *as)
 {
-    print_info(info);
+    print_info(as);
     check("mesh is valid", trimesh_is_valid(m));
     if (!trimesh_is_valid(m)) return;
     double vt = volume_trimesh(m);
     check("positive volume", vt > 0.0);
-    double rel = fabs(vt - info->volume) / (info->volume > 0 ? info->volume : 1.0);
+    double rel = fabs(vt - as->volume) / (as->volume > 0 ? as->volume : 1.0);
     check("volume invariant (mesh == tets)", rel < 1e-9);
 }
 
@@ -176,14 +175,13 @@ static s_points dumbbell_cloud(s_random_context *rng, int seed_scale)
 
 
 /* Time just the extraction call (excludes cloud generation and file I/O). */
-static s_trimesh timed_ashape(const s_points *pts, double alpha, double tol,
-                              s_ashape_info *info)
+static s_alpha_shape timed_ashape(const s_points *pts, double alpha, double tol)
 {
     clock_t t0 = clock();
-    s_trimesh m = alpha_shape_3d(pts, alpha, tol, info, NULL);
+    s_alpha_shape as = alpha_shape_3d(pts, NULL, alpha, tol, NULL, NULL);
     double ms = 1000.0 * (double)(clock() - t0) / CLOCKS_PER_SEC;
     printf("        [extract] %.1f ms  (%d input pts)\n", ms, pts->N);
-    return m;
+    return as;
 }
 
 
@@ -193,16 +191,16 @@ static void case_sphere(s_random_context *rng)
 {
     printf("  Case: sphere cloud (2000 pts, r=1)\n");
     s_points pts = ball_cloud(rng, 2000, 1.0, (s_point){{{0,0,0}}});
-    s_ashape_info info;
-    s_trimesh m = timed_ashape(&pts, 0.04, 1e-9, &info);  /* alpha = 0.2^2 */
-    basic_checks(&m, &info);
+    s_alpha_shape as = timed_ashape(&pts, 0.04, 1e-9);  /* alpha = 0.2^2 */
+    s_trimesh m = as.surface;
+    basic_checks(&m, &as);
     if (trimesh_is_valid(&m)) {
         check("sphere genus 0 (Euler 2)", euler_char(&m) == 2);
-        check("one component", info.N_components == 1);
+        check("one component", as.N_components == 1);
         check("volume below hull", volume_trimesh(&m) < 4.19);   /* 4/3 pi */
     }
     dump_case("ashape_sphere", &pts, &m);
-    free_trimesh(&m);
+    free_alpha_shape(&as);
     free_points(&pts);
 }
 
@@ -210,14 +208,14 @@ static void case_torus(s_random_context *rng)
 {
     printf("  Case: torus cloud (6000 pts, R=1, r=0.3)\n");
     s_points pts = torus_cloud(rng, 6000, 1.0, 0.3);
-    s_ashape_info info;
-    s_trimesh m = timed_ashape(&pts, 0.02, 1e-9, &info);  /* alpha ~ 0.14^2 */
-    basic_checks(&m, &info);
+    s_alpha_shape as = timed_ashape(&pts, 0.02, 1e-9);  /* alpha ~ 0.14^2 */
+    s_trimesh m = as.surface;
+    basic_checks(&m, &as);
     if (trimesh_is_valid(&m)) {
         check("torus genus 1 (Euler 0)", euler_char(&m) == 0);
     }
     dump_case("ashape_torus", &pts, &m);
-    free_trimesh(&m);
+    free_alpha_shape(&as);
     free_points(&pts);
 }
 
@@ -229,15 +227,15 @@ static void case_torus_auto(s_random_context *rng)
 {
     printf("  Case: torus cloud, AUTO alpha\n");
     s_points pts = torus_cloud(rng, 6000, 1.0, 0.3);
-    s_ashape_info info;
-    s_trimesh m = timed_ashape(&pts, -1.0, 1e-9, &info);
-    basic_checks(&m, &info);
+    s_alpha_shape as = timed_ashape(&pts, NAN, 1e-9);
+    s_trimesh m = as.surface;
+    basic_checks(&m, &as);
     if (trimesh_is_valid(&m)) {
-        check("auto covers all points (dropped 0)", info.N_pts_dropped == 0);
-        check("single component", info.N_components == 1);
+        check("auto covers all points (dropped 0)", as.N_pts_dropped == 0);
+        check("single component", as.N_components == 1);
     }
     dump_case("ashape_torus_auto", &pts, &m);
-    free_trimesh(&m);
+    free_alpha_shape(&as);
     free_points(&pts);
 }
 
@@ -245,15 +243,15 @@ static void case_sphere_auto(s_random_context *rng)
 {
     printf("  Case: sphere cloud, AUTO alpha\n");
     s_points pts = ball_cloud(rng, 2000, 1.0, (s_point){{{0,0,0}}});
-    s_ashape_info info;
-    s_trimesh m = timed_ashape(&pts, -1.0, 1e-9, &info);
-    basic_checks(&m, &info);
+    s_alpha_shape as = timed_ashape(&pts, NAN, 1e-9);
+    s_trimesh m = as.surface;
+    basic_checks(&m, &as);
     if (trimesh_is_valid(&m)) {
-        check("auto covers all points (dropped 0)", info.N_pts_dropped == 0);
-        check("single component", info.N_components == 1);
+        check("auto covers all points (dropped 0)", as.N_pts_dropped == 0);
+        check("single component", as.N_components == 1);
     }
     dump_case("ashape_sphere_auto", &pts, &m);
-    free_trimesh(&m);
+    free_alpha_shape(&as);
     free_points(&pts);
 }
 
@@ -265,14 +263,14 @@ static void case_two_clusters(s_random_context *rng)
     s_points pts = { .N = a.N + b.N, .p = malloc(sizeof(s_point)*(a.N+b.N)) };
     for (int i = 0; i < a.N; i++) pts.p[i] = a.p[i];
     for (int i = 0; i < b.N; i++) pts.p[a.N+i] = b.p[i];
-    s_ashape_info info;
-    s_trimesh m = timed_ashape(&pts, 0.04, 1e-9, &info);
-    basic_checks(&m, &info);
+    s_alpha_shape as = timed_ashape(&pts, 0.04, 1e-9);
+    s_trimesh m = as.surface;
+    basic_checks(&m, &as);
     if (trimesh_is_valid(&m)) {
-        check("two components", info.N_components == 2);
+        check("two components", as.N_components == 2);
     }
     dump_case("ashape_two_clusters", &pts, &m);
-    free_trimesh(&m);
+    free_alpha_shape(&as);
     free_points(&pts); free_points(&a); free_points(&b);
 }
 
@@ -281,11 +279,11 @@ static void case_lshape(s_random_context *rng)
     printf("  Case: L-shape (jittered grid, notched cube)\n");
     double h = 0.04;
     s_points pts = lshape_cloud(rng, h);
-    s_ashape_info info;
     /* Fixed alpha ~ (2.5h)^2 fills the interior solidly while leaving the
      * empty notch carved out. */
-    s_trimesh m = timed_ashape(&pts, (2.5*h)*(2.5*h), 1e-9, &info);
-    basic_checks(&m, &info);
+    s_alpha_shape as = timed_ashape(&pts, (2.5*h)*(2.5*h), 1e-9);
+    s_trimesh m = as.surface;
+    basic_checks(&m, &as);
     if (trimesh_is_valid(&m)) {
         double vt = volume_trimesh(&m);
         printf("        L-volume=%.4g (analytic 0.75, cube hull ~1)\n", vt);
@@ -298,7 +296,7 @@ static void case_lshape(s_random_context *rng)
         check("volume in solid range [0.55,0.85]", vt > 0.55 && vt < 0.85);
     }
     dump_case("ashape_lshape", &pts, &m);
-    free_trimesh(&m);
+    free_alpha_shape(&as);
     free_points(&pts);
 }
 
@@ -308,22 +306,22 @@ static void case_repair_stress(s_random_context *rng)
     int all_ok = 1, comp_min = 1e9, comp_max = 0;
     for (int s = 0; s < 12; s++) {
         s_points pts = dumbbell_cloud(rng, s * 13);
-        s_ashape_info info;
-        s_trimesh m = timed_ashape(&pts, 0.09, 1e-9, &info);   /* alpha = 0.3^2 */
+        s_alpha_shape as = timed_ashape(&pts, 0.09, 1e-9);   /* alpha = 0.3^2 */
+        s_trimesh m = as.surface;
         int ok = trimesh_is_valid(&m);
         if (ok) {
             double vt = volume_trimesh(&m);
-            double rel = fabs(vt - info.volume) / (info.volume > 0 ? info.volume : 1.0);
+            double rel = fabs(vt - as.volume) / (as.volume > 0 ? as.volume : 1.0);
             if (!(vt > 0.0 && rel < 1e-9)) ok = 0;
         }
-        if (info.N_components < comp_min) comp_min = info.N_components;
-        if (info.N_components > comp_max) comp_max = info.N_components;
+        if (as.N_components < comp_min) comp_min = as.N_components;
+        if (as.N_components > comp_max) comp_max = as.N_components;
         printf("        seed %2d: comps=%d promoted=%d vol=%.4g%s\n",
-               s, info.N_components, info.N_promoted, info.volume,
+               s, as.N_components, as.N_promoted, as.volume,
                ok ? "" : "  <-- FAILED");
         if (!ok) all_ok = 0;
         if (s == 0) dump_case("ashape_dumbbell", &pts, &m);
-        free_trimesh(&m);
+        free_alpha_shape(&as);
         free_points(&pts);
     }
     printf("        components across seeds: min=%d max=%d\n", comp_min, comp_max);
@@ -332,18 +330,18 @@ static void case_repair_stress(s_random_context *rng)
 
 static void case_degenerate(void)
 {
-    printf("  Case: degenerate inputs -> trimesh_NAN\n");
+    printf("  Case: degenerate inputs -> failure (alpha NAN, surface trimesh_NAN)\n");
     s_points p3 = { .N = 3, .p = malloc(sizeof(s_point)*3) };
     p3.p[0]=(s_point){{{0,0,0}}}; p3.p[1]=(s_point){{{1,0,0}}}; p3.p[2]=(s_point){{{0,1,0}}};
-    s_trimesh m3 = alpha_shape_3d(&p3, 1.0, 1e-9, NULL, NULL);
-    check("3 points -> invalid", !trimesh_is_valid(&m3));
-    free_trimesh(&m3); free_points(&p3);
+    s_alpha_shape a3 = alpha_shape_3d(&p3, NULL, 1.0, 1e-9, NULL, NULL);
+    check("3 points -> invalid", isnan(a3.alpha) && !trimesh_is_valid(&a3.surface));
+    free_alpha_shape(&a3); free_points(&p3);
 
     s_points pc = { .N = 25, .p = malloc(sizeof(s_point)*25) };
     for (int i = 0; i < 25; i++) pc.p[i] = (s_point){{{ (double)(i%5), (double)(i/5), 0.0 }}};
-    s_trimesh mc = alpha_shape_3d(&pc, 100.0, 1e-9, NULL, NULL);
-    check("coplanar -> invalid", !trimesh_is_valid(&mc));
-    free_trimesh(&mc); free_points(&pc);
+    s_alpha_shape ac = alpha_shape_3d(&pc, NULL, 100.0, 1e-9, NULL, NULL);
+    check("coplanar -> invalid", isnan(ac.alpha) && !trimesh_is_valid(&ac.surface));
+    free_alpha_shape(&ac); free_points(&pc);
 }
 
 

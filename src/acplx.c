@@ -1,13 +1,18 @@
-
+#include "acplx.h"
+#include "alpha.h"
+#include "delaunay.h"
 #include "scplx.h"
 #include "./hlibs/hash.h"
 #include "./hlibs/dynarray.h"
 #include "gtests.h"
 #include <float.h>
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 
 /* Test for every simplex: return true if simplex satisfies radius and conflict conditions */
-static bool tetra_test(const s_scplx *scplx, const s_ncell *nc, double alpha, bool has_big_tetra)
+bool acplx_tet_in(const s_scplx *scplx, const s_ncell *nc, double alpha, bool has_big_tetra)
 {   /* Always conflict free, so only check radius condition */
     if (has_big_tetra && (nc->vertex_id[0] < 4 || nc->vertex_id[1] < 4 ||
                           nc->vertex_id[2] < 4 || nc->vertex_id[3] < 4 )) {
@@ -310,22 +315,28 @@ static int mark_recursive_ncell(s_ncell *nc, s_hash_table *ht_faces,
 }
 
 
-void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_dynarray *buff_ncellPTR,
-                           s_hash_table *out_faces, s_hash_table *out_edges, 
-                           bool *out_vertices)
+int alpha_complex_mark(s_scplx *scplx, bool has_big_tetra, double alpha, s_dynarray *buff_ncellPTR,
+                       s_hash_table *out_faces, s_hash_table *out_edges,
+                       bool *out_vertices)
 {
     int N_tetra = scplx->N_ncells;
-    s_hash_table ht_faces; hash_init(&ht_faces, sizeof(int)*3, sizeof(bool), N_tetra*4, 
-                                     N_tetra*4, hash_fun_faces, hash_eq_faces, NULL);
-    s_hash_table ht_edges; hash_init(&ht_edges, sizeof(int)*2, sizeof(bool), N_tetra*6, 
-                                     N_tetra*6, hash_fun_edges, hash_eq_edges, NULL);
-    s_vertex_mark *vmark = calloc(scplx->points.N, sizeof(s_vertex_mark));
+    s_hash_table ht_faces, ht_edges;
+    s_vertex_mark *vmark = NULL;
+    if (!hash_init(&ht_faces, sizeof(int)*3, sizeof(bool), N_tetra*4,
+                   N_tetra*4, hash_fun_faces, hash_eq_faces, NULL)) return 0;
+    if (!hash_init(&ht_edges, sizeof(int)*2, sizeof(bool), N_tetra*6,
+                   N_tetra*6, hash_fun_edges, hash_eq_edges, NULL)) {
+        hash_free(&ht_faces);
+        return 0;
+    }
+    vmark = calloc(scplx->points.N, sizeof(s_vertex_mark));
+    if (!vmark) goto fail;
     bool f = false;
 
     /* Detect ncells */
     for (s_ncell *nc = scplx->head; nc; nc = nc->next) {
-        if (tetra_test(scplx, nc, alpha, has_big_tetra))
-            mark_recursive_ncell(nc, &ht_faces, &ht_edges, vmark);
+        if (acplx_tet_in(scplx, nc, alpha, has_big_tetra))
+            if (!mark_recursive_ncell(nc, &ht_faces, &ht_edges, vmark)) goto fail;
     }
 
     /* Detect faces */
@@ -333,9 +344,9 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_d
         int face_vid[3]; extract_ids_face(nc, 2, &i, face_vid); sort3(face_vid);
         if (!hash_get(&ht_faces, face_vid)) { 
             if (face_test(scplx, nc, i, alpha, has_big_tetra)) {
-                mark_recursive_face(face_vid, &ht_faces, &ht_edges, vmark);
+                if (!mark_recursive_face(face_vid, &ht_faces, &ht_edges, vmark)) goto fail;
             } else {
-                hash_insert(&ht_faces, face_vid, &f);
+                if (!hash_insert(&ht_faces, face_vid, &f)) goto fail;
             }
         }
     }
@@ -346,10 +357,9 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_d
             int edge_vid[2] = {nc->vertex_id[i], nc->vertex_id[j]}; sort2(edge_vid);
             if (!hash_get(&ht_edges, edge_vid)) {
                 if (edge_test(scplx, nc, (int[2]){i,j}, alpha, has_big_tetra)) {
-                    mark_recursive_edge(edge_vid, &ht_edges, vmark);
+                    if (!mark_recursive_edge(edge_vid, &ht_edges, vmark)) goto fail;
                 } else {
-                    bool f = false;
-                    hash_insert(&ht_edges, edge_vid, &f);
+                    if (!hash_insert(&ht_edges, edge_vid, &f)) goto fail;
                 }
             }
         }
@@ -375,8 +385,170 @@ void extract_alpha_complex(s_scplx *scplx, bool has_big_tetra, double alpha, s_d
     *out_faces = ht_faces;
     *out_edges = ht_edges;
     for (int i=0; i<scplx->points.N; i++) out_vertices[i] = vmark[i].in_acplx;
-    
+
     free(vmark);
+    return 1;
+
+fail:
+    hash_free(&ht_faces);
+    hash_free(&ht_edges);
+    free(vmark);
+    return 0;
 }
 
 
+
+
+
+/* ------------------------------------------------------------------------- */
+/* Public API: alpha_complex_3d                                              */
+/* ------------------------------------------------------------------------- */
+
+void free_alpha_complex(s_alpha_complex *ac)
+{
+    if (!ac) return;
+    free(ac->points.p);
+    free(ac->weights);
+    free(ac->tets);
+    free(ac->faces);
+    free(ac->edges);
+    *ac = (s_alpha_complex){ .alpha = NAN };
+}
+
+static int cmp_lex(const int *a, const int *b, int k)
+{
+    for (int i = 0; i < k; i++) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    return 0;
+}
+static int cmp_int2(const void *a, const void *b) { return cmp_lex(a, b, 2); }
+static int cmp_int3(const void *a, const void *b) { return cmp_lex(a, b, 3); }
+static int cmp_int4(const void *a, const void *b) { return cmp_lex(a, b, 4); }
+
+/* Collect the keys (k sorted DT vids) of every entry of ht whose bool value is
+ * true, remapped through k_of_vid (monotone, so each record stays ascending),
+ * into a fresh array sorted lexicographically.  Returns the count, or -1 on
+ * allocation failure.  *out is NULL when the count is 0. */
+static int collect_true_keys(const s_hash_table *ht, int k, const int *k_of_vid, int **out)
+{
+    *out = NULL;
+    int n = 0;
+    for (size_t b = 0; b < ht->nbuckets; b++)
+        for (s_hash_entry *e = ht->buckets[b]; e; e = e->next)
+            if (*(bool *)((char *)e + ht->value_offset)) n++;
+    if (n == 0) return 0;
+    int *arr = malloc((size_t)n * k * sizeof(int));
+    if (!arr) return -1;
+    int m = 0;
+    for (size_t b = 0; b < ht->nbuckets; b++)
+        for (s_hash_entry *e = ht->buckets[b]; e; e = e->next) {
+            if (!*(bool *)((char *)e + ht->value_offset)) continue;
+            const int *key = entry_key(e);
+            for (int j = 0; j < k; j++) arr[m*k + j] = k_of_vid[key[j]];
+            m++;
+        }
+    qsort(arr, n, k * sizeof(int), k == 2 ? cmp_int2 : cmp_int3);
+    *out = arr;
+    return n;
+}
+
+s_alpha_complex alpha_complex_3d(const s_points *pts, const double *weights,
+                                 double alpha, double TOL_dup,
+                                 s_random_context *rng, int *out_kept_idx)
+{
+    const s_alpha_complex FAIL = { .alpha = NAN };
+    int N_in = pts ? pts->N : 0;
+    if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;
+    if (!pts || pts->N < 4 || isnan(alpha)) return FAIL;
+
+    /* 1. DT with the sentinels kept; kept[i] = DT vid of input i, or -1. */
+    int *kept = malloc(pts->N * sizeof(int));
+    if (!kept) return FAIL;
+    for (int i = 0; i < pts->N; i++) kept[i] = i;
+    s_dt_builder b = dt_builder_begin(pts, weights, TOL_dup, NULL, NULL, rng);
+    if (!b._stack) { free(kept); return FAIL; }
+    s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/true, NULL, kept, pts->N);
+
+    bool has_real_tet = false;
+    for (s_ncell *nc = dt.head; nc && !has_real_tet; nc = nc->next)
+        has_real_tet = nc->vertex_id[0] >= 4 && nc->vertex_id[1] >= 4 &&
+                       nc->vertex_id[2] >= 4 && nc->vertex_id[3] >= 4;
+    if (!has_real_tet) { free(kept); free_complex(&dt); return FAIL; }
+
+    /* 2. Mark K. */
+    s_alpha_complex ac = { .alpha = alpha };
+    s_hash_table ht_faces, ht_edges;
+    bool marked = false;
+    int *k_of_vid = NULL;
+    bool *vin = malloc(dt.points.N * sizeof(bool));
+    s_dynarray buff = dynarray_initialize(sizeof(s_ncell *), 64);
+    if (!vin || !buff.items) goto fail;
+    if (!alpha_complex_mark(&dt, true, alpha, &buff, &ht_faces, &ht_edges, vin)) goto fail;
+    marked = true;
+
+    /* 3. Compact the vertices of K: DT vid -> K index (monotone in vid). */
+    k_of_vid = malloc(dt.points.N * sizeof(int));
+    if (!k_of_vid) goto fail;
+    int nv = 0;
+    for (int v = 0; v < dt.points.N; v++) k_of_vid[v] = (v >= 4 && vin[v]) ? nv++ : -1;
+    if (nv > 0) {
+        ac.points.p = malloc(nv * sizeof(s_point));
+        if (!ac.points.p) goto fail;
+        if (weights) {
+            ac.weights = malloc(nv * sizeof(double));
+            if (!ac.weights) goto fail;
+        }
+        for (int v = 4; v < dt.points.N; v++) {
+            if (k_of_vid[v] < 0) continue;
+            ac.points.p[k_of_vid[v]] = dt.points.p[v];
+            if (weights) ac.weights[k_of_vid[v]] = dt.weights[v];
+        }
+    }
+    ac.points.N = nv;
+
+    /* 4. Simplices.  mark only sets mask_alpha on real tets (sentinel tets fail
+     * acplx_tet_in), and every vertex of a K-simplex is in K. */
+    int nt = 0;
+    for (s_ncell *nc = dt.head; nc; nc = nc->next) nt += nc->mask_alpha;
+    if (nt > 0) {
+        ac.tets = malloc((size_t)nt * 4 * sizeof(int));
+        if (!ac.tets) goto fail;
+        int m = 0;
+        for (s_ncell *nc = dt.head; nc; nc = nc->next) {
+            if (!nc->mask_alpha) continue;
+            int t[4];
+            for (int j = 0; j < 4; j++) t[j] = k_of_vid[nc->vertex_id[j]];
+            sort4(t);
+            memcpy(&ac.tets[4*m++], t, sizeof t);
+        }
+        qsort(ac.tets, nt, 4 * sizeof(int), cmp_int4);
+    }
+    ac.N_tets = nt;
+    ac.N_faces = collect_true_keys(&ht_faces, 3, k_of_vid, &ac.faces);
+    ac.N_edges = collect_true_keys(&ht_edges, 2, k_of_vid, &ac.edges);
+    if (ac.N_faces < 0 || ac.N_edges < 0) goto fail;
+
+    /* 5. Input -> output map. */
+    if (out_kept_idx)
+        for (int i = 0; i < pts->N; i++)
+            out_kept_idx[i] = kept[i] >= 0 ? k_of_vid[kept[i]] : -1;
+
+    hash_free(&ht_faces);
+    hash_free(&ht_edges);
+    dynarray_free(&buff);
+    free(vin);
+    free(k_of_vid);
+    free(kept);
+    free_complex(&dt);
+    return ac;
+
+fail:   /* collect_true_keys leaves its *out NULL on failure, so ac is freeable */
+    free_alpha_complex(&ac);
+    if (marked) { hash_free(&ht_faces); hash_free(&ht_edges); }
+    if (buff.items) dynarray_free(&buff);
+    free(vin);
+    free(k_of_vid);
+    free(kept);
+    free_complex(&dt);
+    if (out_kept_idx) for (int i = 0; i < pts->N; i++) out_kept_idx[i] = -1;
+    return FAIL;
+}
