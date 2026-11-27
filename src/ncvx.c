@@ -902,8 +902,8 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
  * IMPROVE_CONVEX.md Idea C. Builds the convex Voronoi diagram with the same
  * exact LP-feasibility clip the non-convex route uses (no mirror points).
  * The convex bounding polytope bp is fan-tetrahedralized from an interior
- * center (bp->CM -- the vertex centroid of the hull points, strictly interior
- * to a convex hull): one tet {center, f0, f1, f2} per bp triangular face.
+ * center (domain->convh_vertex_avg, strictly interior to a convex hull): one
+ * tet {center, f0, f1, f2} per bp triangular face.
  * These tets partition bp exactly, so the per-tet clip machinery applies
  * verbatim. The 3 internal faces of each fan tet produce only vertices that
  * lie inside bp; pooling every fan tet's clip vertices for one cell and hulling
@@ -1552,7 +1552,7 @@ static void nface_seed_line(const s_convh *ch, const struct nface_geom *G,
  * exhaustive Nf scan as safety net. Complete for any cell; used when the
  * N-face path has no surface evidence for the cell, its hull fails, or the
  * edge-walk hit a degeneracy. Returns 1 OK, 0 error. */
-static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
+static int fan_clip_pool(const s_convh *bp, const s_points *real_seeds,
                          const double *seed_weights,
                          const struct ncvx_cell_adjacency *adj, int i,
                          const int *vv, int n_vtx, const int *ve, int n_edge,
@@ -1561,12 +1561,12 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
                          s_dynarray *fqueue, int *resolved,
                          double EPS_DEG, s_dynarray *pts)
 {
-    int Nf = bp->convh.Nf;
+    int Nf = bp->Nf;
     s_point s = real_seeds->p[i];
     double s_w = seed_weights ? seed_weights[i] : 0.0;
     if (n_vtx > 0) memset(resolved, 0, sizeof(int) * (size_t)n_vtx);
     pts->N = 0;
-    int start = fan_tet_of_point(&bp->convh, center, s);
+    int start = fan_tet_of_point(bp, center, s);
     if (start >= 0) {
         (*fstamp)++;
         fqueue->N = 0;
@@ -1574,7 +1574,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
         if (!dynarray_push(fqueue, &start)) return 0;
         for (unsigned qh = 0; qh < fqueue->N; qh++) {
             int fi; dynarray_get_value(fqueue, qh, &fi);
-            s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
+            s_point fc[3]; convh_get_face(bp, fi, fc);
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
             if (!lp3_vcell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;  /* frontier */
             if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
@@ -1593,7 +1593,7 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
     if (pts->N == 0) {
         if (n_vtx > 0) memset(resolved, 0, sizeof(int) * (size_t)n_vtx);
         for (int fi = 0; fi < Nf; fi++) {
-            s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
+            s_point fc[3]; convh_get_face(bp, fi, fc);
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
             if (!lp3_vcell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;
             if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
@@ -1615,13 +1615,12 @@ static int fan_clip_pool(const s_bpoly *bp, const s_points *real_seeds,
  * fails, and all cells after an edge-walk anomaly fall back to the fan clip
  * (fan_clip_pool). Returns 1 on
  * success, 0 on failure. */
-static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
-                          s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
-                          double EPS_DEG, s_vcell *vcells)
+static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *real_seeds,
+                            s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
+                            double EPS_DEG, s_vcell *vcells)
 {
     int N = real_seeds->N;
-    int Nf = bp->convh.Nf;
-    s_point center = bp->CM;
+    int Nf = bp->Nf;
     int rc = 0;
     const double *seed_weights = seed_dt->weights;   /* NULL = unweighted */
 
@@ -1650,9 +1649,9 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
     struct nface_geom geom = {0};
     if (!hull_seed || !resolved || !ccbuf.items || !pts.items || !face_stamp ||
         !fqueue.items || !precs.items || !frecs.items ||
-        !build_face_adjacency(&bp->convh, &fadj, &bp_edges, &n_bp_edges) ||
-        !build_vertex_faces(&bp->convh, &vf_off, &vf_lst) ||
-        !nface_geom_build(&bp->convh, center, &geom))
+        !build_face_adjacency(bp, &fadj, &bp_edges, &n_bp_edges) ||
+        !build_vertex_faces(bp, &vf_off, &vf_lst) ||
+        !nface_geom_build(bp, center, &geom))
         goto err;
 
     for (s_ncell *t = seed_dt->head; t; t = t->next) {
@@ -1666,14 +1665,14 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
      * force_fan drops the whole diagram to the fan path on any walk anomaly. */
     int force_fan = 0;
     if (!force_fan) {
-        if (!compute_vertex_owners(&bp->convh.points, real_seeds, seed_dt, adj, N,
+        if (!compute_vertex_owners(&bp->points, real_seeds, seed_dt, adj, N,
                                    &owner, &tie))
             goto err;
-        int nv = bp->convh.points.N;
+        int nv = bp->points.N;
         for (int v = 0; v < nv && !force_fan; v++) {
             int m = owner[v];
             if (m < 0 || m >= N) continue;
-            s_point V = bp->convh.points.p[v];
+            s_point V = bp->points.p[v];
             /* pool V + seed every incident face; a hull point unused by any face
              * (interior of the point cloud) has no faces and only pools -- its
              * point lies inside bp, harmless for the hull. */
@@ -1708,11 +1707,11 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
             int va = bp_edges[4*e+0], vb = bp_edges[4*e+1];
             int ef1 = bp_edges[4*e+2], ef2 = bp_edges[4*e+3];
             int r = convex_edge_walk(real_seeds, seed_weights, adj, N,
-                                     bp->convh.points.p[va], bp->convh.points.p[vb],
+                                     bp->points.p[va], bp->points.p[vb],
                                      owner[va], ef1, ef2, &precs, &frecs);
             if (r == 0) goto err;
             if (r == -1) {
-                fprintf(stderr, "clip_convex_bp: edge-walk anomaly on bp edge %d "
+                fprintf(stderr, "clip_convex_hull: edge-walk anomaly on bp edge %d "
                         "(degenerate tie); using fan clip for this diagram\n", e);
                 force_fan = 1;
             }
@@ -1749,8 +1748,8 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
          * computed for every cell. */
         double clear2 = 1e300;   /* squared clearance to nearest bp face plane */
         for (int fi = 0; fi < Nf; fi++) {
-            s_point nrm = bp->convh.fnormals[fi];
-            s_point fp  = bp->convh.points.p[bp->convh.faces[3*fi]];
+            s_point nrm = bp->fnormals[fi];
+            s_point fp  = bp->points.p[bp->faces[3*fi]];
             double g = dot_prod(nrm, subtract_points(fp, s));
             double n2 = norm_squared(nrm);
             if (n2 <= 0) continue;
@@ -1814,7 +1813,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                     if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &cc)) continue;
                     double r2 = norm_squared(subtract_points(cc, s));
                     if (r2 >= clear2 * (1.0 - 1e-9) &&
-                        !nface_dual_in_bp(&bp->convh, fadj, &geom, center, cc, s,
+                        !nface_dual_in_bp(bp, fadj, &geom, center, cc, s,
                                           tetc[1], tetc[2], tetc[3]))
                         continue;
                     if (!dynarray_push(&pts, &cc)) goto err;
@@ -1859,7 +1858,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                         if (norm_squared(subtract_points(cc1, s)) < clear2m &&
                             norm_squared(subtract_points(cc2, s)) < clear2m)
                             continue;                        /* whole edge inside bp */
-                        nface_seed_line(&bp->convh, &geom, cc1,
+                        nface_seed_line(bp, &geom, cc1,
                                         subtract_points(cc2, cc1), 0.0, 1.0,
                                         fstamp, face_stamp, &fqueue, &seed_ok);
                     } else if (c1 >= 0 || c2 >= 0) {         /* half-infinite edge */
@@ -1876,7 +1875,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                                                subtract_points(t2, s));
                         if (dot_prod(u, subtract_points(real_seeds->p[a], s)) > 0)
                             u = (s_point){ .x = -u.x, .y = -u.y, .z = -u.z };
-                        nface_seed_line(&bp->convh, &geom, cc1, u, 0.0, 1e30,
+                        nface_seed_line(bp, &geom, cc1, u, 0.0, 1e30,
                                         fstamp, face_stamp, &fqueue, &seed_ok);
                     } else {                                 /* full line (tiny N) */
                         s_point u = cross_prod(subtract_points(t1, s),
@@ -1888,7 +1887,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                                           dot_prod(u, s) }, x[3];
                         if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) != 3) continue;
                         s_point p0 = { .x = x[0], .y = x[1], .z = x[2] };
-                        nface_seed_line(&bp->convh, &geom, p0, u, -1e30, 1e30,
+                        nface_seed_line(bp, &geom, p0, u, -1e30, 1e30,
                                         fstamp, face_stamp, &fqueue, &seed_ok);
                     }
                 }
@@ -1900,9 +1899,9 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                  * flooded faces expand only when they may truly hit the cell. */
                 for (unsigned qh = 0; qh < fqueue.N; qh++) {
                     int fi; dynarray_get_value(&fqueue, qh, &fi);
-                    s_point fc[3]; convh_get_face(&bp->convh, fi, fc);
+                    s_point fc[3]; convh_get_face(bp, fi, fc);
                     int may = lp3_vcell_maybe_hits_tri(fc, s, real_seeds, seed_weights, s_w, nbr, NB);
-                    if (may && !nface_face_crossings(&bp->convh, fi, i, real_seeds, seed_weights,
+                    if (may && !nface_face_crossings(bp, fi, i, real_seeds, seed_weights,
                                                      ve, n_edge, EPS_DEG, &pts)) goto err;
                     if (!may && qh >= n_seed_faces) continue;
                     for (int k = 0; k < 3; k++) {
@@ -1944,7 +1943,7 @@ static int clip_convex_bp(const s_bpoly *bp, const s_points *real_seeds,
                     s_points P = { (int)pts.N, (s_point *)pts.items };
                     r = convhull_from_points(&P, EPS_DEG, &hull);
                     if (r != 1) {
-                        fprintf(stderr, "clip_convex_bp: boundary cell %d failed to hull "
+                        fprintf(stderr, "clip_convex_hull: boundary cell %d failed to hull "
                                 "(%d pooled vertices, rc=%d)\n", i, (int)pts.N, r);
                         goto err;
                     }
@@ -2758,10 +2757,9 @@ err_early:
  * (nullable, length seeds->N, pre-filled with the identity) is composed with
  * the DT compaction (duplicates / power-redundant seeds -> -1). */
 static int build_seed_dt(const s_points *seeds, const double *weights,
-                         const s_bpoly *bp, double TOL, s_random_context *rng,
+                         s_point mn, s_point mx, double TOL, s_random_context *rng,
                          int *out_kept_idx, s_scplx *out_dt, int *out_N)
 {
-    s_point mn = bp->min, mx = bp->max;
     s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
     double  hx = 0.5*(mx.x-mn.x), hy = 0.5*(mx.y-mn.y), hz = 0.5*(mx.z-mn.z);
     double  h  = hx > hy ? (hx > hz ? hx : hz) : (hy > hz ? hy : hz);
@@ -2836,7 +2834,7 @@ s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
     bool have_adj = false;
     s_vcell *vcells = NULL;
 
-    if (!build_seed_dt(seeds, weights, &domain->bpoly, TOL, rng, out_kept_idx,
+    if (!build_seed_dt(seeds, weights, domain->bbox_min, domain->bbox_max, TOL, rng, out_kept_idx,
                        &seed_dt, &N))
         goto fail;
     s_points real_seeds = { .N = N, .p = seed_dt.points.p };   /* real seeds packed first */
@@ -2850,7 +2848,7 @@ s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
     vcells = calloc((size_t)N, sizeof(s_vcell));
     if (!vcells) goto fail;
     if (convex) {
-        if (!clip_convex_bp(&domain->bpoly, &real_seeds, &seed_dt, &adj, EPS_DEG, vcells)) {
+        if (!clip_convex_hull(&domain->convh, domain->convh_vertex_avg, &real_seeds, &seed_dt, &adj, EPS_DEG, vcells)) {
             for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
             goto fail;
         }

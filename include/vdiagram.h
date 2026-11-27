@@ -10,14 +10,6 @@
 
 // #define VBUFF_N_INIT 1000  // Used for efficient mallocing, incrementing by blocks if necessary
 
-typedef struct bounding_polyhedron {
-    s_convh convh;
-    s_point CM;
-    s_point min;
-    s_point max;
-    double volume;
-} s_bpoly;
-
 /* A Voronoi cell is represented as an array of convex pieces: 1 piece in a
  * convex domain, >= 1 in a non-convex one. An EMPTY cell (seed outside the
  * domain whose cell misses it, or a weighted seed dominated everywhere in the
@@ -44,12 +36,14 @@ void free_vcell(s_vcell *c);
 typedef struct vor3d_domain {
     bool       is_convex;
     s_trimesh  surface;   /* boundary mesh (owns memory), always present */
-    s_bpoly    bpoly;     /* convex: the domain itself; non-convex: its convex hull */
+    s_convh    convh;     /* convex: the domain itself; non-convex: its convex hull */
+    s_point    convh_vertex_avg;   /* average of convh's vertices (strictly interior) */
+    s_point    bbox_min, bbox_max; /* axis-aligned bounding box of convh */
     s_scplx    cdt;       /* non-convex only: CDT of the interior (interior tets,
                              plus flagged exterior pockets if built with
                              keep_exterior); empty (head == NULL) when is_convex */
     bool       cdt_has_exterior;  /* cdt was built with keep_exterior = 1 */
-    double     volume;    /* convex: bpoly.volume; non-convex: sum of interior tets */
+    double     volume;    /* convex: volume of convh; non-convex: sum of interior tets */
 } s_vor3d_domain;
 
 
@@ -69,26 +63,6 @@ typedef struct vdiagram {
 } s_vdiagram;
 
 void free_vdiagram(s_vdiagram *vd);
-
-
-/* BOUNDING POLYHEDRON */
-/* (New copy of points inside) */
-s_bpoly bpoly_from_points(const s_points *points, double EPS_DEG);
-s_bpoly bpoly_from_csv(const char *fname, double EPS_DEG);
-s_bpoly bpoly_from_convh(const s_convh *convh);
-s_bpoly bpoly_from_convh_scaled(const s_convh *convh, double s, s_point pivot,
-                                double EPS_DEG);
-s_bpoly bpoly_copy(const s_bpoly *in);
-s_bpoly bpoly_copy_scaled(const s_bpoly *bp, double scale, s_point pivot,
-                          double EPS_DEG);
-s_bpoly bpoly_copy_scaled_volume(const s_bpoly *bp, double objective_volume,
-                                 double EPS_DEG);
-void free_bpoly(s_bpoly *bpoly);
-
-double find_closest_point_on_bp(const s_bpoly *bp, s_point p, double EPS_DEG, s_point *out);
-
-void plot_bpoly_differentviews(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color);
-void plot_bpoly(s_bpoly *bpoly, char *f_name, s_point ranges[2], char *color, char *view_command);
 
 
 /* VORONOI DIAGRAM */

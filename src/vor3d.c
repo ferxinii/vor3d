@@ -18,7 +18,7 @@
 
 bool vor3d_domain_is_valid(const s_vor3d_domain *d)
 {
-    if (!d || !trimesh_is_valid(&d->surface) || !convhull_is_valid(&d->bpoly.convh))
+    if (!d || !trimesh_is_valid(&d->surface) || !convhull_is_valid(&d->convh))
         return false;
     return d->is_convex || d->cdt.head != NULL;
 }
@@ -27,41 +27,59 @@ void free_vor3d_domain(s_vor3d_domain *d)
 {
     free_trimesh(&d->surface);
     free_complex(&d->cdt);
-    free_bpoly(&d->bpoly);
+    free_convhull(&d->convh);
     memset(d, 0, sizeof(s_vor3d_domain));
 }
 
 
-/* Convex domain from an owned bpoly: the surface is the hull's own triangles. */
-static s_vor3d_domain domain_from_owned_bpoly(s_bpoly bp)
+/* Domain with only the hull fields set (takes ownership of convh). */
+static s_vor3d_domain domain_with_convh(s_convh convh)
 {
-    if (!convhull_is_valid(&bp.convh)) { free_bpoly(&bp); return (s_vor3d_domain){0}; }
-    s_trimesh surface = trimesh_from_arrays(bp.convh.points.p, bp.convh.points.N,
-                                            bp.convh.faces, bp.convh.Nf, 0.0);
-    if (!trimesh_is_valid(&surface)) {
+    s_vor3d_domain d = { .convh = convh };
+    d.convh_vertex_avg = point_average(&convh.points);
+    s_point mn = convh.points.p[0], mx = convh.points.p[0];
+    for (int i = 1; i < convh.points.N; i++) {
+        s_point q = convh.points.p[i];
+        if (q.x < mn.x) mn.x = q.x;
+        if (q.y < mn.y) mn.y = q.y;
+        if (q.z < mn.z) mn.z = q.z;
+        if (q.x > mx.x) mx.x = q.x;
+        if (q.y > mx.y) mx.y = q.y;
+        if (q.z > mx.z) mx.z = q.z;
+    }
+    d.bbox_min = mn;
+    d.bbox_max = mx;
+    d.volume = volume_convhull(&convh);
+    return d;
+}
+
+/* Convex domain from an owned hull: the surface is the hull's own triangles. */
+static s_vor3d_domain domain_from_owned_convh(s_convh convh)
+{
+    if (!convhull_is_valid(&convh)) { free_convhull(&convh); return (s_vor3d_domain){0}; }
+    s_vor3d_domain d = domain_with_convh(convh);
+    d.surface = trimesh_from_arrays(convh.points.p, convh.points.N, convh.faces, convh.Nf, 0.0);
+    if (!trimesh_is_valid(&d.surface)) {
         fprintf(stderr, "vor3d_domain: hull is not a closed manifold\n");
-        free_bpoly(&bp);
+        free_vor3d_domain(&d);
         return (s_vor3d_domain){0};
     }
-    return (s_vor3d_domain){
-        .is_convex = true,
-        .surface   = surface,
-        .bpoly     = bp,
-        .cdt       = (s_scplx){0},
-        .volume    = bp.volume,
-    };
+    d.is_convex = true;
+    return d;
 }
 
 s_vor3d_domain vor3d_domain_from_convh(const s_convh *convh)
 {
     if (!convh || !convhull_is_valid(convh)) return (s_vor3d_domain){0};
-    return domain_from_owned_bpoly(bpoly_from_convh(convh));
+    return domain_from_owned_convh(copy_convhull(convh));
 }
 
 s_vor3d_domain vor3d_domain_from_points(const s_points *points, double EPS_DEG)
 {
     if (!points || points->N < 4) return (s_vor3d_domain){0};
-    return domain_from_owned_bpoly(bpoly_from_points(points, EPS_DEG));
+    s_convh convh;
+    if (convhull_from_points(points, EPS_DEG, &convh) != 1) return (s_vor3d_domain){0};
+    return domain_from_owned_convh(convh);
 }
 
 
@@ -72,66 +90,50 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
 
     /* The hull is needed by both kernels: it IS the domain when convex, and
      * sizes the far auxiliary box / fast-rejects containment queries when not. */
-    s_bpoly bp = bpoly_from_points(&mesh->points, EPS_DEG);
-    if (!convhull_is_valid(&bp.convh)) {
-        free_bpoly(&bp);
-        return (s_vor3d_domain){0};
-    }
+    s_convh convh;
+    if (convhull_from_points(&mesh->points, EPS_DEG, &convh) != 1) return (s_vor3d_domain){0};
+    s_vor3d_domain d = domain_with_convh(convh);
 
     if (trimesh_is_convex(mesh)) {
-        s_trimesh surface = copy_trimesh(mesh);
-        if (!trimesh_is_valid(&surface)) { free_bpoly(&bp); return (s_vor3d_domain){0}; }
-        return (s_vor3d_domain){
-            .is_convex = true,
-            .surface   = surface,
-            .bpoly     = bp,
-            .cdt       = (s_scplx){0},
-            .volume    = bp.volume,
-        };
+        d.surface = copy_trimesh(mesh);
+        if (!trimesh_is_valid(&d.surface)) { free_vor3d_domain(&d); return (s_vor3d_domain){0}; }
+        d.is_convex = true;
+        return d;
     }
 
     /* Non-convex: CDT of the interior. keep_exterior=0 returns only interior
      * tets; keep_exterior=1 returns the full convex-hull complex (interior +
      * exterior pockets flagged via nc->interior), which the clip treats
      * identically and which also supports exact walk-based point location. */
-    s_scplx cdt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
-                                : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
-    if (!cdt.head) {
+    d.cdt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
+                          : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
+    if (!d.cdt.head) {
         fprintf(stderr, "vor3d_domain_from_trimesh: tetrahedralization failed\n");
-        free_bpoly(&bp);
+        free_vor3d_domain(&d);
         return (s_vor3d_domain){0};
     }
+    d.cdt_has_exterior = keep_exterior != 0;
 
     double volume = 0.0;
-    for (s_ncell *nc = cdt.head; nc; nc = nc->next) {
+    for (s_ncell *nc = d.cdt.head; nc; nc = nc->next) {
         if (!nc->interior) continue;              /* skip exterior pockets, if kept */
         s_point v[4];
-        extract_vertices_ncell(&cdt, nc, v);
+        extract_vertices_ncell(&d.cdt, nc, v);
         volume += fabs(signed_volume_tetra(v));
     }
+    d.volume = volume;
 
-    s_trimesh surface = copy_trimesh(mesh);
-    if (!trimesh_is_valid(&surface)) {
-        free_complex(&cdt); free_bpoly(&bp);
-        return (s_vor3d_domain){0};
-    }
-    return (s_vor3d_domain){
-        .is_convex        = false,
-        .surface          = surface,
-        .bpoly            = bp,
-        .cdt              = cdt,
-        .cdt_has_exterior = keep_exterior != 0,
-        .volume           = volume,
-    };
+    d.surface = copy_trimesh(mesh);
+    if (!trimesh_is_valid(&d.surface)) { free_vor3d_domain(&d); return (s_vor3d_domain){0}; }
+    return d;
 }
 
 
 bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double EPS_DEG, double TOL)
 {
-    const s_bpoly *bp = &d->bpoly;
     for (int a = 0; a < 3; a++)
-        if (p.coords[a] < bp->min.coords[a] || p.coords[a] > bp->max.coords[a]) return false;
-    e_geom_test t = test_point_in_convhull(&bp->convh, p, EPS_DEG, TOL);
+        if (p.coords[a] < d->bbox_min.coords[a] || p.coords[a] > d->bbox_max.coords[a]) return false;
+    e_geom_test t = test_point_in_convhull(&d->convh, p, EPS_DEG, TOL);
     if (t == TEST_OUT) return false;
     if (d->is_convex) return t == TEST_IN || t == TEST_BOUNDARY;
 

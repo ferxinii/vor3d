@@ -57,12 +57,12 @@ static void write_vdiagram_vtk(const s_vdiagram *vd, const char *path)
     printf("Wrote %d triangles (%d cells) to %s\n", total_tris, vd->seeds.N, path);
 }
 
-static void write_bpoly_vtk(const s_bpoly *bp, const char *path)
+static void write_convh_vtk(const s_convh *ch, const char *path)
 {
     FILE *f = fopen(path, "w");
-    if (!f) { fprintf(stderr, "write_bpoly_vtk: cannot open %s\n", path); return; }
+    if (!f) { fprintf(stderr, "write_convh_vtk: cannot open %s\n", path); return; }
 
-    int Nf = bp->convh.Nf;
+    int Nf = ch->Nf;
     fprintf(f, "# vtk DataFile Version 2.0\n");
     fprintf(f, "Bounding polytope\n");
     fprintf(f, "ASCII\n");
@@ -72,9 +72,9 @@ static void write_bpoly_vtk(const s_bpoly *bp, const char *path)
     for (int fi = 0; fi < Nf; fi++)
         for (int v = 0; v < 3; v++)
             fprintf(f, "%f %f %f\n",
-                    bp->convh.points.p[bp->convh.faces[fi*3+v]].coords[0],
-                    bp->convh.points.p[bp->convh.faces[fi*3+v]].coords[1],
-                    bp->convh.points.p[bp->convh.faces[fi*3+v]].coords[2]);
+                    ch->points.p[ch->faces[fi*3+v]].coords[0],
+                    ch->points.p[ch->faces[fi*3+v]].coords[1],
+                    ch->points.p[ch->faces[fi*3+v]].coords[2]);
 
     fprintf(f, "CELLS %d %d\n", Nf, Nf * 4);
     for (int t = 0; t < Nf; t++)
@@ -138,7 +138,7 @@ int main(void)
     printf("construct_dt_3d succeeded -- %d tetrahedra.\n", dt.N_ncells);
 
     s_vor3d_domain dom = vor3d_domain_from_points(&points, 1e-12);
-    write_bpoly_vtk(&dom.bpoly, "bpoly.vtk");
+    write_convh_vtk(&dom.convh, "convh.vtk");
     /* All points are seeds (no position filter): hull vertices included. */
     s_vdiagram vd = vor3d_diagram(&points, NULL, &dom, 1e-12, 1e-12, NULL, NULL,
                                   false, false);

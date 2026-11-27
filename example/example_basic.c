@@ -26,7 +26,7 @@ static s_points random_seeds_inside(const s_vor3d_domain *dom, s_random_context 
     int N = (int)lround(SEEDS_PER_UNIT_VOLUME * dom->volume);
     if (N < 1) N = 1;
     s_points s = { .N = 0, .p = malloc(sizeof(s_point) * (size_t)N) };
-    s_point mn = dom->bpoly.min, mx = dom->bpoly.max;
+    s_point mn = dom->bbox_min, mx = dom->bbox_max;
     while (s.N < N) {
         s_point p = {{{ mn.x + (mx.x - mn.x) * random_uniform_double(rng),
                         mn.y + (mx.y - mn.y) * random_uniform_double(rng),
@@ -57,9 +57,9 @@ static void check_volume(const s_vdiagram *vd)
 /* Domain from a csv of points: the convex hull of the points. */
 static s_vor3d_domain domain_from_csv(const char *fname)
 {
-    s_bpoly bp = bpoly_from_csv(fname, EPS_degenerate);
-    s_vor3d_domain dom = vor3d_domain_from_convh(&bp.convh);
-    free_bpoly(&bp);
+    s_points pts = read_points_from_csv(fname);
+    s_vor3d_domain dom = vor3d_domain_from_points(&pts, EPS_degenerate);
+    free_points(&pts);
     return dom;
 }
 
@@ -173,7 +173,7 @@ int main(void)
     generate_file_sphere_bp(FILE_BP, 1.5, 15, 20);
     s_vor3d_domain dom_sph = domain_from_csv(FILE_BP);
     if (!vor3d_domain_is_valid(&dom_sph)) { puts("Could not build domain."); exit(1); }
-    write_convhull_to_m(&dom_sph.bpoly.convh, "test_bp.m");
+    write_convhull_to_m(&dom_sph.convh, "test_bp.m");
     s_vdiagram vd_sph = build_random(&dom_sph, &rctx_omp[0]);
     if (!vdiagram_is_valid(&vd_sph)) { puts("Could not construct vd."); exit(1); }
     check_volume(&vd_sph);

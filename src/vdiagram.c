@@ -109,11 +109,11 @@ static void plot_add_vcell(s_gnuplot *interface, const s_vcell *vcell, char *con
     }
 }
 
-static void plot_add_bpoly(s_gnuplot *interface, const s_bpoly *bpoly, char *config)
+static void plot_add_convh(s_gnuplot *interface, const s_convh *convh, char *config)
 {
-    for (int ii=0; ii<bpoly->convh.Nf; ii++) {
+    for (int ii=0; ii<convh->Nf; ii++) {
         s_point face[3];
-        convh_get_face(&bpoly->convh, ii, face);
+        convh_get_face(convh, ii, face);
         draw_solid_triangle_3d(interface, face[0].coords, face[1].coords, face[2].coords, config);
     }
 }
@@ -135,7 +135,7 @@ void plot_vcell(const s_vor3d_domain *domain, const s_vcell *vcell, char *f_name
     }
 
     plot_add_vcell(interface, vcell, "fs transparent solid 0.6");
-    plot_add_bpoly(interface, &domain->bpoly, "fs transparent solid 0.1");
+    plot_add_convh(interface, &domain->convh, "fs transparent solid 0.1");
     gnuplot_end(interface);
 }
 

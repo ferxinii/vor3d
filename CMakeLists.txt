@@ -31,7 +31,6 @@ endif()
 
 add_library(vor3d STATIC
     src/vor3d.c
-    src/bpoly.c
     src/dt.c
     src/cdt.c
     src/scplx.c
