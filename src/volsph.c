@@ -779,7 +779,7 @@ static double union_core(const s_points *centers, const double radii[],
 
 
 double volume_union_spheres(const s_points *centers, const double radii[centers->N],
-                            const s_vor3d_ctx *ctx, double *out_contrib)
+                            const s_vor3d_opts *opts, double *out_contrib)
 {
     int N = centers->N;
     if (N == 1) {
@@ -799,7 +799,7 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
      * depend on out_contrib (the split only adds a parallel accumulation). */
     s_dynarray buff = dynarray_initialize(sizeof(void *), 64);   /* vertex-star scratch */
     if (!buff.items) return NAN;
-    double vol = union_core(centers, radii, ctx ? ctx->tol_dup : 0.0, &buff, out_contrib);
+    double vol = union_core(centers, radii, opts ? opts->tol_dup : 0.0, &buff, out_contrib);
     dynarray_free(&buff);
     return vol;
 }

@@ -149,7 +149,7 @@ static double total_volume(const s_vdiagram *vd)
 static s_vdiagram run(const s_vor3d_domain *domain, const s_points *seeds,
                            int want_surface, int merge_orphans)
 {
-    return vor3d_diagram(seeds, NULL, domain, &(s_vor3d_ctx){ .tol_dup = TOL }, NULL,
+    return vor3d_diagram(seeds, NULL, domain, &(s_vor3d_opts){ .tol_dup = TOL }, NULL,
                                 want_surface != 0, merge_orphans != 0);
 }
 
@@ -165,7 +165,7 @@ static int test_fixture(const char *name, s_trimesh mesh,
         return 1;
     }
 
-    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_ctx){ .tol_dup = TOL }, 0);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_opts){ .tol_dup = TOL }, 0);
     if (!vor3d_domain_is_valid(&domain)) {
         printf("  [FAIL] domain construction\n");
         free_trimesh(&mesh); free_vor3d_domain(&domain);
@@ -243,7 +243,7 @@ static int test_fixture(const char *name, s_trimesh mesh,
 static void search_orphans(const char *name, s_trimesh mesh, int N_seeds, int tries)
 {
     s_random_context rc = random_initialize(12345);
-    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_ctx){ .tol_dup = TOL }, 0);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_opts){ .tol_dup = TOL }, 0);
     if (!vor3d_domain_is_valid(&domain)) { printf("search %s: bad domain\n", name); return; }
     s_point mn, mx; bounding_box_points(&mesh.points, &mn, &mx);
     printf("--- search %s (%d seeds, %d tries) ---\n", name, N_seeds, tries);
@@ -281,7 +281,7 @@ static void search_orphans(const char *name, s_trimesh mesh, int N_seeds, int tr
 static int stress(const char *name, s_trimesh mesh, int N_seeds, int trials)
 {
     s_random_context rc = random_initialize(999);
-    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_ctx){ .tol_dup = TOL }, 0);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_opts){ .tol_dup = TOL }, 0);
     if (!vor3d_domain_is_valid(&domain)) { printf("stress %s: bad domain\n", name); return 1; }
     double domvol = domain.volume;
     s_point mn, mx; bounding_box_points(&mesh.points, &mn, &mx);

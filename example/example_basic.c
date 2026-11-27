@@ -40,7 +40,7 @@ static s_points random_seeds_inside(const s_vor3d_domain *dom, s_random_context 
 static s_vdiagram build_random(const s_vor3d_domain *dom, s_random_context *rng)
 {
     s_points seeds = random_seeds_inside(dom, rng);
-    s_vdiagram vd = vor3d_diagram(&seeds, NULL, dom, &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = rnd01, .rctx = rng },
+    s_vdiagram vd = vor3d_diagram(&seeds, NULL, dom, &(s_vor3d_opts){ .tol_dup = TOL, .randd01 = rnd01, .rctx = rng },
                                   NULL, false, false);
     free_points(&seeds);
     return vd;

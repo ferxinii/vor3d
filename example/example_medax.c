@@ -190,7 +190,7 @@ static void run_shape(const char *shape, s_trimesh mesh, double r_sample)
 
     /* theta0 = rho0 = 0: the paper's default filters. */
     s_medax ma = medax_from_trimesh(&mesh, r_sample, 0, 0,
-                                    &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = randd01, .rctx = &rctx },
+                                    &(s_vor3d_opts){ .tol_dup = TOL, .randd01 = randd01, .rctx = &rctx },
                                     /*want_graph=*/true);
     if (!ma.verts.p || !ma.graph) {
         printf("%-8s extraction FAILED\n", shape);

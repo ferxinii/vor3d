@@ -457,10 +457,10 @@ static int collect_true_keys(const s_hash_table *ht, int k, const int *k_of_vid,
 }
 
 s_alpha_complex alpha_complex_3d(const s_points *pts, const double *weights,
-                                 double alpha, const s_vor3d_ctx *ctx,
+                                 double alpha, const s_vor3d_opts *opts,
                                  int *out_kept_idx)
 {
-    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
+    const s_vor3d_opts c = opts ? *opts : (s_vor3d_opts){0};
     const s_alpha_complex FAIL = { .alpha = NAN };
     int N_in = pts ? pts->N : 0;
     if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;

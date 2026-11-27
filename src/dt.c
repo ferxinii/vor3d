@@ -2489,9 +2489,9 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
 
 
 s_tetmesh delaunay_3d(const s_points *pts, const double *weights,
-                      const s_vor3d_ctx *ctx, int *out_kept_idx)
+                      const s_vor3d_opts *opts, int *out_kept_idx)
 {
-    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
+    const s_vor3d_opts c = opts ? *opts : (s_vor3d_opts){0};
     int N_in = pts ? pts->N : 0;
     if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;
     if (!pts || pts->N < 4) return (s_tetmesh){0};

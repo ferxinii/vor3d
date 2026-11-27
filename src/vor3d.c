@@ -82,10 +82,10 @@ s_vor3d_domain vor3d_domain_from_points(const s_points *points)
 }
 
 
-s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, const s_vor3d_ctx *ctx,
+s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, const s_vor3d_opts *opts,
                                          int keep_exterior)
 {
-    const double TOL = ctx ? ctx->tol_dup : 0.0;
+    const double TOL = opts ? opts->tol_dup : 0.0;
     if (!mesh || !trimesh_is_valid(mesh)) return (s_vor3d_domain){0};
 
     /* The hull is needed by both kernels: it IS the domain when convex, and

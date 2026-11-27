@@ -131,7 +131,7 @@ static s_vor3d_domain build_domain(const char *obj_path, double *mesh_volume_out
            mesh.points.N, mesh.Nf, mesh_volume);
 
     clock_t t0 = clock();
-    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_ctx){ .tol_dup = TOL }, 0);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_opts){ .tol_dup = TOL }, 0);
     clock_t t1 = clock();
     free_trimesh(&mesh);
     if (!vor3d_domain_is_valid(&domain)) {
@@ -158,7 +158,7 @@ static s_vdiagram run_voronoi(const s_vor3d_domain *domain, double mesh_volume,
     }
 
     clock_t t0 = clock();
-    s_vdiagram vd = vor3d_diagram(&seeds, NULL, domain, &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = rnd01, .rctx = &rctx },
+    s_vdiagram vd = vor3d_diagram(&seeds, NULL, domain, &(s_vor3d_opts){ .tol_dup = TOL, .randd01 = rnd01, .rctx = &rctx },
                                               NULL, false, false);
     clock_t t1 = clock();
     free_points(&seeds);

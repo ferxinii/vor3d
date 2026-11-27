@@ -597,9 +597,9 @@ static void compact_samples(s_medax_samples *S, const int *kept)
 /* ------------------------------------------------------------------------- */
 s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double theta0, double rho0,
-                           const s_vor3d_ctx *ctx, bool want_graph)
+                           const s_vor3d_opts *opts, bool want_graph)
 {
-    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
+    const s_vor3d_opts c = opts ? *opts : (s_vor3d_opts){0};
     double (*randd01)(void *) = c.randd01;
     void *rctx = c.rctx;
     const double TOL = c.tol_dup;

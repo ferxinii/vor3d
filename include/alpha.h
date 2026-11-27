@@ -5,7 +5,7 @@
 #include "points.h"
 #include "trimesh.h"
 #include "delaunay.h"   /* s_tetmesh */
-#include "vor3d_ctx.h"
+#include "vor3d_opts.h"
 
 /* Alpha complex K of a (weighted) point set.
  * Power distance |x-p|^2 - w (w = 0 when unweighted); alpha is a SQUARED
@@ -32,7 +32,7 @@ typedef struct alpha_complex {
  *
  * weights: NULL = unweighted.  alpha: any finite value (weighted, alpha <= 0 is
  *   legitimate; alpha = 0 is the union of balls with r_i^2 = w_i).
- * ctx (nullable): tol_dup, randd01/rctx (DT walk order), forwarded to the DT build.
+ * opts (nullable): tol_dup, randd01/rctx (DT walk order), forwarded to the DT build.
  * out_kept_idx (nullable, length pts->N): index of input point i in ac.points,
  *   or -1 if not in K (duplicate, redundant weighted point, or outside K).
  *
@@ -43,7 +43,7 @@ typedef struct alpha_complex {
  *   it returns points.N = N_* = 0 with ac.alpha == alpha.
  * free_alpha_complex is safe on both. */
 s_alpha_complex alpha_complex_3d(const s_points *pts, const double *weights,
-                                 double alpha, const s_vor3d_ctx *ctx,
+                                 double alpha, const s_vor3d_opts *opts,
                                  int *out_kept_idx);
 bool alpha_complex_is_valid(const s_alpha_complex *ac);
 void free_alpha_complex(s_alpha_complex *ac);
@@ -79,7 +79,7 @@ typedef struct alpha_shape {
  *             convex hull; smaller alpha carves concavities and interior
  *             cavities.  Pass NAN to auto-select (step 5 below).  Any other
  *             value is used as given (weighted, alpha <= 0 is legitimate).
- *   ctx     : nullable; tol_dup, randd01/rctx, forwarded to the DT build.
+ *   opts    : nullable; tol_dup, randd01/rctx, forwarded to the DT build.
  *   out_kept_idx (nullable, length pts->N): index of input point i in
  *             as.surface.points, or -1 if it is not a surface vertex.
  *   want_tets: also return the in-tets in as.tets (e.g. to split the shape
@@ -145,7 +145,7 @@ typedef struct alpha_shape {
  * struct with alpha = NAN (alpha_shape_is_valid false); out_kept_idx is
  * filled with -1.  free_alpha_shape is safe on both. */
 s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
-                             double alpha, const s_vor3d_ctx *ctx,
+                             double alpha, const s_vor3d_opts *opts,
                              int *out_kept_idx, bool want_tets);
 bool alpha_shape_is_valid(const s_alpha_shape *as);
 void free_alpha_shape(s_alpha_shape *as);

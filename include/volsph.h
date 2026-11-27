@@ -2,7 +2,7 @@
 #define VOR3D_VOLSPH_H
 
 #include "points.h"
-#include "vor3d_ctx.h"
+#include "vor3d_opts.h"
 
 double volume_intersection_2_spheres(double rA, double rB, double dAB,
                                      bool check_intersection);
@@ -32,7 +32,7 @@ double volume_union_3_spheres(s_point pA, double rA,
 /* Volume of the union of N balls (centers, radii).  N = 1, 2, 3: analytic;
  * N >= 4: weighted Delaunay (regular) triangulation + alpha complex at alpha = 0
  * (Edelsbrunner's inclusion-exclusion).  Returns NAN on allocation failure.
- * ctx (nullable): tol_dup, forwarded to the RT.
+ * opts (nullable): tol_dup, forwarded to the RT.
  * out_contrib (nullable, length centers->N, indexed by ORIGINAL ball id):
  *   per-ball contributions, sum_i out_contrib[i] == the returned volume (up to
  *   rounding; passing it never changes the returned value).  The per-ball unit
@@ -44,6 +44,6 @@ double volume_union_3_spheres(s_point pA, double rA,
  *   K-tet, including near-flat ones, whose signed pieces are load-bearing; see
  *   VOLSPH_SPLIT_PLAN.md.) */
 double volume_union_spheres(const s_points *centers, const double radii[centers->N],
-                            const s_vor3d_ctx *ctx, double *out_contrib /* nullable */);
+                            const s_vor3d_opts *opts, double *out_contrib /* nullable */);
 
 #endif

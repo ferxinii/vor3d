@@ -2837,9 +2837,9 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh, double TOL)
     return cdt_build(mesh, TOL, /*keep_exterior=*/false);
 }
 
-s_tetmesh tetrahedralize_trimesh(const s_trimesh *mesh, const s_vor3d_ctx *ctx)
+s_tetmesh tetrahedralize_trimesh(const s_trimesh *mesh, const s_vor3d_opts *opts)
 {
-    s_scplx C = cdt_build(mesh, ctx ? ctx->tol_dup : 0.0, /*keep_exterior=*/false);
+    s_scplx C = cdt_build(mesh, opts ? opts->tol_dup : 0.0, /*keep_exterior=*/false);
     return tetmesh_from_scplx(&C, NULL);
 }
 

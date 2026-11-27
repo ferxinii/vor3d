@@ -520,10 +520,10 @@ void free_alpha_shape(s_alpha_shape *as)
 }
 
 s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
-                             double alpha, const s_vor3d_ctx *ctx,
+                             double alpha, const s_vor3d_opts *opts,
                              int *out_kept_idx, bool want_tets)
 {
-    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
+    const s_vor3d_opts c = opts ? *opts : (s_vor3d_opts){0};
     const s_alpha_shape FAIL = { .surface = trimesh_NAN, .alpha = NAN };
     int N_in = pts ? pts->N : 0;
     if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;

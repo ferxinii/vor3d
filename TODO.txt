@@ -6,13 +6,14 @@ Completed items are removed from this file; their notes live in git history and 
 [ ] Bump vor3d submodule; 3 renames needed since 20fe33f (s_bpoly removed): bt_voronoi.c:42 domain->bpoly.CM -> convh_vertex_avg, bt_domain.c:305 + bt_generate.c:101 bpoly.min/max -> bbox_min/bbox_max.
 [ ] Also on that bump (2026-11-27 API changes): include/lung_io.h + tests/leak_lumen.c #include "vdiagram.h" -> "vor3d.h"; bt_voronoi.c:27 vd.vcells == NULL -> !vdiagram_is_valid(&vd); medax_NAN is gone: bt_setup.c:280 init -> (s_medax){0}, failure checks -> medax_is_valid (bt_policies.h:52 comment).
 [ ] Lung e2e timing not re-measured on an idle machine since the unified API.
-[ ] Also on that bump (2026-11-27, scplx.h/delaunay.h private): bt_cell.c:168 bt_cell_from_trimesh -> s_tetmesh M = tetrahedralize_trimesh(mesh, EPS_DEG, TOL); loop t < M.N_tets over M.tets[4t..4t+3] (all tets are interior), free_tetmesh; drop #include "scplx.h" in bt_cell.c and bt_domain.c:6 (dead there).
+[ ] Also on that bump (2026-11-27, scplx.h/delaunay.h private): bt_cell.c:168 bt_cell_from_trimesh -> s_tetmesh M = tetrahedralize_trimesh(mesh, &(s_vor3d_opts){ .tol_dup = TOL }); loop t < M.N_tets over M.tets[4t..4t+3] (all tets are interior), free_tetmesh; drop #include "scplx.h" in bt_cell.c and bt_domain.c:6 (dead there).
 [ ] Also on that bump: bt_setup.c:69-73 (alpha-shape root cell) -> alpha_shape_3d(..., want_tets = true) and build the convex pieces from as.tets instead of bt_cell_from_trimesh (no CDT of the alpha-shape surface). Changes the piece decomposition (same region/volume) -> golden outputs need re-baselining; time it vs the CDT path first.
+[ ] Also on that bump (2026-11-27, CLAUDE/PLAN_EPS_TOL_WS.md step 2): EPS_DEG is gone from every public signature; TOL/rng args -> const s_vor3d_opts *opts ({ .tol_dup, .randd01, .rctx }; NULL = defaults) in delaunay_3d, tetrahedralize_trimesh, alpha_complex_3d, alpha_shape_3d, medax_from_trimesh (randd01/rctx move into opts), volume_union_spheres (buff_ncellPTR removed), vor3d_domain_from_trimesh, vor3d_diagram. vor3d_domain_from_points(points) takes no EPS/opts. vor3d_domain_contains / find_inside_which_vcell take one tol_bdry. volume_union_3_spheres / volume_intersection_3_spheres lost EPS. s_random_context callers need an adapter: static double rnd01(void *c) { return random_uniform_double(c); }. Pass the old TOL as tol_dup (and as tol_bdry) to keep results identical. Geometry API unchanged by step 2/3 (step 1a already dropped geometry EPS).
 
 
 === SMALL / SELF-CONTAINED ===
 
-[ ] Stale tests (found 2026-11-27): rt_validate, rt_smalln_stress, rt_sos_degenerate, orthow_k1, predseam_convention no longer compile (test_orthosphere* / test_*_w undeclared; gtests_implicit.h parse error in predseam). Also fix the "Build:" header comments that still name old lib files (libvoronoi_predicates.a etc.). Do this before any deeper DT change.
+[ ] Stale "Build:" header comments in tests/*.c still name old lib files (libvoronoi_predicates.a etc.); the tests themselves compile and pass (tests/run_suite.sh builds them correctly). Fix or drop the comments.
 [ ] Helper headers copied between repos have drifted: src/hlibs/{dynarray,hash,linalg}.h vs external/geometry/src/ (13-18 differing lines each), example/dynarray.h too. Pick one owner (geometry?) and include it instead of copying.
 [ ] geometry lp.c: lp3_D is documented as unused ("the enumerate-and-hull clip does not call it") -> remove?
 [ ] Audit the rest of the library for unconditional stderr/stdout prints on success paths: only errors should print (opt-in env debug flags are fine).
@@ -25,12 +26,7 @@ Completed items are removed from this file; their notes live in git history and 
 
 [ ] Plotting: drop the external/gnuplotC dependency (linked PRIVATE by vor3d; used by src/vdiagram.c plot_vcell/plot_all_vcells/plot_vdiagram_differentviews and src/scplx.c plot_*) in favour of the header-only src/hlibs/gplot.h. Remove or refactor the library plot_* functions, and maybe unify them with the README figure rendering (example/render3d.h, example/readme_figures.c).
 [ ] has_big_tetra as a user_passed flag throughout is weird... cant it be incorporated into scplx ? or somehow? If worth it.
-[ ] API REFACTOR: RNG callback + context + caller-owned memory (one refactor, all public headers: vor3d.h, delaunay.h, alpha.h, scplx.h, medax.h, volsph.h ...).
-    Note: public scratch-buffer args still exist in volsph.h (buff_ncellPTR, kept on purpose 2026-11-27) -- fold into the allocator design. alpha_complex_3d / alpha_shape_3d allocate scratch internally and return library-malloc'd results (free_alpha_*).
-    [ ] RNG as a callback everywhere: double (*randd01)(void*) + void *rctx, as medax_from_trimesh already does, instead of s_random_context * (the concrete xoshiro struct from src/hlibs/random.h, which a user cannot replace with their own generator). NULL keeps meaning "fixed deterministic order" where the RNG only breaks walk ties. Costs one non-inlinable indirect call per draw (~ns); draws happen only on walk ties / per scatter sample, so expected negligible -- confirm with tests/bench.sh A/B before/after.
-    [ ] Make a context structure (EPS_DEG, TOL, randd01, rctx, ...). Even (geometry_ctx, randd01, rctx). Decide whether it replaces the loose EPS_DEG/TOL/rng arguments in every entry point.
-    [ ] Memory management as the user's responsibility when they want it: optional caller-provided allocator / arena in the context (malloc/realloc/free callbacks + user pointer; NULL = libc), so results and scratch can live in user-owned memory.
-    [ ] Use memory pools instead of constant malloc (internally; pairs with the allocator hook above).
+Note (decided 2026-11-27, CLAUDE/PLAN_EPS_TOL_WS.md 3d): no caller-held workspace / allocator hooks / scratch pools: results stay plain malloc, scratch is sized by the problem and hoisted out of loops locally. Reopen only if a profile of repeated public calls shows allocation as a real cost.
 
 
 === PERFORMANCE ===

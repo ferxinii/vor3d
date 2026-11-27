@@ -2753,7 +2753,7 @@ err_early:
  * (nullable, length seeds->N, pre-filled with the identity) is composed with
  * the DT compaction (duplicates / power-redundant seeds -> -1). */
 static int build_seed_dt(const s_points *seeds, const double *weights,
-                         s_point mn, s_point mx, double TOL, const s_vor3d_ctx *ctx,
+                         s_point mn, s_point mx, double TOL, const s_vor3d_opts *opts,
                          int *out_kept_idx, s_scplx *out_dt, int *out_N)
 {
     s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
@@ -2770,7 +2770,7 @@ static int build_seed_dt(const s_points *seeds, const double *weights,
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
     s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max,
-                                              ctx ? ctx->randd01 : NULL, ctx ? ctx->rctx : NULL);
+                                              opts ? opts->randd01 : NULL, opts ? opts->rctx : NULL);
     if (!builder._stack) return 0;
     s_points aux_pts = { .N = 8, .p = aux };
     if (!dt_builder_extend(&builder, &aux_pts, TOL)) {
@@ -2808,10 +2808,10 @@ static void convex_cell_surfaces(s_vcell *vcells, int N)
 
 s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
                          const s_vor3d_domain *domain,
-                         const s_vor3d_ctx *ctx, int *out_kept_idx,
+                         const s_vor3d_opts *opts, int *out_kept_idx,
                          bool want_surface, bool merge_orphans)
 {
-    const double TOL = ctx ? ctx->tol_dup : 0.0;
+    const double TOL = opts ? opts->tol_dup : 0.0;
     const int n_in = (seeds && seeds->N > 0) ? seeds->N : 0;
     if (out_kept_idx) for (int i = 0; i < n_in; i++) out_kept_idx[i] = -1;
     if (n_in == 0 || !domain || !vor3d_domain_is_valid(domain))
@@ -2831,7 +2831,7 @@ s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
     bool have_adj = false;
     s_vcell *vcells = NULL;
 
-    if (!build_seed_dt(seeds, weights, domain->bbox_min, domain->bbox_max, TOL, ctx, out_kept_idx,
+    if (!build_seed_dt(seeds, weights, domain->bbox_min, domain->bbox_max, TOL, opts, out_kept_idx,
                        &seed_dt, &N))
         goto fail;
     s_points real_seeds = { .N = N, .p = seed_dt.points.p };   /* real seeds packed first */
