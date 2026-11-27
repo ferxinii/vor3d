@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include "trimesh.h"
 #include "points.h"
+#include "vor3d_ctx.h"
 
 /* Point-sample approximation of the (inner) medial axis, optionally with its
  * connectivity ("the medial graph").
@@ -55,18 +56,15 @@ typedef struct medax {
  *   > rho0 (ratio test). Smaller values keep more of the axis, including
  *   spurious "hairs" from sampling noise; larger values give a cleaner axis
  *   but may lose thin parts.
- * randd01/rctx: RNG callback returning a double in [0,1) for the scatter;
- *   may be NULL when r_sample <= 0.
- * EPS_DEG: degeneracy epsilon (circumcenters, normals).
- * TOL: duplicate-point tolerance for the internal DT.
+ * ctx (nullable): randd01/rctx drive the scatter and are required when
+ *   r_sample > 0; tol_dup merges samples in the internal DT.
  * want_graph: also build ma.graph (the medial graph); otherwise ma.graph is
  *   NULL and only the point set (verts, radius) is produced.
  * On failure returns an invalid medax (medax_is_valid false). Zero medial
  * vertices is NOT a failure. free_medax is safe on both. */
 s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double theta0, double rho0,
-                           double (*randd01)(void*), void *rctx,
-                           double EPS_DEG, double TOL, bool want_graph);
+                           const s_vor3d_ctx *ctx, bool want_graph);
 
 bool medax_is_valid(const s_medax *ma);
 void free_medax(s_medax *ma);

@@ -1374,8 +1374,8 @@ static int try_cavity_expansion(s_scplx *dt,
          * above-vertex, local DT empty). */
         s_dt_builder lb = dt->exact_ids
             ? dt_builder_begin_exact_local(&lpts, 0.0, l2g, n, dt->points.N,
-                                           &bb_lo, &bb_hi, NULL, dt->pred_reg)
-            : dt_builder_begin(&lpts, NULL, 0.0, &bb_lo, &bb_hi, NULL);
+                                           &bb_lo, &bb_hi, dt->pred_reg)
+            : dt_builder_begin(&lpts, NULL, 0.0, &bb_lo, &bb_hi, NULL, NULL);
         free(lpts_arr);
         if (!lb._stack) { CDT_DBG("expand side=%d iter=%d: lb begin fail\n", side, dbg_iter); goto done; }
         ldt = dt_builder_end(&lb, true, NULL, NULL, 0);
@@ -2837,10 +2837,9 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh, double TOL)
     return cdt_build(mesh, TOL, /*keep_exterior=*/false);
 }
 
-s_tetmesh tetrahedralize_trimesh(const s_trimesh *mesh, double EPS_DEG, double TOL)
+s_tetmesh tetrahedralize_trimesh(const s_trimesh *mesh, const s_vor3d_ctx *ctx)
 {
-    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
-    s_scplx C = cdt_build(mesh, TOL, /*keep_exterior=*/false);
+    s_scplx C = cdt_build(mesh, ctx ? ctx->tol_dup : 0.0, /*keep_exterior=*/false);
     return tetmesh_from_scplx(&C, NULL);
 }
 
@@ -2863,7 +2862,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double TOL,
      * the true implicit LNC Steiner positions.  (The float DT builder remains
      * for the Voronoi seed / weighted paths; only the CDT is exact.) */
     itest_init();  /* FPU rounding mode; idempotent */
-    s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL, NULL);
+    s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL);
     if (!b._stack) return (s_scplx){0};
 
     if (!segment_recovery(&b, working, TOL, sc)) {

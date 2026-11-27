@@ -18,7 +18,6 @@
 #include "medax.h"
 #include "random.h"
 
-static double EPS_DEG = 1e-9;
 static double TOL     = 1e-9;
 
 static s_random_context rctx;
@@ -190,8 +189,9 @@ static void run_shape(const char *shape, s_trimesh mesh, double r_sample)
     write_surface_vtk(&mesh, path);
 
     /* theta0 = rho0 = 0: the paper's default filters. */
-    s_medax ma = medax_from_trimesh(&mesh, r_sample, 0, 0, randd01, &rctx,
-                                    EPS_DEG, TOL, /*want_graph=*/true);
+    s_medax ma = medax_from_trimesh(&mesh, r_sample, 0, 0,
+                                    &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = randd01, .rctx = &rctx },
+                                    /*want_graph=*/true);
     if (!ma.verts.p || !ma.graph) {
         printf("%-8s extraction FAILED\n", shape);
         free_trimesh(&mesh); return;

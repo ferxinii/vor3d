@@ -73,9 +73,8 @@ s_vor3d_domain vor3d_domain_from_convh(const s_convh *convh)
     return domain_from_owned_convh(copy_convhull(convh));
 }
 
-s_vor3d_domain vor3d_domain_from_points(const s_points *points, double EPS_DEG)
+s_vor3d_domain vor3d_domain_from_points(const s_points *points)
 {
-    (void)EPS_DEG;  /* unused since geometry EPS went internal; leaves the API in step 2 */
     if (!points || points->N < 4) return (s_vor3d_domain){0};
     s_convh convh;
     if (convhull_from_points(points, &convh) != 1) return (s_vor3d_domain){0};
@@ -83,10 +82,10 @@ s_vor3d_domain vor3d_domain_from_points(const s_points *points, double EPS_DEG)
 }
 
 
-s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
-                                         double TOL, int keep_exterior)
+s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, const s_vor3d_ctx *ctx,
+                                         int keep_exterior)
 {
-    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
+    const double TOL = ctx ? ctx->tol_dup : 0.0;
     if (!mesh || !trimesh_is_valid(mesh)) return (s_vor3d_domain){0};
 
     /* The hull is needed by both kernels: it IS the domain when convex, and
@@ -131,12 +130,11 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
 }
 
 
-bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double EPS_DEG, double TOL)
+bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double tol_bdry)
 {
-    (void)EPS_DEG;  /* unused since geometry EPS went internal; leaves the API in step 2 */
     for (int a = 0; a < 3; a++)
         if (p.coords[a] < d->bbox_min.coords[a] || p.coords[a] > d->bbox_max.coords[a]) return false;
-    e_geom_test t = test_point_in_convhull(&d->convh, p, TOL);
+    e_geom_test t = test_point_in_convhull(&d->convh, p, tol_bdry);
     if (t == TEST_OUT) return false;
     if (d->is_convex) return t == TEST_IN || t == TEST_BOUNDARY;
 

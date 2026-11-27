@@ -472,14 +472,26 @@ static int canonical_edge_cluster(int cell_seed, int j1, int j2,
  * left alone.  This only recovers merges the hull already made; it introduces
  * no new geometric decision.  Returns malloc'd array of length out_N (caller
  * frees), or NULL on allocation failure. */
+/* Per-cell scratch of the non-convex clip, created once per clip_domain call
+ * and emptied by each cell (avoids 4 mallocs per cell/tet). */
+struct ncvx_cellbuf {
+    s_dynarray pts;    /* s_point: candidate vertices */
+    s_dynarray cand;   /* s_vlabel: labels aligned with pts */
+    s_dynarray pmap;   /* int: input -> hull vertex */
+    s_dynarray set;    /* char: scatter_labels flags */
+};
+#define NCVX_CELLBUF_INIT { { .item_size = sizeof(s_point) }, { .item_size = sizeof(s_vlabel) }, \
+                            { .item_size = sizeof(int) }, { .item_size = 1 } }
+
 static s_vlabel *scatter_labels(const s_dynarray *cand, const int *pmap,
                                 const s_points *in_pts, const s_points *out_pts,
-                                int in_N, int out_N)
+                                int in_N, int out_N, s_dynarray *setbuf)
 {
     size_t nn = (size_t)(out_N > 0 ? out_N : 1);
     s_vlabel *labels = calloc(nn, sizeof(s_vlabel));
-    char     *set    = calloc(nn, 1);
-    if (!labels || !set) { free(labels); free(set); return NULL; }
+    if (!labels || !dynarray_ensure_capacity(setbuf, nn)) { free(labels); return NULL; }
+    char *set = setbuf->items;
+    memset(set, 0, nn);
     for (int ii = 0; ii < in_N; ii++) {
         int v = pmap[ii];
         if (v < 0) continue;
@@ -501,7 +513,6 @@ static s_vlabel *scatter_labels(const s_dynarray *cand, const int *pmap,
         if (!set[best]) { labels[best] = *src; set[best] = 1; }
         else vlabel_merge(&labels[best], src);
     }
-    free(set);
     return labels;
 }
 
@@ -564,7 +575,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                                   const s_point tet[4], const int tet_vids[4],
                                   const int *owner, const char *tie,
                                   int *resolved_vtx, int tet_id, s_convh *out,
-                                  s_vlabel **out_labels)
+                                  s_vlabel **out_labels, struct ncvx_cellbuf *cb)
 {
     *out = convhull_NAN;
     if (out_labels) *out_labels = NULL;
@@ -579,9 +590,8 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
     s_cid3 FC[4];
     for (int f = 0; f < 4; f++) { FC[f].type = LP3_TET; FC[f].idx = f; }
 
-    s_dynarray pts  = dynarray_initialize(sizeof(s_point), 64);
-    s_dynarray cand = dynarray_initialize(sizeof(s_vlabel), 64);  /* labels aligned with pts */
-    if (!pts.items || !cand.items) goto err;
+    s_dynarray *pts  = &cb->pts;  pts->N  = 0;
+    s_dynarray *cand = &cb->cand; cand->N = 0;   /* labels aligned with pts */
 
     /* ---- (b) tet vertices inside the cell (2a: owner[] memo) ---- */
     for (int j = 0; j < 4; j++) {
@@ -606,7 +616,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             }
         }
         if (keep) {
-            if (!dynarray_push(&pts, &tet[j]) || !dynarray_push(&cand, &lb)) goto err;
+            if (!dynarray_push(pts, &tet[j]) || !dynarray_push(cand, &lb)) goto err;
         }
     }
 
@@ -661,7 +671,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             s_point Pt = { .x = A.x + lam*(B.x-A.x), .y = A.y + lam*(B.y-A.y), .z = A.z + lam*(B.z-A.z) };
             s_vlabel lb = vlabel_make3(vkey_VB(tet_vids[e[0]], tet_vids[e[1]], seed_id, nbr[kk]),
                                        (uint8_t)((1 << f) | (1 << g)), nbr[kk], -1, -1);
-            if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
+            if (!dynarray_push(pts, &Pt) || !dynarray_push(cand, &lb)) goto err;
         }
     }
 
@@ -704,7 +714,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
             }
             if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, &Pt)) {
                 s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, seed_weights, nbr, NB);
-                if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
+                if (!dynarray_push(pts, &Pt) || !dynarray_push(cand, &lb)) goto err;
             }
         }
     }
@@ -811,32 +821,27 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                                           fm, -1, -1, -1);
                         for (int i = 0; i < ncl; i++) vlabel_add_bis(&lb, cl[i]);
                     }
-                    if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
+                    if (!dynarray_push(pts, &Pt) || !dynarray_push(cand, &lb)) goto err;
                 }
             }
         }
     }
 
     {
-        s_points P = { (int)pts.N, (s_point *)pts.items };
-        int *pmap = out_labels ? malloc(sizeof(int) * (pts.N ? pts.N : 1)) : NULL;
-        if (out_labels && !pmap) goto err;
+        s_points P = { (int)pts->N, (s_point *)pts->items };
+        if (out_labels && !dynarray_ensure_capacity(&cb->pmap, pts->N)) goto err;
+        int *pmap = out_labels ? cb->pmap.items : NULL;
         int r = convhull_from_points_mapped(&P, out, pmap);
         if (r == 1 && out_labels) {
-            s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N);
-            if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN; goto err; }
+            s_vlabel *labels = scatter_labels(cand, pmap, &P, &out->points, (int)pts->N, out->points.N, &cb->set);
+            if (!labels) { free_convhull(out); *out = convhull_NAN; goto err; }
             *out_labels = labels;
         }
-        free(pmap);
-        dynarray_free(&pts);
-        dynarray_free(&cand);
         if (r == 0)  return 0;
         if (r == -1) { *out = convhull_NAN; return -1; }
         return 1;
     }
 err:
-    dynarray_free(&pts);
-    dynarray_free(&cand);
     *out = convhull_NAN;
     if (out_labels) *out_labels = NULL;
     return -1;
@@ -850,13 +855,13 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
                               const double *seed_weights,
                               const int *nbr, int NB,
                               const int *vor_vtx, int n_vtx,
-                              s_convh *out, double *vol_out, s_vlabel **out_labels)
+                              s_convh *out, double *vol_out, s_vlabel **out_labels,
+                              struct ncvx_cellbuf *cb)
 {
     *out = convhull_NAN; *vol_out = 0.0;
     if (out_labels) *out_labels = NULL;
-    s_dynarray pts  = dynarray_initialize(sizeof(s_point), 32);
-    s_dynarray cand = dynarray_initialize(sizeof(s_vlabel), 32);
-    if (!pts.items || !cand.items) { dynarray_free(&pts); dynarray_free(&cand); return -1; }
+    s_dynarray *pts  = &cb->pts;  pts->N  = 0;
+    s_dynarray *cand = &cb->cand; cand->N = 0;
     s_point s = seeds->p[seed_id];
     double s_w = seed_weights ? seed_weights[seed_id] : 0.0;
     for (int vi = 0; vi < n_vtx; vi++) {
@@ -875,24 +880,18 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
             /* interior cell: all faces are Voronoi walls, so every vertex is a
              * VV point on the bisectors of its (possibly cospherical) cluster. */
             s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, seed_weights, nbr, NB);
-            if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) {
-                dynarray_free(&pts); dynarray_free(&cand); return -1;
-            }
+            if (!dynarray_push(pts, &Pt) || !dynarray_push(cand, &lb)) return -1;
         }
     }
-    s_points P = { (int)pts.N, (s_point *)pts.items };
-    int *pmap = out_labels ? malloc(sizeof(int) * (pts.N ? pts.N : 1)) : NULL;
-    if (out_labels && !pmap) { dynarray_free(&pts); dynarray_free(&cand); return -1; }
+    s_points P = { (int)pts->N, (s_point *)pts->items };
+    if (out_labels && !dynarray_ensure_capacity(&cb->pmap, pts->N)) return -1;
+    int *pmap = out_labels ? cb->pmap.items : NULL;
     int r = convhull_from_points_mapped(&P, out, pmap);
     if (r == 1 && out_labels) {
-        s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N);
-        if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN;
-                       dynarray_free(&pts); dynarray_free(&cand); return -1; }
+        s_vlabel *labels = scatter_labels(cand, pmap, &P, &out->points, (int)pts->N, out->points.N, &cb->set);
+        if (!labels) { free_convhull(out); *out = convhull_NAN; return -1; }
         *out_labels = labels;
     }
-    free(pmap);
-    dynarray_free(&pts);
-    dynarray_free(&cand);
     if (r == 1) *vol_out = volume_convhull(out);
     return r;
 }
@@ -2400,6 +2399,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
     double     *vol   = calloc((size_t)N, sizeof(double));
     int        *stamp = calloc((size_t)N, sizeof(int));   /* per-cell visit stamp */
     s_dynarray  queue = dynarray_initialize(sizeof(int), 64);
+    struct ncvx_cellbuf cb = NCVX_CELLBUF_INIT;
     if (!pcs || (want_surface && !surf) || (merge_orphans && !piece_tri_off) ||
         !vol || !stamp || !queue.items) goto err_early;
     for (int i = 0; i < N; i++) {
@@ -2580,7 +2580,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
                 s_convh piece; s_vlabel *labels = NULL;
                 int r = clip_vcell_clip_tet_lp(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                                tv, nc->vertex_id, owner, tie, rv, tet_stamp,
-                                               &piece, want_surface ? &labels : NULL);
+                                               &piece, want_surface ? &labels : NULL, &cb);
                 if (r == 1) {
                     double pv = volume_convhull(&piece);
                     /* Keep every valid positive-volume piece. A piece is dropped
@@ -2653,7 +2653,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
                                    nnb ? adj->neighbor + adj->offset[i] : NULL,
                                    nnb,
                                    vv, n_vtx, &hull, &hv,
-                                   want_surface ? &labels : NULL);
+                                   want_surface ? &labels : NULL, &cb);
         if (r == -1) goto err;
         if (r == 1) {
             vol[i] = hv;
@@ -2715,6 +2715,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
         }
     }
     dynarray_free(&queue);
+    dynarray_free(&cb.pts); dynarray_free(&cb.cand); dynarray_free(&cb.pmap); dynarray_free(&cb.set);
     free(owner); free(tie); free(resolved); free(cellkind);
     free(pcs); free(surf); free(piece_tri_off); free(vol); free(stamp);
     return 1;
@@ -2730,6 +2731,7 @@ err:
     }
 err_early:
     dynarray_free(&queue);
+    dynarray_free(&cb.pts); dynarray_free(&cb.cand); dynarray_free(&cb.pmap); dynarray_free(&cb.set);
     free(owner); free(tie); free(resolved); free(cellkind);
     free(pcs); free(surf); free(piece_tri_off); free(vol); free(stamp);
     return 0;
@@ -2751,7 +2753,7 @@ err_early:
  * (nullable, length seeds->N, pre-filled with the identity) is composed with
  * the DT compaction (duplicates / power-redundant seeds -> -1). */
 static int build_seed_dt(const s_points *seeds, const double *weights,
-                         s_point mn, s_point mx, double TOL, s_random_context *rng,
+                         s_point mn, s_point mx, double TOL, const s_vor3d_ctx *ctx,
                          int *out_kept_idx, s_scplx *out_dt, int *out_N)
 {
     s_point c  = { .x = 0.5*(mn.x+mx.x), .y = 0.5*(mn.y+mx.y), .z = 0.5*(mn.z+mx.z) };
@@ -2767,7 +2769,8 @@ static int build_seed_dt(const s_points *seeds, const double *weights,
     s_point big_min = { .x = c.x-(FAR+2)*h, .y = c.y-(FAR+2)*h, .z = c.z-(FAR+2)*h };
     s_point big_max = { .x = c.x+(FAR+2)*h, .y = c.y+(FAR+2)*h, .z = c.z+(FAR+2)*h };
 
-    s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max, rng);
+    s_dt_builder builder = dt_builder_begin(seeds, weights, TOL, &big_min, &big_max,
+                                              ctx ? ctx->randd01 : NULL, ctx ? ctx->rctx : NULL);
     if (!builder._stack) return 0;
     s_points aux_pts = { .N = 8, .p = aux };
     if (!dt_builder_extend(&builder, &aux_pts, TOL)) {
@@ -2805,11 +2808,10 @@ static void convex_cell_surfaces(s_vcell *vcells, int N)
 
 s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
                          const s_vor3d_domain *domain,
-                         double EPS_DEG, double TOL, s_random_context *rng,
-                         int *out_kept_idx,
+                         const s_vor3d_ctx *ctx, int *out_kept_idx,
                          bool want_surface, bool merge_orphans)
 {
-    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
+    const double TOL = ctx ? ctx->tol_dup : 0.0;
     const int n_in = (seeds && seeds->N > 0) ? seeds->N : 0;
     if (out_kept_idx) for (int i = 0; i < n_in; i++) out_kept_idx[i] = -1;
     if (n_in == 0 || !domain || !vor3d_domain_is_valid(domain))
@@ -2829,7 +2831,7 @@ s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
     bool have_adj = false;
     s_vcell *vcells = NULL;
 
-    if (!build_seed_dt(seeds, weights, domain->bbox_min, domain->bbox_max, TOL, rng, out_kept_idx,
+    if (!build_seed_dt(seeds, weights, domain->bbox_min, domain->bbox_max, TOL, ctx, out_kept_idx,
                        &seed_dt, &N))
         goto fail;
     s_points real_seeds = { .N = N, .p = seed_dt.points.p };   /* real seeds packed first */

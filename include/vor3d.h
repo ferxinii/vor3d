@@ -5,7 +5,7 @@
 #include "points.h"
 #include "convh.h"
 #include "trimesh.h"
-typedef struct random_context s_random_context;
+#include "vor3d_ctx.h"
 
 
 /* ---- Cells and diagram ---- */
@@ -73,17 +73,18 @@ typedef struct vor3d_domain {
  *   keep_exterior (non-convex only): 0 stores interior tets only (lean);
  *   1 also stores the exterior pockets of the hull, flagged, which makes
  *   vor3d_domain_contains a single exact walk. Same diagrams either way.
+ *   ctx (nullable): tol_dup for the CDT.
  * vor3d_domain_from_convh / _from_points: always convex (convex hull of the
- *   points, built with EPS_DEG). */
-s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
-                                         double TOL, int keep_exterior);
+ *   points). */
+s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, const s_vor3d_ctx *ctx,
+                                         int keep_exterior);
 s_vor3d_domain vor3d_domain_from_convh(const s_convh *convh);
-s_vor3d_domain vor3d_domain_from_points(const s_points *points, double EPS_DEG);
+s_vor3d_domain vor3d_domain_from_points(const s_points *points);
 bool vor3d_domain_is_valid(const s_vor3d_domain *d);
 void free_vor3d_domain(s_vor3d_domain *d);
 
-/* True iff p is inside or on the domain (on = within TOL of the hull boundary
- * for the half-space test; TOL = 0 makes that test exact).
+/* True iff p is inside or on the domain (on = within tol_bdry, an absolute
+ * distance, of the hull boundary for the half-space test; 0 makes it exact).
  *   convex: half-space test against the hull faces.
  *   non-convex: bbox + hull reject, then a point-location walk on the CDT.
  *     Exact when the domain was built with keep_exterior = 1. With the lean CDT
@@ -91,7 +92,7 @@ void free_vor3d_domain(s_vor3d_domain *d);
  *     walk that leaves the complex through a concavity is not, and the test
  *     falls back to the surface winding number (robust; can be wrong only for
  *     points within rounding noise of the surface). */
-bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double EPS_DEG, double TOL);
+bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double tol_bdry);
 
 
 /* ---- Diagram ----
@@ -113,21 +114,21 @@ bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double EPS_DEG, d
  *   concavity) to a neighbouring seed so every seed owns one connected region
  *   (see MERGING_ORPHANS.md). Needs the surface machinery, so it forces
  *   want_surface on.
- * rng: caller-owned PRNG breaking point-location walk ties; NULL = fixed
- *   deterministic order. Must outlive the call.
+ * ctx (nullable): tol_dup (seed duplicates), randd01/rctx (seed-DT walk
+ *   order; the diagram does not depend on it).
  *
  * vd.vol_rel_err is always computed; the diagram is never rejected for it.
  * Returns a zeroed s_vdiagram (vcells == NULL) on failure. */
 s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
                          const s_vor3d_domain *domain,
-                         double EPS_DEG, double TOL, s_random_context *rng,
-                         int *out_kept_idx,
+                         const s_vor3d_ctx *ctx, int *out_kept_idx,
                          bool want_surface, bool merge_orphans);
 
 /* False iff vd is the zeroed failure result (vcells == NULL). */
 bool vdiagram_is_valid(const s_vdiagram *vd);
-/* Index of the cell containing x (any piece, boundary included), or -1. */
-int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_DEG, double TOL);
+/* Index of the cell containing x (any piece, within tol_bdry of its boundary
+ * included; 0 = exact), or -1. */
+int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double tol_bdry);
 void free_vdiagram(s_vdiagram *vd);
 void free_vcell(s_vcell *c);
 

@@ -127,7 +127,7 @@ int main(void)
            N, 8, 125);
     fflush(stdout);
 
-    s_tetmesh dt = delaunay_3d(&points, NULL, 1e-12, NULL, NULL);
+    s_tetmesh dt = delaunay_3d(&points, NULL, &(s_vor3d_ctx){ .tol_dup = 1e-12 }, NULL);
 
     if (!tetmesh_is_valid(&dt)) {
         fputs("delaunay_3d failed (error or crash).\n", stderr);
@@ -137,10 +137,10 @@ int main(void)
 
     printf("delaunay_3d succeeded -- %d tetrahedra.\n", dt.N_tets);
 
-    s_vor3d_domain dom = vor3d_domain_from_points(&points, 1e-12);
+    s_vor3d_domain dom = vor3d_domain_from_points(&points);
     write_convh_vtk(&dom.convh, "convh.vtk");
     /* All points are seeds (no position filter): hull vertices included. */
-    s_vdiagram vd = vor3d_diagram(&points, NULL, &dom, 1e-12, 1e-12, NULL, NULL,
+    s_vdiagram vd = vor3d_diagram(&points, NULL, &dom, &(s_vor3d_ctx){ .tol_dup = 1e-12 }, NULL,
                                   false, false);
 
     if (!vdiagram_is_valid(&vd)) {

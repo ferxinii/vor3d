@@ -6,7 +6,6 @@
 #include <time.h>
 
 #define TOL     1e-6    /* tolerance for exact (analytic) comparisons */
-#define EPS     1e-10
 #define TOL_DUP 1e-12
 
 static int n_passed = 0;
@@ -71,7 +70,6 @@ static void check_mc(const char *name, double exact, double mc, double mc_tol)
 
 int main(void)
 {
-    s_dynarray buff = dynarray_initialize(sizeof(void *), 64);
     const int    N_MC   = 4000000;   /* ~0.1-0.2% MC accuracy */
     const double MC_TOL = 0.015;     /* 1.5% relative (MC noise + boundary conventions) */
     const unsigned int SEED = 20260713u;
@@ -82,14 +80,14 @@ int main(void)
         double  r[1] = { 1.3 };
         s_points pts = { 1, c };
         check("N=1 single sphere",
-              volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL), volume_sphere(1.3), TOL);
+              volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL), volume_sphere(1.3), TOL);
     }
     {   /* N=2: disjoint -> sum of volumes. */
         s_point c[2] = { {{{0,0,0}}}, {{{10,0,0}}} };
         double  r[2] = { 1.0, 1.2 };
         s_points pts = { 2, c };
         check("N=2 disjoint",
-              volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL),
+              volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL),
               volume_sphere(1.0) + volume_sphere(1.2), TOL);
     }
     {   /* N=2: containment -> volume of the big sphere. */
@@ -97,14 +95,14 @@ int main(void)
         double  r[2] = { 2.0, 0.5 };
         s_points pts = { 2, c };
         check("N=2 containment",
-              volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL), volume_sphere(2.0), TOL);
+              volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL), volume_sphere(2.0), TOL);
     }
     {   /* N=2: overlap -> matches the closed-form 2-ball union. */
         s_point c[2] = { {{{0,0,0}}}, {{{2,0,0}}} };
         double  r[2] = { 1.5, 1.1 };
         s_points pts = { 2, c };
         check("N=2 overlap vs closed form",
-              volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL),
+              volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL),
               volume_union_2_spheres(c[0], r[0], c[1], r[1], true, NULL), TOL);
     }
 
@@ -115,7 +113,7 @@ int main(void)
         double  r[3] = { 1.5, 1.6, 1.9 };
         s_points pts = { 3, c };
         check_mc("N=3 overlapping (triple lens)",
-                 volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL),
+                 volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL),
                  mc_volume_union_spheres(&pts, r, N_MC, SEED), MC_TOL);
     }
 
@@ -126,14 +124,14 @@ int main(void)
         s_points pts = { 4, c };
         double sum = 0.0; for (int i = 0; i < 4; i++) sum += volume_sphere(r[i]);
         check("N=4 disjoint (isolated balls)",
-              volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL), sum, TOL);
+              volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL), sum, TOL);
     }
     {   /* N=4 overlapping on a tetrahedron. */
         s_point c[4] = { {{{1,1,1}}}, {{{1,-1,-0.5}}}, {{{-1,1,-1}}}, {{{-1,-1,1}}} };
         double  r[4] = { 2.4, 1.8, 1.9, 1.5 };
         s_points pts = { 4, c };
         check_mc("N=4 overlapping (tetrahedral)",
-                 volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL),
+                 volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL),
                  mc_volume_union_spheres(&pts, r, N_MC, SEED), MC_TOL);
     }
     {   /* N=5 partial overlap. */
@@ -142,11 +140,10 @@ int main(void)
         double  r[5] = { 1.0, 1.0, 1.0, 1.0, 1.0 };
         s_points pts = { 5, c };
         check_mc("N=5 partial overlap",
-                 volume_union_spheres(&pts, r, EPS, TOL_DUP, &buff, NULL),
+                 volume_union_spheres(&pts, r, &(s_vor3d_ctx){ .tol_dup = TOL_DUP }, NULL),
                  mc_volume_union_spheres(&pts, r, N_MC, SEED), MC_TOL);
     }
 
-    dynarray_free(&buff);
     printf("\n%d passed, %d failed\n", n_passed, n_failed);
     return n_failed ? 1 : 0;
 }

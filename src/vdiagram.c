@@ -71,12 +71,11 @@ void print_vdiagram(const s_vdiagram *vdiagram)
     puts("------------------------------");
 }
 
-int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double EPS_degenerate, double TOL)
+int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double tol_bdry)
 {
-    (void)EPS_degenerate;  /* unused since geometry EPS went internal; leaves the API in step 2 */
     for (int ii=0; ii<vd->seeds.N; ii++) {
         for (int p = 0; p < vd->vcells[ii].N_pieces; p++) {
-            e_geom_test test = test_point_in_convhull(&vd->vcells[ii].pieces[p], x, TOL);
+            e_geom_test test = test_point_in_convhull(&vd->vcells[ii].pieces[p], x, tol_bdry);
             if (test == TEST_DEGENERATE || test == TEST_ERROR) fprintf(stderr, "find_inside_which_vcell: TEST_DEGENERATE or TEST_ERROR. Continuing.\n");
             if (test == TEST_IN || test == TEST_BOUNDARY) return ii;
         }

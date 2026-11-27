@@ -597,10 +597,12 @@ static void compact_samples(s_medax_samples *S, const int *kept)
 /* ------------------------------------------------------------------------- */
 s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double theta0, double rho0,
-                           double (*randd01)(void*), void *rctx,
-                           double EPS_DEG, double TOL, bool want_graph)
+                           const s_vor3d_ctx *ctx, bool want_graph)
 {
-    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
+    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
+    double (*randd01)(void *) = c.randd01;
+    void *rctx = c.rctx;
+    const double TOL = c.tol_dup;
     if (!trimesh_is_valid(mesh)) return MEDAX_INVALID;
     if (theta0 <= 0.0) theta0 = MEDAX_THETA0_DEFAULT;
     if (rho0   <= 0.0) rho0   = MEDAX_RHO0_DEFAULT;
@@ -626,7 +628,7 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     int *kept = malloc(sizeof(int) * (size_t)S.samples.N);
     if (!kept) { free_samples(&S); return MEDAX_INVALID; }
     for (int i = 0; i < S.samples.N; i++) kept[i] = i;
-    s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL, NULL);
+    s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL, NULL, NULL);
     if (!b._stack) { free(kept); free_samples(&S); return MEDAX_INVALID; }
     int Nreal = 0;
     s_scplx dt = dt_builder_end(&b, false, &Nreal, kept, S.samples.N);

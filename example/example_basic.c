@@ -6,6 +6,7 @@
 #include <math.h>
 #include "vor3d.h"
 #include "random.h"
+static double rnd01(void *c) { return random_uniform_double(c); }
 #include "dynarray.h"
 
 #define FILE_BP "bp_points.txt.aux"
@@ -16,7 +17,7 @@
  * PDS was removed from the library: ~1.25 seeds per unit volume. */
 #define SEEDS_PER_UNIT_VOLUME 1.25
 
-double EPS_degenerate = 1e-12, TOL = 1e-12;
+double TOL = 1e-12;
 s_random_context *rctx_omp;
 
 
@@ -31,7 +32,7 @@ static s_points random_seeds_inside(const s_vor3d_domain *dom, s_random_context 
         s_point p = {{{ mn.x + (mx.x - mn.x) * random_uniform_double(rng),
                         mn.y + (mx.y - mn.y) * random_uniform_double(rng),
                         mn.z + (mx.z - mn.z) * random_uniform_double(rng) }}};
-        if (vor3d_domain_contains(dom, p, EPS_degenerate, TOL)) s.p[s.N++] = p;
+        if (vor3d_domain_contains(dom, p, TOL)) s.p[s.N++] = p;
     }
     return s;
 }
@@ -39,7 +40,7 @@ static s_points random_seeds_inside(const s_vor3d_domain *dom, s_random_context 
 static s_vdiagram build_random(const s_vor3d_domain *dom, s_random_context *rng)
 {
     s_points seeds = random_seeds_inside(dom, rng);
-    s_vdiagram vd = vor3d_diagram(&seeds, NULL, dom, EPS_degenerate, TOL, rng,
+    s_vdiagram vd = vor3d_diagram(&seeds, NULL, dom, &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = rnd01, .rctx = rng },
                                   NULL, false, false);
     free_points(&seeds);
     return vd;
@@ -58,7 +59,7 @@ static void check_volume(const s_vdiagram *vd)
 static s_vor3d_domain domain_from_csv(const char *fname)
 {
     s_points pts = read_points_from_csv(fname);
-    s_vor3d_domain dom = vor3d_domain_from_points(&pts, EPS_degenerate);
+    s_vor3d_domain dom = vor3d_domain_from_points(&pts);
     free_points(&pts);
     return dom;
 }

@@ -29,7 +29,7 @@ bool is_delaunay_3d(const s_scplx *scplx, e_delaunay_test_type type);
  *   < original_Nreal and would be mistaken for real seeds.  Pass NULL to ignore. */
 s_scplx construct_dt_3d(const s_points *points, const double *weights,
                         bool keep_big_tetra, double TOL_duplicates, int *out_Nreal,
-                        s_random_context *rng);
+                        double (*randd01)(void *), void *rctx);
 
 
 
@@ -58,12 +58,12 @@ typedef struct {
 /* bb_min_hint / bb_max_hint: optional AABB hint (e.g. bounding-polytope AABB) that
  * expands the big-tetrahedron to safely contain future extra points even when few
  * seeds are provided.  Pass NULL for both to use the seed bounding box only. */
-/* rng: caller-owned PRNG that breaks point-location walk ties during construction
- * (stored on the returned complex; propagates through dt_builder_end). Pass NULL for
- * a fixed deterministic order. The complex must not outlive *rng. */
+/* randd01/rctx: caller's RNG in [0,1) randomizing the point-location walks (start
+ * + face order); stored on the returned complex, propagates through dt_builder_end.
+ * NULL = fixed deterministic order. The complex must not outlive rctx. */
 s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, double TOL_dup,
                                const s_point *bb_min_hint, const s_point *bb_max_hint,
-                               s_random_context *rng);
+                               double (*randd01)(void *), void *rctx);
 
 /* Exact-id build (CDT): all builder predicates run on a fresh, caller-owned
  * s_implicit_pred_reg (registry index == scplx point index; see
@@ -76,8 +76,7 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
  * cavity DTs (dt_builder_begin_exact_local).  Add Steiners with
  * dt_builder_extend_lnc. */
 s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
-                                    const s_point *bb_min_hint, const s_point *bb_max_hint,
-                                    s_random_context *rng);
+                                    const s_point *bb_min_hint, const s_point *bb_max_hint);
 
 /* Exact-id build of a LOCAL cavity DT (Phase B): predicates run on the SAME
  * s_implicit_pred_reg as the global CDT DT (reg, typically the outer build's
@@ -95,7 +94,6 @@ s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           const int *l2g_real, int n, int scratch_base,
                                           const s_point *bb_min_hint,
                                           const s_point *bb_max_hint,
-                                          s_random_context *rng,
                                           s_implicit_pred_reg *reg);
 
 /* Phase 2: insert additional points into the existing DT.

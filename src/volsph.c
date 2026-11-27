@@ -444,9 +444,8 @@ static void caps_3_spheres(double rA, double rB, double rC,
 }
 
 double volume_intersection_3_spheres(double rA, double rB, double rC, double dAB, double dAC, double dBC,
-                                     bool check_intersection, double EPS_DEGEN)
+                                     bool check_intersection)
 {
-    (void)EPS_DEGEN;  /* unused since EPS went internal; leaves the API in step 2 */
     double cap[3];
     caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, cap);
     return cap[0] + cap[1] + cap[2];
@@ -481,10 +480,9 @@ double volume_union_2_spheres(s_point pA, double rA,
 double volume_union_3_spheres(s_point pA, double rA,
                               s_point pB, double rB,
                               s_point pC, double rC,
-                              bool check_intersection, double EPS_DEGEN,
+                              bool check_intersection,
                               double *out_contrib)
 {   /* Inclusion-Exclusion principle */
-    (void)EPS_DEGEN;  /* unused since EPS went internal; leaves the API in step 2 */
     double VA = volume_sphere(rA);
     double VB = volume_sphere(rB);
     double VC = volume_sphere(rC);
@@ -657,7 +655,7 @@ static double union_core(const s_points *centers, const double radii[],
     int *ball_of_point = malloc(N * sizeof(int));   /* seed i -> compacted vid, or -1 */
     for (int i = 0; i < N; i++) { weights[i] = radii[i]*radii[i]; ball_of_point[i] = i; }
 
-    s_dt_builder b = dt_builder_begin(centers, weights, TOL_dup, NULL, NULL, NULL);
+    s_dt_builder b = dt_builder_begin(centers, weights, TOL_dup, NULL, NULL, NULL, NULL);
     s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/true, NULL, ball_of_point, N);
 
     /* Inverse map: compacted scplx point id -> original ball id (-1 for the four
@@ -781,10 +779,8 @@ static double union_core(const s_points *centers, const double radii[],
 
 
 double volume_union_spheres(const s_points *centers, const double radii[centers->N],
-                            double EPS_DEGEN, double TOL_dup, s_dynarray *buff_ncellPTR,
-                            double *out_contrib)
+                            const s_vor3d_ctx *ctx, double *out_contrib)
 {
-    (void)EPS_DEGEN;  /* unused since EPS went internal; leaves the API in step 2 */
     int N = centers->N;
     if (N == 1) {
         if (out_contrib) out_contrib[0] = volume_sphere(radii[0]);
@@ -797,9 +793,13 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
         return volume_union_3_spheres(centers->p[0], radii[0],
                                       centers->p[1], radii[1],
                                       centers->p[2], radii[2],
-                                      true, 0.0, out_contrib);
+                                      true, out_contrib);
     }
     /* N >= 4: general RT + alpha-complex path.  The returned total does not
      * depend on out_contrib (the split only adds a parallel accumulation). */
-    return union_core(centers, radii, TOL_dup, buff_ncellPTR, out_contrib);
+    s_dynarray buff = dynarray_initialize(sizeof(void *), 64);   /* vertex-star scratch */
+    if (!buff.items) return NAN;
+    double vol = union_core(centers, radii, ctx ? ctx->tol_dup : 0.0, &buff, out_contrib);
+    dynarray_free(&buff);
+    return vol;
 }

@@ -2144,7 +2144,8 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
                               double TOL_dup, const s_point *bb_min_hint,
                               const s_point *bb_max_hint, bool exact,
                               const int *l2g_real, int scratch_base,
-                              s_random_context *rng, s_implicit_pred_reg *shared_reg)
+                              double (*randd01)(void *), void *rctx,
+                              s_implicit_pred_reg *shared_reg)
 {
     s_dt_builder b = {0};
     assert(!(exact && weights) && "exact-id mode does not support weights");
@@ -2160,9 +2161,10 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
     if (!initialize_scplx(seeds, weights, &b.dt, bb_min_hint, bb_max_hint)) {
         free(ignored); stack_free(stack); free(stack); return b;
     }
-    /* Attach the caller's PRNG BEFORE the seed-insertion loop below so every
-     * point-location walk during construction breaks ties deterministically. */
-    b.dt.rng = rng;
+    /* Attach the caller's RNG BEFORE the seed-insertion loop below so every
+     * point-location walk during construction uses it. */
+    b.dt.randd01 = randd01;
+    b.dt.rctx = rctx;
 
     if (exact && !l2g_real) {
         /* Exact GLOBAL DT: OWN a fresh registry -- register every point
@@ -2254,10 +2256,10 @@ static s_dt_builder dt_builder_begin_impl(const s_points *seeds, const double *w
 
 s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, double TOL_dup,
                               const s_point *bb_min_hint, const s_point *bb_max_hint,
-                              s_random_context *rng)
+                              double (*randd01)(void *), void *rctx)
 {
     return dt_builder_begin_impl(seeds, weights, TOL_dup, bb_min_hint, bb_max_hint,
-                                 false, NULL, 0, rng, NULL);
+                                 false, NULL, 0, randd01, rctx, NULL);
 }
 
 /* Exact-id build: predicates run on a fresh s_implicit_pred_reg (no weights).
@@ -2265,23 +2267,21 @@ s_dt_builder dt_builder_begin(const s_points *seeds, const double *weights, doub
  * rounding mode).  Steiners are then added via dt_builder_extend_lnc, real
  * points via dt_builder_extend. */
 s_dt_builder dt_builder_begin_exact(const s_points *seeds, double TOL_dup,
-                                    const s_point *bb_min_hint, const s_point *bb_max_hint,
-                                    s_random_context *rng)
+                                    const s_point *bb_min_hint, const s_point *bb_max_hint)
 {
     return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
-                                 true, NULL, 0, rng, NULL);
+                                 true, NULL, 0, NULL, NULL, NULL);
 }
 
 s_dt_builder dt_builder_begin_exact_local(const s_points *seeds, double TOL_dup,
                                           const int *l2g_real, int n, int scratch_base,
                                           const s_point *bb_min_hint,
                                           const s_point *bb_max_hint,
-                                          s_random_context *rng,
                                           s_implicit_pred_reg *reg)
 {
     (void)n;  /* n == seeds->N; the map is sized from points.N inside the impl */
     return dt_builder_begin_impl(seeds, NULL, TOL_dup, bb_min_hint, bb_max_hint,
-                                 true, l2g_real, scratch_base, rng, reg);
+                                 true, l2g_real, scratch_base, NULL, NULL, reg);
 }
 
 
@@ -2488,9 +2488,10 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
 }
 
 
-s_tetmesh delaunay_3d(const s_points *pts, const double *weights, double TOL_dup,
-                      s_random_context *rng, int *out_kept_idx)
+s_tetmesh delaunay_3d(const s_points *pts, const double *weights,
+                      const s_vor3d_ctx *ctx, int *out_kept_idx)
 {
+    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
     int N_in = pts ? pts->N : 0;
     if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;
     if (!pts || pts->N < 4) return (s_tetmesh){0};
@@ -2499,7 +2500,7 @@ s_tetmesh delaunay_3d(const s_points *pts, const double *weights, double TOL_dup
     int *kept = malloc((size_t)pts->N * sizeof(int));
     if (!kept) return (s_tetmesh){0};
     for (int i = 0; i < pts->N; i++) kept[i] = i;
-    s_dt_builder b = dt_builder_begin(pts, weights, TOL_dup, NULL, NULL, rng);
+    s_dt_builder b = dt_builder_begin(pts, weights, c.tol_dup, NULL, NULL, c.randd01, c.rctx);
     if (!b._stack) { free(kept); return (s_tetmesh){0}; }
     s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/false, NULL, kept, pts->N);
 
@@ -2516,9 +2517,9 @@ s_tetmesh delaunay_3d(const s_points *pts, const double *weights, double TOL_dup
 
 s_scplx construct_dt_3d(const s_points *points, const double *weights,
                         bool keep_big_tetra, double TOL_duplicates, int *out_Nreal,
-                        s_random_context *rng)
+                        double (*randd01)(void *), void *rctx)
 {
-    s_dt_builder b = dt_builder_begin(points, weights, TOL_duplicates, NULL, NULL, rng);
+    s_dt_builder b = dt_builder_begin(points, weights, TOL_duplicates, NULL, NULL, randd01, rctx);
     if (!b._stack) {
         fprintf(stderr, "construct_dt_3d: Error.\n");
         return (s_scplx){0};

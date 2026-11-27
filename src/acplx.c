@@ -457,9 +457,10 @@ static int collect_true_keys(const s_hash_table *ht, int k, const int *k_of_vid,
 }
 
 s_alpha_complex alpha_complex_3d(const s_points *pts, const double *weights,
-                                 double alpha, double TOL_dup,
-                                 s_random_context *rng, int *out_kept_idx)
+                                 double alpha, const s_vor3d_ctx *ctx,
+                                 int *out_kept_idx)
 {
+    const s_vor3d_ctx c = ctx ? *ctx : (s_vor3d_ctx){0};
     const s_alpha_complex FAIL = { .alpha = NAN };
     int N_in = pts ? pts->N : 0;
     if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;
@@ -469,7 +470,7 @@ s_alpha_complex alpha_complex_3d(const s_points *pts, const double *weights,
     int *kept = malloc(pts->N * sizeof(int));
     if (!kept) return FAIL;
     for (int i = 0; i < pts->N; i++) kept[i] = i;
-    s_dt_builder b = dt_builder_begin(pts, weights, TOL_dup, NULL, NULL, rng);
+    s_dt_builder b = dt_builder_begin(pts, weights, c.tol_dup, NULL, NULL, c.randd01, c.rctx);
     if (!b._stack) { free(kept); return FAIL; }
     s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/true, NULL, kept, pts->N);
 

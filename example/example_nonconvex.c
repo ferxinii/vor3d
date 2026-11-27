@@ -5,9 +5,9 @@
 #include <time.h>
 #include "vor3d.h"
 #include "random.h"
+static double rnd01(void *c) { return random_uniform_double(c); }
 #include "dynarray.h"
 
-static double EPS_DEG = 1e-12;
 static double TOL     = 1e-12;
 static double VOL_REL_DIFF = 1e-2;   /* looser than convex: accounts for tet discretisation */
 
@@ -328,8 +328,7 @@ static void iterate_nonconvex(const char *name, int iterations, int N_seeds,
         s_points seeds = random_seeds_inside(&domain->surface, N_seeds);
         if (!seeds.p) { local_fail++; continue; }
 
-        s_vdiagram vd = vor3d_diagram(&seeds, NULL, domain,
-                                                   EPS_DEG, TOL, &rctx,
+        s_vdiagram vd = vor3d_diagram(&seeds, NULL, domain, &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = rnd01, .rctx = &rctx },
                                                    NULL, false, false);
         free_points(&seeds);
 
@@ -373,7 +372,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
                             fail, total);
 
     /* 3. Domain preparation */
-    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, EPS_DEG, TOL, 0);
+    s_vor3d_domain domain = vor3d_domain_from_trimesh(&mesh, &(s_vor3d_ctx){ .tol_dup = TOL }, 0);
     fprintf(stderr, "DEBUG: vor3d_domain_from_trimesh returned, valid=%d\n",
             vor3d_domain_is_valid(&domain));
     if (!vor3d_domain_is_valid(&domain)) {
@@ -387,8 +386,7 @@ static void test_domain(const char *name, s_trimesh mesh, int expected_faces,
     /* 4. Single Voronoi run */
     {
         s_points seeds = random_seeds_inside(&mesh, 8);
-        s_vdiagram vd = vor3d_diagram(&seeds, NULL, &domain,
-                                               EPS_DEG, TOL, &rctx,
+        s_vdiagram vd = vor3d_diagram(&seeds, NULL, &domain, &(s_vor3d_ctx){ .tol_dup = TOL, .randd01 = rnd01, .rctx = &rctx },
                                                NULL, false, false);
         free_points(&seeds);
         if (vd.seeds.N == 0) {
