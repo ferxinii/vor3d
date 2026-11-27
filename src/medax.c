@@ -19,40 +19,12 @@
  * replaced because CDT construction can fail on degenerate cut cells), a
  * oracle -- no ray-casting degeneracy, so axis-aligned meshes need no jitter. */
 
-/* ----- performance note on medax_center (the canonical center) -------------
- * The center is argmin_i sum_j w_j d(i,j)^2 over the medial graph, where w_j is
- * the governed volume of ball j (its per-ball contribution vol(B_j INTERSECT
- * L_j) to the union of medial balls -- the Laguerre/power partition, computed by
- * volume_contribution_spheres; see MEDIAL_AXIS_BT.md sec.3). Each energy
- * evaluation needs a single-source distance field (one Dijkstra), so the cost is
- * ~ (number of candidate nodes evaluated) x (per-Dijkstra cost). The current
- * warm-started multi-start descent (expanding-ring polish + trajectory
- * memoization) is exact and runs ~0.7-0.9 s on a ~15 k-node lung lobe.
- *
- * TRIED and REVERTED: a coarse-to-fine (multigrid) scheme -- coarsen the graph
- * by heavy-edge matching, solve the small coarse graph exactly, map the result
- * back and refine on the fine graph. It was exact (validated against brute force)
- * but gave NO speedup: the fine refinement still has to run the H-hop polish
- * *confirmation* (~O(H^2) full-graph Dijkstras to certify the minimum), and that
- * floor dominates regardless of how good the warm start is. The plain descent
- * already sits on that same floor, so the coarse solve was pure overhead.
- *
- * The real remaining lever is to attack that floor directly: the confirmation
- * evaluates a ring of nodes whose Dijkstras are INDEPENDENT, so it parallelizes
- * (as the example's OpenMP brute-force check demonstrates ~10x). To do it safely
- * here: (a) give each thread its OWN scratch heap (cen_descent currently shares
- * one -- it would race); (b) this library is meant to run in parallel at a higher
- * level (e.g. many cells at once), so guard any inner "#pragma omp parallel" on
- * omp_get_active_level() / rely on nested parallelism being off, to avoid
- * oversubscribing cores. Prefer a single parallel level chosen by the caller. */
-
 #include "medax.h"
 
 #include "delaunay.h"
 #include "scplx.h"
 #include "./hlibs/dynarray.h"
 #include "./hlibs/hash.h"
-#include "volsph.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -63,6 +35,13 @@
 
 #define MEDAX_MARGIN 1e-6              /* barycentric interior margin (Step 2) */
 static const double MEDAX_SQRT3 = 1.7320508075688772;
+
+/* Dey-Zhao filter defaults (paper: theta0 = pi/8, rho0 = 8). The paper tunes
+ * rho0 against umbrella-triangle circumradii ~ spacing/sqrt(3); our R is the
+ * spacing itself, so the effective ratio threshold is rho0 / sqrt(3). */
+#define MEDAX_THETA0_DEFAULT (3.14159265358979323846 / 8.0)
+#define MEDAX_RHO0_DEFAULT   8.0
+#define MEDAX_RHO_EFF(rho0)  ((rho0) / MEDAX_SQRT3)
 
 /* ----- internal surface-sample bundle (Step 2 output) --------------------- */
 /* samples: mesh vertices [0..Nv) ++ scattered face points [Nv..N); the scatter
@@ -592,13 +571,35 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
     return ma;
 }
 
+/* Drop the records of samples the DT merged into an earlier one (kept[i] < 0),
+ * in place; survivors keep their order, matching the DT's compacted points. */
+static void compact_samples(s_medax_samples *S, const int *kept)
+{
+    int k = 0, o = 0, nv = 0;
+    for (int i = 0; i < S->samples.N; i++) {
+        if (kept[i] < 0) continue;
+        int lo = S->un_off[i], n = S->un_off[i + 1] - lo;
+        S->un_off[k] = o;
+        for (int t = 0; t < n; t++) S->un[o++] = S->un[lo + t];
+        S->samples.p[k] = S->samples.p[i];
+        if (S->R) S->R[k] = S->R[i];
+        if (i < S->Nv) nv++;
+        k++;
+    }
+    S->un_off[k] = o;
+    S->samples.N = k;
+    S->Nv = nv;
+}
+
 /* ------------------------------------------------------------------------- */
 s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double theta0, double rho0,
                            double (*randd01)(void*), void *rctx,
-                           double TOL, double EPS_DEG, bool build_graph)
+                           double EPS_DEG, double TOL, bool want_graph)
 {
     if (!trimesh_is_valid(mesh)) return medax_NAN;
+    if (theta0 <= 0.0) theta0 = MEDAX_THETA0_DEFAULT;
+    if (rho0   <= 0.0) rho0   = MEDAX_RHO0_DEFAULT;
     if (r_sample > 0.0 && !randd01) return medax_NAN;
 
     /* Step 2: samples + umbrella records */
@@ -616,22 +617,18 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     if (!S.samples.p) return medax_NAN;
     MEDAX_TICK("sampling");
 
-    /* Step 2: Delaunay triangulation of the samples (lean, no mirrors) */
+    /* Step 2: Delaunay triangulation of the samples (lean, no mirrors). Samples
+     * within TOL are merged (the first survives, so mesh vertices win). */
+    int *kept = malloc(sizeof(int) * (size_t)S.samples.N);
+    if (!kept) { free_samples(&S); return medax_NAN; }
+    for (int i = 0; i < S.samples.N; i++) kept[i] = i;
     s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL, NULL);
-    if (!b._stack) { free_samples(&S); return medax_NAN; }
+    if (!b._stack) { free(kept); free_samples(&S); return medax_NAN; }
     int Nreal = 0;
-    s_scplx dt = dt_builder_end(&b, false, &Nreal, NULL, 0);
-    if (Nreal != S.samples.N) {
-        fprintf(stderr, "[medax] DT deduplicated points (Nreal=%d != Ns=%d); "
-                        "aborting -- shrink margin/TOL interaction.\n",
-                        Nreal, S.samples.N);
-        free_complex(&dt);
-        free_samples(&S);
-        return medax_NAN;
-    }
+    s_scplx dt = dt_builder_end(&b, false, &Nreal, kept, S.samples.N);
+    if (Nreal != S.samples.N) compact_samples(&S, kept);
+    free(kept);
 
-    fprintf(stderr, "[medax] Step 2 OK: Nv=%d Nscat=%d Ns=%d (DT built, Nreal==Ns).\n",
-                    S.Nv, S.samples.N - S.Nv, S.samples.N);
     MEDAX_TICK("sample-DT");
 
     /* Inside/outside oracle: generalized winding number against the input
@@ -656,24 +653,14 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
         free_samples(&S);
         return medax_NAN;
     }
-    fprintf(stderr, "[medax] Step 3 OK: edges unique=%ld angle=%ld ratio=%ld "
-                    "candidate=%ld selected(inner)=%ld.\n",
-                    cnt.unique, cnt.angle, cnt.ratio, cnt.candidate, cnt.selected);
     MEDAX_TICK("edge-sel");
 
     /* Step 4 (+5): emit circumcenters of tets touching a selected edge, and
      * optionally the medial graph over them. */
     s_emit_counts ec;
     s_medax ma = emit_medax(&dt, mesh, gp, &sel_edges, EPS_DEG, /*inside_filter=*/1,
-                            build_graph, &ec);
+                            want_graph, &ec);
     if (gp) trimesh_inside_grid_free(&grid);
-    if (build_graph)
-        fprintf(stderr, "[medax] Step 4-5 OK: points=%ld edges=%ld (skipped "
-                        "degenerate=%ld, outside=%ld).\n",
-                        ec.emitted, ec.edges, ec.degenerate, ec.outside);
-    else
-        fprintf(stderr, "[medax] Step 4 OK: points=%ld (skipped degenerate=%ld, "
-                        "outside=%ld).\n", ec.emitted, ec.degenerate, ec.outside);
 
     MEDAX_TICK("emit");
 #undef MEDAX_TICK
@@ -681,479 +668,6 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     free_complex(&dt);
     free_samples(&S);
     return ma;
-}
-
-s_points medax_debug_sample_surface(const s_trimesh *mesh, double r_sample,
-                                    double (*randd01)(void*), void *rctx,
-                                    double EPS_DEG)
-{
-    if (!trimesh_is_valid(mesh)) return points_NAN;
-    if (r_sample > 0.0 && !randd01) return points_NAN;
-
-    s_medax_samples S = build_samples(mesh, r_sample, randd01, rctx, EPS_DEG);
-    if (!S.samples.p) return points_NAN;
-
-    s_points pts = S.samples;   /* transfer ownership of the coordinate array */
-    S.samples.p = NULL;
-    free_samples(&S);
-    return pts;
-}
-
-/* ===== Canonical center: volume-weighted geodesic Frechet mean ============ */
-/* The center minimizes f(y) = sum_j r_j^3 * d(y,j)^2 over medial nodes (the
- * geodesic Frechet / Karcher mean of the medial axis, weighted by ball volume).
- * Small components are solved exactly (all-pairs); large ones by warm-started
- * multi-start gradient descent -- one distance field per iteration instead of
- * all-pairs -- following:
- *
- *   [1] C. Mancinelli, E. Puppo, "Computing the Riemannian center of mass on
- *       meshes", Computer Aided Geometric Design 103 (2023) 102203.
- *       (Newton/gradient descent on the squared-distance energy; the gradient is
- *        the sum of log maps, so one distance field from the iterate gives it;
- *        warm start crucial; detects non-convexity via the Hessian.)
- *   [2] F. M. Rygaard, S. Hauberg, S. Markvorsen, "Simultaneous Optimization of
- *       Geodesics and Frechet Means" (GEORCE-FM), arXiv:2511.04301 (2025).
- *       (Global + local-quadratic convergence; stochastic/adaptive extension for
- *        large data; same convex-ball uniqueness caveat as Karcher 1977.)
- *
- * All static; the only public entry points are medax_center / medax_center_seeds.
- * Graph traversal (Dijkstra, energy, descent) is an internal detail here -- no
- * generic graph API is exposed. */
-
-typedef struct cen_hn { double d; int v; } s_cen_hn;
-static void cen_hup(s_cen_hn *h, int i)
-{ while (i>0){int p=(i-1)/2; if(h[p].d<=h[i].d)break; s_cen_hn t=h[p];h[p]=h[i];h[i]=t;i=p;} }
-static void cen_hdown(s_cen_hn *h, int n, int i)
-{ for(;;){int l=2*i+1,r=2*i+2,m=i; if(l<n&&h[l].d<h[m].d)m=l; if(r<n&&h[r].d<h[m].d)m=r;
-          if(m==i)break; s_cen_hn t=h[m];h[m]=h[i];h[i]=t;i=m;} }
-
-/* Dijkstra over the CSR; fills dist[] (INFINITY if unreachable). If fh != NULL,
- * fh[j] = the first-hop neighbour of src toward j (the geodesic tangent).
- * h is a caller-owned scratch heap of size >= g->adj_off[N] + 8 (reused across
- * the many calls a single center computation makes, to avoid per-call malloc). */
-static void cen_dijkstra(const s_medial_graph *g, int src, double *dist, int *fh,
-                         s_cen_hn *h)
-{
-    int N = g->N;
-    for (int i = 0; i < N; i++) { dist[i] = INFINITY; if (fh) fh[i] = -1; }
-    int hn = 0; dist[src] = 0.0; h[hn++] = (s_cen_hn){ 0.0, src };
-    while (hn > 0) {
-        s_cen_hn top = h[0]; h[0] = h[--hn]; cen_hdown(h, hn, 0);
-        if (top.d > dist[top.v]) continue;
-        for (int k = g->adj_off[top.v]; k < g->adj_off[top.v+1]; k++) {
-            int w = g->adj[k]; double nd = top.d + g->adj_w[k];
-            if (nd < dist[w]) {
-                dist[w] = nd; if (fh) fh[w] = (top.v == src) ? w : fh[top.v];
-                h[hn++] = (s_cen_hn){ nd, w }; cen_hup(h, hn-1);
-            }
-        }
-    }
-}
-
-/* f(node) = sum_j w_j d(node,j)^2 over component lc, from a filled dist[].
- * mass[j] = w_j = governed volume of ball j (see cen_weights). */
-static double cen_energy(const double *dist, const double *mass,
-                         const int *comp, int lc, int N)
-{
-    double E = 0.0;
-    for (int j = 0; j < N; j++) {
-        if (comp[j] != lc || dist[j] == INFINITY) continue;
-        E += mass[j] * dist[j] * dist[j];
-    }
-    return E;
-}
-
-/* exact all-pairs argmin (O(N) Dijkstra); returns node, sets *E. */
-static int cen_exact(const s_medial_graph *g, const double *mass,
-                     const int *comp, int lc, double *dist, s_cen_hn *heap, double *E)
-{
-    int N = g->N, best = -1; double bE = INFINITY;
-    for (int i = 0; i < N; i++) {
-        if (comp[i] != lc) continue;
-        cen_dijkstra(g, i, dist, NULL, heap);
-        double e = cen_energy(dist, mass, comp, lc, N);
-        if (e < bE) { bE = e; best = i; }
-    }
-    *E = bE; return best;
-}
-
-/* Straightest walk on the graph from y in ambient direction (dx,dy,dz) for up
- * to arc-length L; returns the landing node (>= one edge unless y is a sink). */
-static int cen_walk(const s_medial_graph *g, const s_point *pos, int y,
-                    double dx, double dy, double dz, double L)
-{
-    int cur = y; double rem = L;
-    for (int steps = 0; steps < 1000000; steps++) {
-        int off = g->adj_off[cur], deg = g->adj_off[cur+1] - off;
-        int best = -1; double bestdot = 0.0, bestlen = 0.0;
-        for (int t = 0; t < deg; t++) {
-            int k = g->adj[off+t];
-            double ex=pos[k].x-pos[cur].x, ey=pos[k].y-pos[cur].y, ez=pos[k].z-pos[cur].z;
-            double el = sqrt(ex*ex+ey*ey+ez*ez); if (el == 0) continue;
-            double dot = (ex*dx + ey*dy + ez*dz) / el;
-            if (dot > bestdot) { bestdot = dot; best = k; bestlen = el; }
-        }
-        if (best < 0) break;                  /* no forward edge */
-        cur = best; rem -= bestlen;
-        if (rem <= 0.0) break;
-    }
-    return cur;
-}
-
-#define CEN_MAX_ITERS 500
-
-/* Warm-started descent from `start`: gradient big-step (Karcher/Exp step in the
- * mean-log direction, with a backtracking line search), a best-neighbour
- * fallback for discretization stalls, and -- when that stalls at a 1-hop local
- * minimum -- an H-hop escape that expands ring by ring, stopping at the FIRST
- * ring holding a lower-energy node, jumps there and restarts the descent (so its
- * cost is proportional to the barrier distance, not H; H = polish_hops, <=0
- * disables it). O(k) Dijkstra. heap is caller scratch.
- *
- * resolved (shared across a multi-start, may be NULL): resolved[node] = the
- * descent result reachable from node, or -1. Because the descent is
- * deterministic, if it lands on an already-resolved node it MUST reach the same
- * result, so it short-circuits there (and the whole trajectory is then stamped).
- * This makes later seeds that merge onto an earlier path skip the expensive
- * final confirmation -- exact, no accuracy loss. Returns node, sets *E. */
-static int cen_descent(const s_medial_graph *g, const s_point *pos,
-                       const double *mass, const int *comp, int lc,
-                       int start, int H, s_cen_hn *heap, int *resolved, double *E)
-{
-    int N = g->N;
-    double *da = malloc(sizeof(double)*(size_t)N), *db = malloc(sizeof(double)*(size_t)N);
-    int    *fa = malloc(sizeof(int)*(size_t)N),    *fb = malloc(sizeof(int)*(size_t)N);
-    int    *seen = (H > 0) ? calloc((size_t)N, sizeof(int)) : NULL;
-    int    *bq   = (H > 0) ? malloc(sizeof(int)*(size_t)N) : NULL;
-    int    *traj = resolved ? malloc(sizeof(int)*(CEN_MAX_ITERS + 1)) : NULL;
-    if (!da || !db || !fa || !fb || (H > 0 && (!seen || !bq)) || (resolved && !traj)) {
-        free(da);free(db);free(fa);free(fb);free(seen);free(bq);free(traj);
-        *E = INFINITY; return -1;
-    }
-    int stamp = 0, tn = 0;
-
-    int y = start;
-    cen_dijkstra(g, y, da, fa, heap);
-    double fy = cen_energy(da, mass, comp, lc, N);
-
-    for (int iter = 0; iter < CEN_MAX_ITERS; iter++) {
-        /* merge short-circuit: this node already leads to a known result */
-        if (resolved && resolved[y] >= 0) {
-            int R = resolved[y];
-            cen_dijkstra(g, R, db, NULL, heap);
-            double ER = cen_energy(db, mass, comp, lc, N);
-            for (int i = 0; i < tn; i++) resolved[traj[i]] = R;
-            free(da);free(db);free(fa);free(fb);free(seen);free(bq);free(traj);
-            *E = ER; return R;
-        }
-        if (resolved && tn <= CEN_MAX_ITERS) traj[tn++] = y;
-
-        /* mean log vector V = (1/M) sum_j m_j d(y,j) * unit(pos[fh]-pos[y]) */
-        double Vx=0, Vy=0, Vz=0, M=0;
-        for (int j = 0; j < N; j++) {
-            if (comp[j] != lc || fa[j] < 0 || da[j] == INFINITY) continue;
-            double m = mass[j]; M += m;
-            double ex=pos[fa[j]].x-pos[y].x, ey=pos[fa[j]].y-pos[y].y, ez=pos[fa[j]].z-pos[y].z;
-            double el = sqrt(ex*ex+ey*ey+ez*ez); if (el == 0) continue;
-            double w = m * da[j] / el; Vx += w*ex; Vy += w*ey; Vz += w*ez;
-        }
-        int moved = 0;
-        if (M > 0) {
-            Vx/=M; Vy/=M; Vz/=M;
-            double Lstep = sqrt(Vx*Vx + Vy*Vy + Vz*Vz);
-            if (Lstep > 0) {
-                double dhx=Vx/Lstep, dhy=Vy/Lstep, dhz=Vz/Lstep, L = Lstep;
-                for (int ls = 0; ls < 24; ls++) {           /* backtracking */
-                    int y2 = cen_walk(g, pos, y, dhx, dhy, dhz, L);
-                    if (y2 != y) {
-                        cen_dijkstra(g, y2, db, fb, heap);
-                        double f2 = cen_energy(db, mass, comp, lc, N);
-                        if (f2 < fy) {
-                            y = y2; fy = f2;
-                            double *td=da; da=db; db=td; int *tf=fa; fa=fb; fb=tf;
-                            moved = 1; break;
-                        }
-                    }
-                    L *= 0.5; if (L < 1e-15) break;
-                }
-            }
-        }
-        if (moved) continue;
-        /* fallback: pick the best of all <=4 neighbours */
-        int off = g->adj_off[y], deg = g->adj_off[y+1]-off, bk = -1; double bf = fy;
-        for (int t = 0; t < deg; t++) {
-            int k = g->adj[off+t];
-            cen_dijkstra(g, k, db, NULL, heap);
-            double fk = cen_energy(db, mass, comp, lc, N);
-            if (fk < bf) { bf = fk; bk = k; }
-        }
-        if (bk >= 0) { y = bk; fy = bf; cen_dijkstra(g, y, da, fa, heap); continue; }
-
-        /* 1-hop local minimum: expanding-ring escape. Rings 2..H are evaluated
-         * one at a time (ring 1 was just checked by the fallback); stop at the
-         * first ring with a lower-energy node and jump to the best in it. */
-        if (H <= 0) break;
-        stamp++;
-        seen[y] = stamp;
-        int qt = 0;                            /* frontier = ring-1 nodes */
-        for (int k = g->adj_off[y]; k < g->adj_off[y+1]; k++) {
-            int w = g->adj[k];
-            if (seen[w] != stamp) { seen[w] = stamp; bq[qt++] = w; }
-        }
-        int ring_start = 0, depth = 1, pbest = -1; double pf = fy;
-        while (ring_start < qt && depth <= H) {
-            int ring_end = qt;
-            if (depth >= 2) {                  /* evaluate this ring */
-                for (int i = ring_start; i < ring_end; i++) {
-                    int u = bq[i]; if (comp[u] != lc) continue;
-                    cen_dijkstra(g, u, db, NULL, heap);
-                    double fu = cen_energy(db, mass, comp, lc, N);
-                    if (fu < pf) { pf = fu; pbest = u; }
-                }
-                if (pbest >= 0) break;          /* nearest improving ring: stop */
-            }
-            if (depth < H)                      /* expand to next ring */
-                for (int i = ring_start; i < ring_end; i++) {
-                    int u = bq[i];
-                    for (int k = g->adj_off[u]; k < g->adj_off[u+1]; k++) {
-                        int w = g->adj[k];
-                        if (seen[w] != stamp) { seen[w] = stamp; bq[qt++] = w; }
-                    }
-                }
-            ring_start = ring_end; depth++;
-        }
-        if (pbest < 0) break;                  /* no lower node within H hops: done */
-        y = pbest; fy = pf; cen_dijkstra(g, y, da, fa, heap);   /* jump + restart */
-    }
-    /* converged to y: stamp the whole trajectory as leading here */
-    if (resolved) { for (int i = 0; i < tn; i++) resolved[traj[i]] = y; resolved[y] = y; }
-    free(da); free(db); free(fa); free(fb); free(seen); free(bq); free(traj);
-    *E = fy; return y;
-}
-
-typedef struct rpair { double r; int i; } s_rpair;
-static int rpair_desc(const void *a, const void *b)
-{
-    double ra = ((const s_rpair*)a)->r, rb = ((const s_rpair*)b)->r;
-    return (ra < rb) - (ra > rb);
-}
-
-/* Descent seeds: deep local-radius maxima with geodesic non-max suppression at
- * separation beta*r_seed (one seed per thick region). Fills seeds[<=Kmax],
- * returns the count. dmin/dist are scratch of size N. */
-static int cen_seeds(const s_medial_graph *g, const double *radius,
-                     const int *comp, int lc, int Kmax, double beta,
-                     int *seeds, double *dmin, double *dist, s_cen_hn *heap)
-{
-    int N = g->N;
-    s_rpair *cand = malloc(sizeof(s_rpair) * (size_t)N); int nc = 0;
-    if (!cand) return 0;
-    for (int i = 0; i < N; i++) {
-        if (comp[i] != lc) continue;
-        int off = g->adj_off[i], deg = g->adj_off[i+1]-off, ismax = 1;
-        for (int t = 0; t < deg; t++) if (radius[g->adj[off+t]] > radius[i]) { ismax = 0; break; }
-        if (ismax) { cand[nc].r = radius[i]; cand[nc].i = i; nc++; }
-    }
-    qsort(cand, (size_t)nc, sizeof(s_rpair), rpair_desc);   /* deepest first */
-
-    for (int i = 0; i < N; i++) dmin[i] = INFINITY;
-    int ns = 0;
-    for (int c = 0; c < nc && ns < Kmax; c++) {
-        int node = cand[c].i;
-        if (dmin[node] <= beta * radius[node]) continue;    /* too close to a seed */
-        seeds[ns++] = node;
-        cen_dijkstra(g, node, dist, NULL, heap);
-        for (int j = 0; j < N; j++) if (dist[j] < dmin[j]) dmin[j] = dist[j];
-    }
-    free(cand);
-    return ns;
-}
-
-/* Label connected components into comp[] (BFS via queue[]); returns the largest
- * component's id and sets *out_largest to its size. */
-static int cen_components(const s_medial_graph *g, int *comp, int *queue, int *out_largest)
-{
-    int N = g->N;
-    for (int i = 0; i < N; i++) comp[i] = -1;
-    int ncomp = 0, largest = 0, root = 0;
-    for (int s = 0; s < N; s++) {
-        if (comp[s] != -1) continue;
-        int qh = 0, qt = 0, sz = 0; comp[s] = ncomp; queue[qt++] = s;
-        while (qh < qt) {
-            int u = queue[qh++]; sz++;
-            for (int k = g->adj_off[u]; k < g->adj_off[u+1]; k++)
-                if (comp[g->adj[k]] == -1) { comp[g->adj[k]] = ncomp; queue[qt++] = g->adj[k]; }
-        }
-        if (sz > largest) { largest = sz; root = s; }
-        ncomp++;
-    }
-    *out_largest = largest;
-    return comp[root];
-}
-
-/* Node masses w_j for the Frechet energy, per weighting mode:
- *   MEDAX_CENTER_CONTRIB : the governed volume of each medial ball -- its per-ball
- *     contribution vol(B_j INTERSECT L_j) to the union of all medial balls (the
- *     Laguerre/power partition), so sum_j w_j == vol(Omega) with ball overlaps
- *     counted once (MEDIAL_AXIS_BT.md sec.3). This is the expensive path (it
- *     builds a regular DT + alpha complex over all balls); if the union
- *     decomposition degenerates (non-finite or non-positive total), it falls back
- *     to the r^3 proxy below, which approximates the same quantity.
- *   MEDAX_CENTER_R3      : w_j = r_j^3 (ball volume, overlaps double-counted). O(N).
- *   MEDAX_CENTER_UNIFORM : w_j = 1. O(N).
- * (MEDAX_CENTER_MAXRADIUS never reaches here -- it needs no weights.)
- * Computed over the FULL ball set (verts/radius); the caller uses only the
- * entries in its component. Returns a freshly malloc'd array of size
- * ma->verts.N, or NULL on allocation failure. */
-#define MEDAX_VOL_EPS    1e-10        /* volsph degeneracy epsilon */
-#define MEDAX_VOL_TOLDUP 1e-9         /* volsph duplicate-center tolerance */
-static double *cen_weights(const s_medax *ma, e_medax_center mode)
-{
-    int N = ma->verts.N;
-    double *w = malloc(sizeof(double) * (size_t)N);
-    if (!w) return NULL;
-
-    if (mode == MEDAX_CENTER_UNIFORM) {
-        for (int j = 0; j < N; j++) w[j] = 1.0;
-        return w;
-    }
-    if (mode == MEDAX_CENTER_R3) {
-        for (int j = 0; j < N; j++) { double r = ma->radius[j]; w[j] = r*r*r; }
-        return w;
-    }
-
-    /* MEDAX_CENTER_CONTRIB: governed-volume (power) partition. */
-    s_dynarray buff = dynarray_initialize(sizeof(s_ncell *), 64);
-    volume_contribution_spheres(&ma->verts, ma->radius, MEDAX_VOL_EPS,
-                                MEDAX_VOL_TOLDUP, &buff, w);
-    dynarray_free(&buff);
-
-    double sum = 0.0; int ok = 1;
-    for (int j = 0; j < N; j++) {
-        if (!isfinite(w[j])) { ok = 0; break; }
-        if (w[j] < 0.0) w[j] = 0.0;      /* clamp tiny rounding negatives */
-        sum += w[j];
-    }
-    if (!ok || !(sum > 0.0)) {           /* degenerate: fall back to r^3 */
-        for (int j = 0; j < N; j++) {
-            double r = ma->radius[j]; w[j] = r*r*r;
-        }
-    }
-    return w;
-}
-
-/* Node of largest medial radius within component lc (the deepest inscribed ball).
- * Sets *out_r to that radius. Returns the node index, or -1 if lc is empty. */
-static int cen_maxradius(const s_medax *ma, const int *comp, int lc, double *out_r)
-{
-    int N = ma->verts.N, best = -1; double br = -INFINITY;
-    for (int i = 0; i < N; i++) {
-        if (comp[i] != lc) continue;
-        if (ma->radius[i] > br) { br = ma->radius[i]; best = i; }
-    }
-    if (out_r) *out_r = br;
-    return best;
-}
-
-int medax_center(const s_medax *ma, e_medax_center mode, int exact_below, int K,
-                 double beta, int polish_hops, double *out_energy)
-{
-    if (out_energy) *out_energy = INFINITY;
-    if (!ma || !ma->graph || ma->verts.N == 0 || !ma->radius) return -1;
-    const s_medial_graph *g = ma->graph;
-    int N = g->N;
-    if (N <= 0 || !g->adj_off) return -1;
-    if (exact_below < 0) exact_below = 2500;
-    if (K <= 0) K = 3;
-    if (beta <= 0.0) beta = 2.0;
-    if (polish_hops < 0) polish_hops = 8;
-
-    /* MEDAX_CENTER_MAXRADIUS: no weights, no distance field -- just the deepest
-     * ball in the largest component. Component labeling only. */
-    if (mode == MEDAX_CENTER_MAXRADIUS) {
-        int *comp = malloc(sizeof(int) * (size_t)N);
-        int *queue = malloc(sizeof(int) * (size_t)N);
-        if (!comp || !queue) { free(comp); free(queue); return -1; }
-        int largest, lc = cen_components(g, comp, queue, &largest);
-        double r; int result = cen_maxradius(ma, comp, lc, &r);
-        free(comp); free(queue);
-        if (out_energy) *out_energy = (result >= 0) ? r : INFINITY;
-        return result;
-    }
-
-    int    *comp  = malloc(sizeof(int)    * (size_t)N);
-    int    *queue = malloc(sizeof(int)    * (size_t)N);
-    double *dist  = malloc(sizeof(double) * (size_t)N);
-    double *mass  = cen_weights(ma, mode);   /* node masses w_j for the chosen mode */
-    s_cen_hn *heap = malloc(sizeof(s_cen_hn) * (size_t)(g->adj_off[N] + 8));
-    if (!comp || !queue || !dist || !mass || !heap) {
-        free(comp); free(queue); free(dist); free(mass); free(heap); return -1;
-    }
-
-    int largest;
-    int lc = cen_components(g, comp, queue, &largest);
-
-    int result = -1; double E = INFINITY;
-    if (largest < exact_below) {
-        result = cen_exact(g, mass, comp, lc, dist, heap, &E);
-    } else {
-        int    *seeds = malloc(sizeof(int)    * (size_t)K);
-        double *dmin  = malloc(sizeof(double) * (size_t)N);
-        int    *resolved = malloc(sizeof(int) * (size_t)N);   /* memoization (Fix 4) */
-        if (resolved) for (int i = 0; i < N; i++) resolved[i] = -1;
-        if (seeds && dmin && resolved) {
-            /* seeds are deep-clearance maxima: selected on radius, not mass */
-            int ns = cen_seeds(g, ma->radius, comp, lc, K, beta, seeds, dmin, dist, heap);
-            for (int s = 0; s < ns; s++) {
-                double Es;
-                int c = cen_descent(g, ma->verts.p, mass, comp, lc,
-                                    seeds[s], polish_hops, heap, resolved, &Es);
-                if (c >= 0 && Es < E) { E = Es; result = c; }
-            }
-        }
-        free(seeds); free(dmin); free(resolved);
-    }
-    free(comp); free(queue); free(dist); free(mass); free(heap);
-    if (out_energy) *out_energy = E;
-    return result;
-}
-
-int medax_center_seeds(const s_medax *ma, e_medax_center mode, int K, double beta,
-                       int polish_hops, int *seeds, int *results)
-{
-    if (!ma || !ma->graph || ma->verts.N == 0 || !ma->radius || !seeds || !results)
-        return -1;
-    const s_medial_graph *g = ma->graph;
-    int N = g->N;
-    if (N <= 0 || !g->adj_off) return -1;
-    if (K <= 0) K = 3;
-    if (beta <= 0.0) beta = 2.0;
-    if (polish_hops < 0) polish_hops = 8;
-    /* MAXRADIUS is not a Frechet mode (no seeds/descent); weight it as CONTRIB. */
-    if (mode == MEDAX_CENTER_MAXRADIUS) mode = MEDAX_CENTER_CONTRIB;
-
-    int    *comp  = malloc(sizeof(int)    * (size_t)N);
-    int    *queue = malloc(sizeof(int)    * (size_t)N);
-    double *dist  = malloc(sizeof(double) * (size_t)N);
-    double *dmin  = malloc(sizeof(double) * (size_t)N);
-    double *mass  = cen_weights(ma, mode);   /* node masses w_j for the chosen mode */
-    s_cen_hn *heap = malloc(sizeof(s_cen_hn) * (size_t)(g->adj_off[N] + 8));
-    if (!comp || !queue || !dist || !dmin || !mass || !heap) {
-        free(comp); free(queue); free(dist); free(dmin); free(mass); free(heap); return -1;
-    }
-    int    *resolved = malloc(sizeof(int) * (size_t)N);
-    if (resolved) for (int i = 0; i < N; i++) resolved[i] = -1;
-    int largest;
-    int lc = cen_components(g, comp, queue, &largest);
-    /* seeds are deep-clearance maxima: selected on radius, not mass */
-    int ns = cen_seeds(g, ma->radius, comp, lc, K, beta, seeds, dmin, dist, heap);
-    for (int s = 0; s < ns; s++) {
-        double Es;
-        results[s] = cen_descent(g, ma->verts.p, mass, comp, lc,
-                                 seeds[s], polish_hops, heap, resolved, &Es);
-    }
-    free(comp); free(queue); free(dist); free(dmin); free(mass); free(heap); free(resolved);
-    return ns;
 }
 
 void free_medax(s_medax *ma)

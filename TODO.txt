@@ -2,10 +2,15 @@
 [ ] What if the nonconvex voronoi diagram did not compute the intersection between the convex voronoi diagram and the tetrahedralization of the trimesh? That is, they were kept as separate objects. Would that make everything more efficient?
 
 [ ] build_vertex_cell_index: the idea to map each vertex to a cell containing it may be made more optimal and even reused elsewhere (in_ncell_walk for example?)
-[ ] Make a context structure (EPS_DEG, TOL, randint(), rctx, ...). Even (geometry_ctx, randint(), rctx).  
-    [ ] Use memory pools instead of constant malloc.
+[ ] API REFACTOR: RNG callback + context + caller-owned memory (one refactor, all public headers: vor3d.h, delaunay.h, ashape.h, scplx.h, medax.h, ...).
+    [ ] RNG as a callback everywhere: double (*randd01)(void*) + void *rctx, as medax_from_trimesh already does, instead of s_random_context * (the concrete xoshiro struct from src/hlibs/random.h, which a user cannot replace with their own generator). NULL keeps meaning "fixed deterministic order" where the RNG only breaks walk ties. Costs one non-inlinable indirect call per draw (~ns); draws happen only on walk ties / per scatter sample, so expected negligible -- confirm with tests/bench.sh A/B before/after.
+    [ ] Make a context structure (EPS_DEG, TOL, randd01, rctx, ...). Even (geometry_ctx, randd01, rctx). Decide whether it replaces the loose EPS_DEG/TOL/rng arguments in every entry point.
+    [ ] Memory management as the user's responsibility when they want it: optional caller-provided allocator / arena in the context (malloc/realloc/free callbacks + user pointer; NULL = libc), so results and scratch can live in user-owned memory.
+    [ ] Use memory pools instead of constant malloc (internally; pairs with the allocator hook above).
 [ ] Track max error and mean error in the examples
 [ ] Add a debug compilation flag to remove unnecessary checks (delaunayness etc) in the final build and only add these in debug builds ?
+
+[ ] ashape, merge with alpha_complex machinery? so a single api is responsible for alpha shapes and complexes?
 
 [ ] build weighted voronoi diagrams: center of ortho-sphere of ncells of weighted DT as voronoi vertices? Is this correct?
 [ ] locally redundant points: implement function, consider when some vertices may belong to big tetra
@@ -30,6 +35,13 @@
 [x] Stale untracked tests (DONE 2026-11-26): bench_suite, bench_convex, washer_annulus (vor3d API), acplx_attach, rt_hull_tiling, bench_suite dt_builder_begin (rng arg), predseam_convention (s_implicit_pred_reg API), test_orient3d_dd (predicates_basic.h) all compile -Wall -Wextra clean; washer ALL PASS. Header "Build:" comments in some tests still name old lib files (libvoronoi_predicates.a etc.).
 
 [x] Lung sync (DONE 2026-11-26, lung 0d1e7ca + 7021115: submodules bumped, buff_scratch plumbing and voronoi_vol_max_rel_diff removed).
+
+[x] medax.h slimmed (DONE 2026-11-27): medax_center / medax_center_seeds / e_medax_center (legacy from lung's centre iterations, never used by lung) and medax_debug_sample_surface removed (~470 lines; recover from git if needed); M_PI and the MEDAX_*_DEFAULT / MEDAX_RHO_EFF macros moved into medax.c. medax_from_trimesh(mesh, r_sample, theta0, rho0, randd01, rctx, EPS_DEG, TOL, want_graph): theta0/rho0 <= 0 -> paper defaults; EPS_DEG/TOL order now matches vor3d_diagram. example_medax.c is now a short extract + report + VTK example; tests/medax_cells.c compares the deepest ball instead of the center. README medax figure md5-identical; lung's 3 call sites migrated, golden_*_vmad_9 bit-exact.
+    Samples the DT merges as duplicates (within TOL) no longer abort medax: compact_samples drops their records via dt_builder_end's kept_idx (first survives, so mesh vertices win); L-shape with TOL up to 2e-2 now succeeds (was medax_NAN), ASAN clean.
+    medax_from_trimesh no longer prints progress ("[medax] Step N OK") -- only the error path prints; MEDAX_PROFILE stage timers kept (opt-in, read by tests/bench.sh).
+[ ] Audit the rest of the library for unconditional stderr/stdout prints on success paths: only errors should print (opt-in env debug flags are fine).
+
+[ ] (explore) medax r_sample default: allow r_sample = 0 (or a separate sentinel) to pick the spacing automatically. Today <= 0 means "mesh vertices only", so the sentinel needs care. Candidates: (a) fraction of the bbox diagonal (lung uses diag/12 for the lobe, diag/r_sample_div per cell; example_medax uses diag/40) -- simple but ignores thin parts; (b) from local feature size: the rule of thumb is r_sample <= 1/4 local half-thickness, so a two-pass scheme (coarse medax -> min/percentile medial radius -> refine) or a per-face adaptive spacing; (c) from mesh edge length (median edge). Measure on the lobes + L/plus shapes: medial point count, hairs, missed thin parts, runtime vs the current hand-picked values.
 
 [ ] Env debug flags that CHANGE results (not just print): MEDAX_NOGRID (medax.c), SV_TAU_REL (surf_vkey.h) -> consider removing. Print/validate-only flags (ASHAPE_PROFILE, MEDAX_PROFILE, CDT_VERBOSE, CDT_DUMP_WALLS, CDT_DBG_FACE, CDT_VALIDATE, CDT_CHECK_WALK, DT_TRACE, NCVX_ALL_BOUNDARY, NCVX_TETCHECK) are fine to keep.
 
