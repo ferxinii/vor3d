@@ -230,13 +230,13 @@ static bool edge_pair_eq(const void *a, const void *b)
 }
 
 /* Angle at V in triangle V-A-B, in radians. Returns 0 for degenerate inputs. */
-static double interior_angle(s_point v, s_point a, s_point b, double EPS_DEG)
+static double interior_angle(s_point v, s_point a, s_point b)
 {
+    if (vec_is_degenerate(v, a) || vec_is_degenerate(v, b)) return 0.0;
     double ux = a.x - v.x, uy = a.y - v.y, uz = a.z - v.z;
     double wx = b.x - v.x, wy = b.y - v.y, wz = b.z - v.z;
     double lu = sqrt(ux*ux + uy*uy + uz*uz);
     double lw = sqrt(wx*wx + wy*wy + wz*wz);
-    if (lu <= EPS_DEG || lw <= EPS_DEG) return 0.0;
     double cosA = (ux*wx + uy*wy + uz*wz) / (lu * lw);
     if (cosA >  1.0) cosA =  1.0;
     if (cosA < -1.0) cosA = -1.0;
@@ -250,7 +250,7 @@ static double interior_angle(s_point v, s_point a, s_point b, double EPS_DEG)
  * A vertex V is inside the diametric sphere iff dot(A-V, B-V) < 0.
  * Skips sentinels (indices 0-3) and the endpoints themselves.
  * Returns -1 if no encroaching vertex exists. */
-static int scout_refpt(const s_scplx *dt, int va_dt, int vb_dt, double EPS_DEG)
+static int scout_refpt(const s_scplx *dt, int va_dt, int vb_dt)
 {
     s_point A = dt->points.p[va_dt];
     s_point B = dt->points.p[vb_dt];
@@ -263,7 +263,7 @@ static int scout_refpt(const s_scplx *dt, int va_dt, int vb_dt, double EPS_DEG)
         double ax = A.x - V.x, ay = A.y - V.y, az = A.z - V.z;
         double bx = B.x - V.x, by = B.y - V.y, bz = B.z - V.z;
         if (ax*bx + ay*by + az*bz >= 0.0) continue; /* outside diametric sphere */
-        double ang = interior_angle(V, A, B, EPS_DEG);
+        double ang = interior_angle(V, A, B);
         if (ang > angmax) { angmax = ang; refpt = i; }
     }
     return refpt;
@@ -524,7 +524,7 @@ static int build_segments(const s_trimesh *mesh, s_cdt_scratch *sc)
  * explicit input vertices), so it lies exactly on the original segment no matter
  * how deep the subdivision goes -- u composes along the parent, it does not
  * accumulate rounding through intermediate Steiners. */
-static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_DEG, double TOL,
+static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double TOL,
                             s_cdt_scratch *sc)
 {
     /* Registry: in exact mode dt_builder_begin_exact already created and
@@ -587,7 +587,7 @@ static int segment_recovery(s_dt_builder *b, const s_trimesh *mesh, double EPS_D
 
             int oe[2]; dynarray_get_value(&sc->orig_edges, (size_t)cur.oei, oe);
 
-            int refpt_id = scout_refpt(&b->dt, cur.ep[0], cur.ep[1], EPS_DEG);
+            int refpt_id = scout_refpt(&b->dt, cur.ep[0], cur.ep[1]);
             /* u is a position on the ORIGINAL edge, so the LNC below is exact
              * w.r.t. the original endpoints at any subdivision depth. */
             const double u = split_u(&b->dt, &cur, oe, refpt_id);
@@ -1352,9 +1352,12 @@ static int try_cavity_expansion(s_scplx *dt,
         }
         {
             const double inflate = 1e6;
-            double cx = 0.5 * (bb_lo.x + bb_hi.x), sx = 0.5 * (bb_hi.x - bb_lo.x) + 1e-12;
-            double cy = 0.5 * (bb_lo.y + bb_hi.y), sy = 0.5 * (bb_hi.y - bb_lo.y) + 1e-12;
-            double cz = 0.5 * (bb_lo.z + bb_hi.z), sz = 0.5 * (bb_hi.z - bb_lo.z) + 1e-12;
+            double cx = 0.5 * (bb_lo.x + bb_hi.x), sx = 0.5 * (bb_hi.x - bb_lo.x);
+            double cy = 0.5 * (bb_lo.y + bb_hi.y), sy = 0.5 * (bb_hi.y - bb_lo.y);
+            double cz = 0.5 * (bb_lo.z + bb_hi.z), sz = 0.5 * (bb_hi.z - bb_lo.z);
+            /* a flat axis (coplanar cavity) still gets a box of non-zero thickness */
+            double smin = GEOM_EPS_REL * fmax(sx, fmax(sy, sz));
+            sx = fmax(sx, smin); sy = fmax(sy, smin); sz = fmax(sz, smin);
             bb_lo = (s_point){ .x = cx - inflate * sx, .y = cy - inflate * sy, .z = cz - inflate * sz };
             bb_hi = (s_point){ .x = cx + inflate * sx, .y = cy + inflate * sy, .z = cz + inflate * sz };
         }
@@ -2743,12 +2746,12 @@ static int split_trimesh_face_centroid(s_trimesh *mesh, int fi)
     return 1;
 }
 
-static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
+static s_scplx cdt_attempt(s_trimesh *working, double TOL,
                             s_cdt_scratch *sc, int *fail_fi, bool keep_exterior);
 
 /* Shared body for both public entries. keep_exterior selects the classify
  * policy (see classify_interior_exterior / ncell_is_deleted). */
-static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
+static s_scplx cdt_build(const s_trimesh *mesh, double TOL,
                          bool keep_exterior)
 {
     if (!trimesh_is_valid(mesh)) return (s_scplx){0};
@@ -2799,7 +2802,7 @@ static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
     const int MAX_ROUNDS = 8;
     for (int round = 0; round < MAX_ROUNDS; round++) {
         int fail_fi = -1;
-        result = cdt_attempt(&working, EPS_DEG, TOL, &sc, &fail_fi, keep_exterior);
+        result = cdt_attempt(&working, TOL, &sc, &fail_fi, keep_exterior);
         if (result.head) break;
         if (fail_fi < 0) break;   /* failure not tied to a specific face */
         fprintf(stderr,
@@ -2829,22 +2832,21 @@ static s_scplx cdt_build(const s_trimesh *mesh, double EPS_DEG, double TOL,
     return result;
 }
 
-s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
-                                         double EPS_DEG, double TOL)
+s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh, double TOL)
 {
-    return cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/false);
+    return cdt_build(mesh, TOL, /*keep_exterior=*/false);
 }
 
 s_tetmesh tetrahedralize_trimesh(const s_trimesh *mesh, double EPS_DEG, double TOL)
 {
-    s_scplx C = cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/false);
+    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
+    s_scplx C = cdt_build(mesh, TOL, /*keep_exterior=*/false);
     return tetmesh_from_scplx(&C, NULL);
 }
 
-s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh,
-                                       double EPS_DEG, double TOL)
+s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh, double TOL)
 {
-    return cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/true);
+    return cdt_build(mesh, TOL, /*keep_exterior=*/true);
 }
 
 /* One full CDT attempt (Phases A-C) on the given working mesh.  On failure
@@ -2852,7 +2854,7 @@ s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh,
  * *fail_fi is set to its index in working->faces (else left at -1).
  * The working mesh is mutated (Phase A edge splits, point sync) but remains a
  * valid refinement of the same surface, so the caller can retry with it. */
-static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
+static s_scplx cdt_attempt(s_trimesh *working, double TOL,
                             s_cdt_scratch *sc, int *fail_fi, bool keep_exterior)
 {
     /* Phase A: DT + segment recovery, in exact-id mode -- ONE exact geometry
@@ -2864,7 +2866,7 @@ static s_scplx cdt_attempt(s_trimesh *working, double EPS_DEG, double TOL,
     s_dt_builder b = dt_builder_begin_exact(&working->points, TOL, NULL, NULL, NULL);
     if (!b._stack) return (s_scplx){0};
 
-    if (!segment_recovery(&b, working, EPS_DEG, TOL, sc)) {
+    if (!segment_recovery(&b, working, TOL, sc)) {
         s_scplx tmp = dt_builder_end(&b, false, NULL, NULL, 0);
         itest_registry_destroy(tmp.pred_reg); free_complex(&tmp); return (s_scplx){0};
     }

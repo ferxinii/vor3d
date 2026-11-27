@@ -474,7 +474,7 @@ static int canonical_edge_cluster(int cell_seed, int j1, int j2,
  * frees), or NULL on allocation failure. */
 static s_vlabel *scatter_labels(const s_dynarray *cand, const int *pmap,
                                 const s_points *in_pts, const s_points *out_pts,
-                                int in_N, int out_N, double EPS_DEG)
+                                int in_N, int out_N)
 {
     size_t nn = (size_t)(out_N > 0 ? out_N : 1);
     s_vlabel *labels = calloc(nn, sizeof(s_vlabel));
@@ -490,8 +490,9 @@ static s_vlabel *scatter_labels(const s_dynarray *cand, const int *pmap,
     for (int ii = 0; ii < in_N; ii++) {                  /* dropped duplicates */
         if (pmap[ii] >= 0) continue;
         s_point q = in_pts->p[ii];
-        int best = -1; double bestd = EPS_DEG * EPS_DEG;
+        int best = -1; double bestd = INFINITY;
         for (int v = 0; v < out_N; v++) {
+            if (!vec_is_degenerate(q, out_pts->p[v])) continue;
             double d = norm_squared(subtract_points(q, out_pts->p[v]));
             if (d < bestd) { bestd = d; best = v; }
         }
@@ -562,8 +563,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                                   const int *vor_edge, int n_edge, /* n_edge * {a,b,ap1,ap2} */
                                   const s_point tet[4], const int tet_vids[4],
                                   const int *owner, const char *tie,
-                                  int *resolved_vtx, int tet_id,
-                                  double EPS_DEG, s_convh *out,
+                                  int *resolved_vtx, int tet_id, s_convh *out,
                                   s_vlabel **out_labels)
 {
     *out = convhull_NAN;
@@ -762,10 +762,10 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                 double df = dot_prod(nf, A);
                 double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
                 double rhs[3] = { d1, d2, df }, x[3];
-                /* EPS_DEG pivot tolerance: numerical backstop. solve_3x3_ppivot
+                /* Relative pivot test: numerical backstop. solve_3x3_ppivot
                  * returns the failing column (<3) with x unwritten on a bad pivot,
                  * so success is == 3 (all three pivots usable), not merely non-zero. */
-                if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
+                if (solve_3x3_ppivot(M, rhs, x) == 3) {
                     s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
                     /* Canonical re-keying of exactly-degenerate crossings, so
                      * every construction of the same point in every tet/piece
@@ -823,7 +823,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         if (out_labels && !pmap) goto err;
         int r = convhull_from_points_mapped(&P, out, pmap);
         if (r == 1 && out_labels) {
-            s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N, EPS_DEG);
+            s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N);
             if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN; goto err; }
             *out_labels = labels;
         }
@@ -849,7 +849,7 @@ err:
 static int emit_interior_cell(int seed_id, const s_points *seeds,
                               const double *seed_weights,
                               const int *nbr, int NB,
-                              const int *vor_vtx, int n_vtx, double EPS_DEG,
+                              const int *vor_vtx, int n_vtx,
                               s_convh *out, double *vol_out, s_vlabel **out_labels)
 {
     *out = convhull_NAN; *vol_out = 0.0;
@@ -885,7 +885,7 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     if (out_labels && !pmap) { dynarray_free(&pts); dynarray_free(&cand); return -1; }
     int r = convhull_from_points_mapped(&P, out, pmap);
     if (r == 1 && out_labels) {
-        s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N, EPS_DEG);
+        s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N);
         if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN;
                        dynarray_free(&pts); dynarray_free(&cand); return -1; }
         *out_labels = labels;
@@ -923,8 +923,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
                                     const int *vor_vtx, int n_vtx,
                                     const int *vor_edge, int n_edge,
                                     const s_point tet[4],
-                                    int *resolved_vtx, int tet_id,
-                                    double EPS_DEG, s_dynarray *pts)
+                                    int *resolved_vtx, int tet_id, s_dynarray *pts)
 {
     s_point s = seeds->p[seed_id];
     double s_w = seed_weights ? seed_weights[seed_id] : 0.0;
@@ -1057,7 +1056,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
             double df = dot_prod(nf, A);
             double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
             double rhs[3] = { d1, d2, df }, x[3];
-            if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
+            if (solve_3x3_ppivot(M, rhs, x) == 3) {
                 s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
                 if (!dynarray_push(pts, &Pt)) return 0;
             }
@@ -1290,8 +1289,7 @@ static int convex_edge_walk(const s_points *seeds, const double *seed_weights,
  * pts. Returns 1 OK, 0 allocation error. */
 static int nface_face_crossings(const s_convh *ch, int fi, int seed_id,
                                 const s_points *seeds, const double *seed_weights,
-                                const int *ve, int n_edge,
-                                double EPS_DEG, s_dynarray *pts)
+                                const int *ve, int n_edge, s_dynarray *pts)
 {
     s_point fc[3]; convh_get_face(ch, fi, fc);
     s_point Aq = fc[0], Qq = fc[1], Rq = fc[2];
@@ -1347,7 +1345,7 @@ static int nface_face_crossings(const s_convh *ch, int fi, int seed_id,
         double d2 = 0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2);
         double M[3][3] = {{n1.x,n1.y,n1.z},{n2.x,n2.y,n2.z},{nf.x,nf.y,nf.z}};
         double rhs[3] = { d1, d2, df }, x[3];
-        if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) == 3) {
+        if (solve_3x3_ppivot(M, rhs, x) == 3) {
             s_point Pt = { .x = x[0], .y = x[1], .z = x[2] };
             if (!dynarray_push(pts, &Pt)) return 0;
         }
@@ -1557,8 +1555,7 @@ static int fan_clip_pool(const s_convh *bp, const s_points *real_seeds,
                          const int *vv, int n_vtx, const int *ve, int n_edge,
                          const int *nbr, int NB, s_point center,
                          const int *fadj, int *face_stamp, int *fstamp,
-                         s_dynarray *fqueue, int *resolved,
-                         double EPS_DEG, s_dynarray *pts)
+                         s_dynarray *fqueue, int *resolved, s_dynarray *pts)
 {
     int Nf = bp->Nf;
     s_point s = real_seeds->p[i];
@@ -1577,7 +1574,7 @@ static int fan_clip_pool(const s_convh *bp, const s_points *real_seeds,
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
             if (!lp3_vcell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;  /* frontier */
             if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
-                                          tet, resolved, fi + 1, EPS_DEG, pts))
+                                          tet, resolved, fi + 1, pts))
                 return 0;
             for (int k = 0; k < 3; k++) {
                 int g = fadj[3*fi + k];
@@ -1596,7 +1593,7 @@ static int fan_clip_pool(const s_convh *bp, const s_points *real_seeds,
             s_point tet[4] = { center, fc[0], fc[1], fc[2] };
             if (!lp3_vcell_maybe_hits_tet(tet, s, real_seeds, seed_weights, s_w, nbr, NB)) continue;
             if (!clip_cell_tet_accumulate(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
-                                          tet, resolved, fi + 1, EPS_DEG, pts))
+                                          tet, resolved, fi + 1, pts))
                 return 0;
         }
     }
@@ -1616,7 +1613,7 @@ static int fan_clip_pool(const s_convh *bp, const s_points *real_seeds,
  * success, 0 on failure. */
 static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *real_seeds,
                             s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
-                            double EPS_DEG, s_vcell *vcells)
+                            s_vcell *vcells)
 {
     int N = real_seeds->N;
     int Nf = bp->Nf;
@@ -1884,7 +1881,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                         double rhs[3] = { 0.5*(dot_prod(t1,t1) - dot_prod(s,s)) + 0.5*(s_w - wt1),
                                           0.5*(dot_prod(t2,t2) - dot_prod(s,s)) + 0.5*(s_w - wt2),
                                           dot_prod(u, s) }, x[3];
-                        if (solve_3x3_ppivot(M, rhs, x, EPS_DEG) != 3) continue;
+                        if (solve_3x3_ppivot(M, rhs, x) != 3) continue;
                         s_point p0 = { .x = x[0], .y = x[1], .z = x[2] };
                         nface_seed_line(bp, &geom, p0, u, -1e30, 1e30,
                                         fstamp, face_stamp, &fqueue, &seed_ok);
@@ -1901,7 +1898,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                     s_point fc[3]; convh_get_face(bp, fi, fc);
                     int may = lp3_vcell_maybe_hits_tri(fc, s, real_seeds, seed_weights, s_w, nbr, NB);
                     if (may && !nface_face_crossings(bp, fi, i, real_seeds, seed_weights,
-                                                     ve, n_edge, EPS_DEG, &pts)) goto err;
+                                                     ve, n_edge, &pts)) goto err;
                     if (!may && qh >= n_seed_faces) continue;
                     for (int k = 0; k < 3; k++) {
                         int g = fadj[3*fi + k];
@@ -1922,7 +1919,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
             if (r != 1) {          /* no evidence, or degenerate N-face pool: fan */
                 if (!fan_clip_pool(bp, real_seeds, seed_weights, adj, i, vv, n_vtx, ve, n_edge,
                                    nbr, NB, center, fadj, face_stamp, &fstamp,
-                                   &fqueue, resolved, EPS_DEG, &pts)) goto err;
+                                   &fqueue, resolved, &pts)) goto err;
                 if (pts.N == 0) {
                     /* Weighted-only edge case: seed i is not power-redundant (it
                      * appears in the regular triangulation, so its cell is
@@ -2073,7 +2070,7 @@ static s_mo_heap mo_heap_pop(s_mo_heap *h, int *n)
 }
 
 static int merge_orphans_pass(const s_vor3d_domain *domain, const s_points *real_seeds,
-                              int N, double EPS_DEG, s_dynarray *surf, s_dynarray *pcs,
+                              int N, s_dynarray *surf, s_dynarray *pcs,
                               s_dynarray *piece_tri_off, s_vcell *vcells)
 {
     const s_points *cverts = &domain->cdt->points;
@@ -2323,7 +2320,7 @@ static int merge_orphans_pass(const s_vor3d_domain *domain, const s_points *real
         newp[s] = malloc((size_t)own_n[s] * sizeof(s_convh));
         if (!newp[s]) { passB_ok = 0; break; }
         s_trimesh *sm = NULL; int sn = 0;
-        int r = build_cell_surface(&merged[s], s, real_seeds, cverts, EPS_DEG, &sm, &sn);
+        int r = build_cell_surface(&merged[s], s, real_seeds, cverts, &sm, &sn);
         if (r < 0) { passB_ok = 0; break; }
         news[s] = sm; newsn[s] = sn;   /* r==0 -> sm NULL, sn 0 (empty surface) */
     }
@@ -2383,7 +2380,7 @@ cleanup:
  * Returns 1 on success, 0 on allocation error. */
 static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
                        s_scplx *seed_dt, const struct ncvx_cell_adjacency *adj,
-                       double EPS_DEG, bool want_surface, bool merge_orphans,
+                       bool want_surface, bool merge_orphans,
                        s_vcell *vcells)
 {
     int N = real_seeds->N;
@@ -2583,7 +2580,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
                 s_convh piece; s_vlabel *labels = NULL;
                 int r = clip_vcell_clip_tet_lp(i, real_seeds, seed_weights, adj, vv, n_vtx, ve, n_edge,
                                                tv, nc->vertex_id, owner, tie, rv, tet_stamp,
-                                               EPS_DEG, &piece, want_surface ? &labels : NULL);
+                                               &piece, want_surface ? &labels : NULL);
                 if (r == 1) {
                     double pv = volume_convhull(&piece);
                     /* Keep every valid positive-volume piece. A piece is dropped
@@ -2655,7 +2652,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
         int r = emit_interior_cell(i, real_seeds, seed_weights,
                                    nnb ? adj->neighbor + adj->offset[i] : NULL,
                                    nnb,
-                                   vv, n_vtx, EPS_DEG, &hull, &hv,
+                                   vv, n_vtx, &hull, &hv,
                                    want_surface ? &labels : NULL);
         if (r == -1) goto err;
         if (r == 1) {
@@ -2685,8 +2682,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
         }
         /* Steps 3-6: reassign orphan components so each seed owns one connected
          * region. Fills vcells[] and MOVES the pieces out of pcs[] on success. */
-        if (!merge_orphans_pass(domain, real_seeds, N, EPS_DEG,
-                                surf, pcs, piece_tri_off, vcells))
+        if (!merge_orphans_pass(domain, real_seeds, N, surf, pcs, piece_tri_off, vcells))
             goto err;   /* pieces still owned by pcs[]; err path frees them */
         for (int i = 0; i < N; i++) {
             dynarray_free(&pcs[i]);          /* buffer only; s_convh moved into vcells */
@@ -2710,8 +2706,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
 
             if (want_surface) {   /* a pinched cell splits into >1 connected component */
                 s_trimesh *sm = NULL; int sn = 0;
-                if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt->points,
-                                       EPS_DEG, &sm, &sn) == 1) {
+                if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt->points, &sm, &sn) == 1) {
                     vcells[i].surface   = sm;
                     vcells[i].N_surface = sn;
                 }
@@ -2814,6 +2809,7 @@ s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
                          int *out_kept_idx,
                          bool want_surface, bool merge_orphans)
 {
+    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
     const int n_in = (seeds && seeds->N > 0) ? seeds->N : 0;
     if (out_kept_idx) for (int i = 0; i < n_in; i++) out_kept_idx[i] = -1;
     if (n_in == 0 || !domain || !vor3d_domain_is_valid(domain))
@@ -2847,12 +2843,12 @@ s_vdiagram vor3d_diagram(const s_points *seeds, const double *weights,
     vcells = calloc((size_t)N, sizeof(s_vcell));
     if (!vcells) goto fail;
     if (convex) {
-        if (!clip_convex_hull(&domain->convh, domain->convh_vertex_avg, &real_seeds, &seed_dt, &adj, EPS_DEG, vcells)) {
+        if (!clip_convex_hull(&domain->convh, domain->convh_vertex_avg, &real_seeds, &seed_dt, &adj, vcells)) {
             for (int i = 0; i < N; i++) free_vcell(&vcells[i]);
             goto fail;
         }
         if (want_surface) convex_cell_surfaces(vcells, N);
-    } else if (!clip_domain(domain, &real_seeds, &seed_dt, &adj, EPS_DEG, want_surface,
+    } else if (!clip_domain(domain, &real_seeds, &seed_dt, &adj, want_surface,
                             merge_orphans, vcells)) {
         goto fail;
     }

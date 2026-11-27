@@ -1101,9 +1101,8 @@ static inline int ord_line(s_vkey a, s_vkey b, s_point ca, s_point cb,
  * and *out_n (>= 1). Returns 1 (built), 0 (empty / nothing valid), -1 (alloc). */
 static inline int build_cell_surface(const s_dynarray *tris, int cell_seed,
                                      const s_points *seeds, const s_points *cverts,
-                                     double EPS_DEG, s_trimesh **out_meshes, int *out_n)
+                                     s_trimesh **out_meshes, int *out_n)
 {
-    (void)EPS_DEG;  /* internal EPS arguments go in step 1b */
     *out_meshes = NULL; *out_n = 0;
     size_t Ntri = tris->N;
     if (Ntri == 0) return 0;

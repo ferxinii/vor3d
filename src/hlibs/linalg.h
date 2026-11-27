@@ -11,44 +11,58 @@
 #include <math.h>
 #include <stdlib.h>
 
+/* Degenerate (singular) systems are detected RELATIVE to each row's own size:
+ * a pivot is rejected when |pivot| <= LINALG_EPS_REL * (max |entry| of its
+ * original row), so the result does not depend on the scale of any row.
+ * Pivots are chosen by |entry| / (row size) (scaled partial pivoting), so the
+ * pivot order -- and hence the rounding -- is also independent of row scales.
+ * Return the rank reached (N on success). */
+#ifndef LINALG_EPS_REL
+#define LINALG_EPS_REL 1e-12
+#endif
+
 /* INTERFACE */
-static inline int solve_2x2_cramer(const double A[2][2], const double b[2], double x[2], double pivot_tol);
+static inline int solve_2x2_cramer(const double A[2][2], const double b[2], double x[2]);
 
-static inline int solve_3x3_ppivot(const double A[3][3], const double b[3], double x[3], double pivot_tol);
-static inline int solve_3x3_ppivot_inplace(double A[3][3], double b[3], double x[3], double pivot_tol);
+static inline int solve_3x3_ppivot(const double A[3][3], const double b[3], double x[3]);
+static inline int solve_3x3_ppivot_inplace(double A[3][3], double b[3], double x[3]);
 
-static inline int solve_NxN_ppivot(int N, const double *A, const double *b, double *x, double pivot_tol);
-static inline int solve_NxN_ppivot_inplace(int N, double *A, double *b, double *x, double pivot_tol);
+static inline int solve_NxN_ppivot(int N, const double *A, const double *b, double *x);
+static inline int solve_NxN_ppivot_inplace(int N, double *A, double *b, double *x);
 
 
 
 /* IMPLEMENTATION */
-static inline int solve_2x2_cramer(const double A[2][2], const double b[2], double x[2], double pivot_tol)
+static inline int solve_2x2_cramer(const double A[2][2], const double b[2], double x[2])
 {
     double det = A[0][0]*A[1][1] - A[0][1]*A[1][0];
-    if (fabs(det) <= pivot_tol) return 0;
+    double r0 = fmax(fabs(A[0][0]), fabs(A[0][1])), r1 = fmax(fabs(A[1][0]), fabs(A[1][1]));
+    if (fabs(det) <= LINALG_EPS_REL * r0 * r1) return 0;
     x[0] = (b[0]*A[1][1] - b[1]*A[0][1]) / det;
     x[1] = (A[0][0]*b[1] - A[1][0]*b[0]) / det;
     return 2;
 }
 
 
-static inline int solve_3x3_ppivot_inplace(double A[3][3], double b[3], double x[3], double pivot_tol)
+static inline int solve_3x3_ppivot_inplace(double A[3][3], double b[3], double x[3])
 {
+    double rn[3];
+    for (int r = 0; r < 3; r++) rn[r] = fmax(fabs(A[r][0]), fmax(fabs(A[r][1]), fabs(A[r][2])));
     for (int col = 0; col < 3; col++) {
         /* find pivot */
         int piv = col;
-        double best = fabs(A[col][col]);
+        double best = rn[col] > 0 ? fabs(A[col][col]) / rn[col] : 0;
         for (int r = col + 1; r < 3; r++) {
-            double val = fabs(A[r][col]);
+            double val = rn[r] > 0 ? fabs(A[r][col]) / rn[r] : 0;
             if (val > best) { best = val; piv = r; }
         }
-        if (best <= pivot_tol) return col;
+        if (!(best > LINALG_EPS_REL)) return col;
         if (piv != col) {
             for (int c = col; c < 3; c++) {
                 double t = A[col][c]; A[col][c] = A[piv][c]; A[piv][c] = t;
             }
             double t = b[col]; b[col] = b[piv]; b[piv] = t;
+            t = rn[col]; rn[col] = rn[piv]; rn[piv] = t;
         }
         /* eliminate */
         for (int r = col + 1; r < 3; r++) {
@@ -66,32 +80,39 @@ static inline int solve_3x3_ppivot_inplace(double A[3][3], double b[3], double x
     return 3;
 }
 
-static inline int solve_3x3_ppivot(const double A[3][3], const double b[3], double x[3], double pivot_tol)
+static inline int solve_3x3_ppivot(const double A[3][3], const double b[3], double x[3])
 {
     double Ac[3][3] = {{A[0][0], A[0][1], A[0][2]},
                        {A[1][0], A[1][1], A[1][2]},
                        {A[2][0], A[2][1], A[2][2]}};
     double bc[3] = {b[0], b[1], b[2]};
-    return solve_3x3_ppivot_inplace(Ac, bc, x, pivot_tol);
+    return solve_3x3_ppivot_inplace(Ac, bc, x);
 }
 
 
-static inline int solve_NxN_ppivot_inplace(int N, double *A, double *b, double *x, double pivot_tol)
+static inline int solve_NxN_ppivot_inplace(int N, double *A, double *b, double *x)
 {
+    /* original row sizes in the (otherwise unused) solution vector until back-substitution */
+    for (int r = 0; r < N; r++) {
+        double m = 0;
+        for (int c = 0; c < N; c++) m = fmax(m, fabs(A[r*N+c]));
+        x[r] = m;
+    }
     for (int col = 0; col < N; col++) {
         /* find pivot */
         int piv = col;
-        double best = fabs(A[col*N+col]);
+        double best = x[col] > 0 ? fabs(A[col*N+col]) / x[col] : 0;
         for (int r = col + 1; r < N; r++) {
-            double val = fabs(A[r*N+col]);
+            double val = x[r] > 0 ? fabs(A[r*N+col]) / x[r] : 0;
             if (val > best) { best = val; piv = r; }
         }
-        if (best <= pivot_tol) return col;
+        if (!(best > LINALG_EPS_REL)) return col;
         if (piv != col) {
             for (int c = col; c < N; c++) {
                 double t = A[col*N+c]; A[col*N+c] = A[piv*N+c]; A[piv*N+c] = t;
             }
             double t = b[col]; b[col] = b[piv]; b[piv] = t;
+            t = x[col]; x[col] = x[piv]; x[piv] = t;
         }
         /* eliminate */
         for (int r = col + 1; r < N; r++) {
@@ -109,7 +130,7 @@ static inline int solve_NxN_ppivot_inplace(int N, double *A, double *b, double *
     return N;
 }
 
-static inline int solve_NxN_ppivot(int N, const double *A, const double *b, double *x, double pivot_tol)
+static inline int solve_NxN_ppivot(int N, const double *A, const double *b, double *x)
 {
     #define STACK_MAX 8
     double stack_A[STACK_MAX * STACK_MAX];
@@ -124,7 +145,7 @@ static inline int solve_NxN_ppivot(int N, const double *A, const double *b, doub
         for (int j = 0; j < N; j++) Ac[i*N+j] = A[i*N+j];
         bc[i] = b[i];
     }
-    int rank = solve_NxN_ppivot_inplace(N, Ac, bc, x, pivot_tol);
+    int rank = solve_NxN_ppivot_inplace(N, Ac, bc, x);
     if (N > STACK_MAX) { free(Ac); free(bc); }
     #undef STACK_MAX
     return rank;

@@ -103,12 +103,14 @@ static double face_area(const s_trimesh *m, int f)
 }
 
 /* unit outward normal from mesh->fnormals (guaranteed outward-oriented, but
- * stored unnormalized). Returns 0 for a degenerate (near-zero) normal. */
-static int face_unit_normal(const s_trimesh *m, int f, double eps, s_point *out)
+ * stored unnormalized). Returns 0 for a degenerate (zero-area) face. */
+static int face_unit_normal(const s_trimesh *m, int f, s_point *out)
 {
+    s_point A, B, C; face_corners(m, f, &A, &B, &C);
+    if (tri_is_degenerate(A, B, C)) return 0;
     s_point n = m->fnormals[f];
     double L = vnorm(n);
-    if (L <= eps) return 0;
+    if (!(L > 0.0) || !isfinite(L)) return 0;
     *out = (s_point){{{ n.x / L, n.y / L, n.z / L }}};
     return 1;
 }
@@ -186,8 +188,7 @@ static int scatter_face(const s_trimesh *m, int f, double r_sample,
 
 /* ----- assemble samples + umbrella records + local sizes ----------------- */
 static s_medax_samples build_samples(const s_trimesh *mesh, double r_sample,
-                                     double (*randd01)(void*), void *rctx,
-                                     double EPS_DEG)
+                                     double (*randd01)(void*), void *rctx)
 {
     s_medax_samples out = {0};
     int Nv = mesh->points.N;
@@ -241,7 +242,7 @@ static s_medax_samples build_samples(const s_trimesh *mesh, double r_sample,
 
     for (int f = 0; f < Nf; f++) {
         s_point nf;
-        if (!face_unit_normal(mesh, f, EPS_DEG, &nf)) continue;
+        if (!face_unit_normal(mesh, f, &nf)) continue;
         for (int c = 0; c < 3; c++) deg[mesh->faces[3 * f + c]]++;
     }
 
@@ -266,7 +267,7 @@ static s_medax_samples build_samples(const s_trimesh *mesh, double r_sample,
     for (int v = 0; v < Nv; v++) cursor[v] = out.un_off[v];
     for (int f = 0; f < Nf; f++) {
         s_point nf;
-        if (!face_unit_normal(mesh, f, EPS_DEG, &nf)) continue;
+        if (!face_unit_normal(mesh, f, &nf)) continue;
         for (int c = 0; c < 3; c++) {
             int v = mesh->faces[3 * f + c];
             out.un[cursor[v]++] = nf;
@@ -275,7 +276,7 @@ static s_medax_samples build_samples(const s_trimesh *mesh, double r_sample,
     for (int j = 0; j < Nscat; j++) {
         int f = ((s_scatpt*)scat.items)[j].f;
         s_point nf;
-        face_unit_normal(mesh, f, EPS_DEG, &nf);   /* scattered face is valid */
+        face_unit_normal(mesh, f, &nf);   /* scattered face is valid */
         out.un[out.un_off[Nv + j]] = nf;
     }
     free(cursor);
@@ -506,10 +507,9 @@ static s_medial_graph *build_medgraph(const s_scplx *dt, s_hash_table *tet2node,
  * graph over the emitted points. */
 static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
                           const s_trimesh_inside_grid *grid,
-                          s_hash_table *sel, double EPS_DEG, int inside_filter,
+                          s_hash_table *sel, int inside_filter,
                           int build_graph, s_emit_counts *cnt)
 {
-    (void)EPS_DEG;  /* internal EPS arguments go in step 1b */
     s_dynarray pts = dynarray_initialize(sizeof(s_point), 1024);
     s_dynarray rad = dynarray_initialize(sizeof(double), 1024);
     s_hash_table tet2node;                 /* tet pointer -> emitted node index */
@@ -600,6 +600,7 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double (*randd01)(void*), void *rctx,
                            double EPS_DEG, double TOL, bool want_graph)
 {
+    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
     if (!trimesh_is_valid(mesh)) return MEDAX_INVALID;
     if (theta0 <= 0.0) theta0 = MEDAX_THETA0_DEFAULT;
     if (rho0   <= 0.0) rho0   = MEDAX_RHO0_DEFAULT;
@@ -616,7 +617,7 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
         _t0 = _t1; \
     } while (0)
 
-    s_medax_samples S = build_samples(mesh, r_sample, randd01, rctx, EPS_DEG);
+    s_medax_samples S = build_samples(mesh, r_sample, randd01, rctx);
     if (!S.samples.p) return MEDAX_INVALID;
     MEDAX_TICK("sampling");
 
@@ -661,7 +662,7 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     /* Step 4 (+5): emit circumcenters of tets touching a selected edge, and
      * optionally the medial graph over them. */
     s_emit_counts ec;
-    s_medax ma = emit_medax(&dt, mesh, gp, &sel_edges, EPS_DEG, /*inside_filter=*/1,
+    s_medax ma = emit_medax(&dt, mesh, gp, &sel_edges, /*inside_filter=*/1,
                             want_graph, &ec);
     if (gp) trimesh_inside_grid_free(&grid);
 

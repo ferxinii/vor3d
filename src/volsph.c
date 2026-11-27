@@ -113,10 +113,9 @@ static s_tetra_dihedral dihedral_angles_from_lengths(s_tetra_lengths in)
 }
 
 /* In the case where all 4 vertices are known, dihedral angles are easier */
-static double dihedral_angle_at_edge(s_point a, s_point b, s_point c, s_point d,
-                                     double EPS_DEGEN)
+static double dihedral_angle_at_edge(s_point a, s_point b, s_point c, s_point d)
 {   /* Dihedral angle at edge a-b, c and d are the two opposite vertices */
-    (void)EPS_DEGEN;  /* internal EPS arguments go in step 1b */
+    if (vec_is_degenerate(a, b)) return 0.0;
     s_point edge_dir = normalize_vec(subtract_points(b, a));
     if (!point_is_valid(edge_dir)) return 0.0;
 
@@ -129,15 +128,15 @@ static double dihedral_angle_at_edge(s_point a, s_point b, s_point c, s_point d,
     return atan2(norm(cross_prod(vc, vd)), dot_prod(vc, vd));
 }
 
-static s_tetra_dihedral dihedral_angles_from_vertices(const s_point p[4], double EPS_DEGEN)
+static s_tetra_dihedral dihedral_angles_from_vertices(const s_point p[4])
 {
     return (s_tetra_dihedral){
-        .th12 = dihedral_angle_at_edge(p[0], p[1], p[2], p[3], EPS_DEGEN),
-        .th13 = dihedral_angle_at_edge(p[0], p[2], p[1], p[3], EPS_DEGEN),
-        .th14 = dihedral_angle_at_edge(p[0], p[3], p[1], p[2], EPS_DEGEN),
-        .th23 = dihedral_angle_at_edge(p[1], p[2], p[0], p[3], EPS_DEGEN),
-        .th24 = dihedral_angle_at_edge(p[1], p[3], p[0], p[2], EPS_DEGEN),
-        .th34 = dihedral_angle_at_edge(p[2], p[3], p[0], p[1], EPS_DEGEN),
+        .th12 = dihedral_angle_at_edge(p[0], p[1], p[2], p[3]),
+        .th13 = dihedral_angle_at_edge(p[0], p[2], p[1], p[3]),
+        .th14 = dihedral_angle_at_edge(p[0], p[3], p[1], p[2]),
+        .th23 = dihedral_angle_at_edge(p[1], p[2], p[0], p[3]),
+        .th24 = dihedral_angle_at_edge(p[1], p[3], p[0], p[2]),
+        .th34 = dihedral_angle_at_edge(p[2], p[3], p[0], p[1]),
     };
 }
 
@@ -242,8 +241,7 @@ static s_tetra_lengths tetra_lengths_from_3_spheres(double rA, double rB, double
 }
 
 static bool has_triple_intersection(double rA, double rB, double rC,
-                                    double dAB, double dAC, double dBC,
-                                    double EPS_DEGEN)
+                                    double dAB, double dAC, double dBC)
 {   /* Checks if triple intersection happens */
     /* Place A at origin, B on x-axis */
     double Bx = dAB;
@@ -263,7 +261,7 @@ static bool has_triple_intersection(double rA, double rB, double rC,
         b[i-1] = q[i][0]*q[i][0] + q[i][1]*q[i][1] - (w[i] - w[0]);
     }
     double c[2];
-    if (solve_2x2_cramer(A, b, c, EPS_DEGEN) != 2) return false;
+    if (solve_2x2_cramer(A, b, c) != 2) return false;
 
     return (c[0]*c[0] + c[1]*c[1] - w[0] < 0.0);
 }
@@ -379,7 +377,7 @@ static bool triple_point_xyz(s_point A, s_point B, s_point C,
  * route on collinear centers. */
 static void caps_intersection_3_spheres_xyz(s_point A, s_point B, s_point C,
                                             double rA, double rB, double rC,
-                                            double EPS_DEGEN, double out_cap[3])
+                                            double out_cap[3])
 {
     double dAB = distance(A, B), dAC = distance(A, C), dBC = distance(B, C);
     s_point P;
@@ -388,7 +386,7 @@ static void caps_intersection_3_spheres_xyz(s_point A, s_point B, s_point C,
         return;
     }
     s_point tet[4] = {A, B, C, P};
-    s_tetra_dihedral th = dihedral_angles_from_vertices(tet, EPS_DEGEN);
+    s_tetra_dihedral th = dihedral_angles_from_vertices(tet);
 
     double rA_2 = rA*rA, rB_2 = rB*rB, rC_2 = rC*rC;
     double lAB = distance_radical_plane(rA_2, rB_2, dAB);
@@ -424,7 +422,7 @@ static void caps_intersection_3_spheres_xyz(s_point A, s_point B, s_point C,
  * bit-exact (the padding zeros are exact). */
 static void caps_3_spheres(double rA, double rB, double rC,
                            double dAB, double dAC, double dBC,
-                           bool check_intersection, double EPS_DEGEN, double cap[3])
+                           bool check_intersection, double cap[3])
 {
     if (check_intersection) {
         cap[0] = cap[1] = cap[2] = 0.0;
@@ -440,7 +438,7 @@ static void caps_3_spheres(double rA, double rB, double rC,
         if (dAC >= rA + rC) return;
         if (dBC >= rB + rC) return;
         /* Check triple intersection */
-        if (!has_triple_intersection(rA, rB, rC, dAB, dAC, dBC, EPS_DEGEN)) return;
+        if (!has_triple_intersection(rA, rB, rC, dAB, dAC, dBC)) return;
     }
     caps_intersection_3_spheres(rA, rB, rC, dAB, dAC, dBC, cap);
 }
@@ -448,8 +446,9 @@ static void caps_3_spheres(double rA, double rB, double rC,
 double volume_intersection_3_spheres(double rA, double rB, double rC, double dAB, double dAC, double dBC,
                                      bool check_intersection, double EPS_DEGEN)
 {
+    (void)EPS_DEGEN;  /* unused since EPS went internal; leaves the API in step 2 */
     double cap[3];
-    caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, EPS_DEGEN, cap);
+    caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, cap);
     return cap[0] + cap[1] + cap[2];
 }
 
@@ -485,6 +484,7 @@ double volume_union_3_spheres(s_point pA, double rA,
                               bool check_intersection, double EPS_DEGEN,
                               double *out_contrib)
 {   /* Inclusion-Exclusion principle */
+    (void)EPS_DEGEN;  /* unused since EPS went internal; leaves the API in step 2 */
     double VA = volume_sphere(rA);
     double VB = volume_sphere(rB);
     double VC = volume_sphere(rC);
@@ -497,7 +497,7 @@ double volume_union_3_spheres(s_point pA, double rA,
     caps_2_spheres(rA, rB, dAB, check_intersection, &cAB[0], &cAB[1]);
     caps_2_spheres(rA, rC, dAC, check_intersection, &cAC[0], &cAC[1]);
     caps_2_spheres(rB, rC, dBC, check_intersection, &cBC[0], &cBC[1]);
-    caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, EPS_DEGEN, c3);
+    caps_3_spheres(rA, rB, rC, dAB, dAC, dBC, check_intersection, c3);
 
     if (out_contrib) {   /* each ball: its sphere - its caps of the 3 lenses + its triple cap */
         out_contrib[0] = VA; out_contrib[1] = VB; out_contrib[2] = VC;
@@ -578,10 +578,8 @@ static inline void sort2(int *a)
  * per-ball totals across the whole complex are volumes.  Degenerate radical
  * solves (exactly collinear/coplanar centers, measure zero) fall back to an
  * even split of the tet volume. */
-static void tet_volume_split_power(const s_point c[4], const double r[4],
-                                   double EPS_DEGEN, double out_F[4])
+static void tet_volume_split_power(const s_point c[4], const double r[4], double out_F[4])
 {
-    (void)EPS_DEGEN;  /* internal EPS arguments go in step 1b */
     double w[4];
     for (int i = 0; i < 4; i++) w[i] = r[i]*r[i];
 
@@ -647,8 +645,7 @@ static void tet_volume_split_power(const s_point c[4], const double r[4],
  * out_contrib == NULL only the scalar total is computed (K-tet uses the exact
  * per-tet volume; no split rounding).  Dropped/redundant balls keep contrib 0. */
 static double union_core(const s_points *centers, const double radii[],
-                         double EPS_DEGEN, double TOL_dup,
-                         s_dynarray *buff_ncellPTR, double *out_contrib)
+                         double TOL_dup, s_dynarray *buff_ncellPTR, double *out_contrib)
 {
     int N = centers->N;
     if (out_contrib) for (int i = 0; i < N; i++) out_contrib[i] = 0.0;
@@ -689,7 +686,7 @@ static double union_core(const s_points *centers, const double radii[],
      * tet volume (for nested/near-duplicate ball pairs they are O(lam*rdisk^2)
      * and load-bearing; skipping them produced negative per-ball contributions,
      * bug 3).  The quad-form split is stable on such tets, so nothing is
-     * guarded by EPS_DEGEN here anymore. */
+     * guarded by an epsilon here. */
     double vol = 0.0;
     for (s_ncell *nc = dt.head; nc; nc = nc->next) {
         s_point p[4];  extract_vertices_ncell(&dt, nc, p);
@@ -707,7 +704,7 @@ static double union_core(const s_points *centers, const double radii[],
                     rF[v] = radii[bv];
                 }
                 double F[4];
-                tet_volume_split_power(p, rF, EPS_DEGEN, F);
+                tet_volume_split_power(p, rF, F);
                 for (int v = 0; v < 4; v++)
                     out_contrib[ball_of_vid[nc->vertex_id[v]]] += F[v];
             }
@@ -715,7 +712,7 @@ static double union_core(const s_points *centers, const double radii[],
         }
 
         /* SECOND SUM: tets NOT in K */
-        s_tetra_dihedral  dihe = dihedral_angles_from_vertices(p, EPS_DEGEN);
+        s_tetra_dihedral  dihe = dihedral_angles_from_vertices(p);
         s_tetra_solid_angles sa = solid_angles_from_dihedral(dihe);
 
         /* FACES */
@@ -729,8 +726,7 @@ static double union_core(const s_points *centers, const double radii[],
             assert(ba >= 0 && bb >= 0 && bc >= 0);
             double cap3[3];
             caps_intersection_3_spheres_xyz(dt.points.p[face[0]], dt.points.p[face[1]],
-                            dt.points.p[face[2]], radii[ba], radii[bb], radii[bc],
-                            EPS_DEGEN, cap3);
+                            dt.points.p[face[2]], radii[ba], radii[bb], radii[bc], cap3);
             vol += 0.5 * (cap3[0] + cap3[1] + cap3[2]);
             if (out_contrib) {
                 out_contrib[ba] += 0.5 * cap3[0];
@@ -788,6 +784,7 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
                             double EPS_DEGEN, double TOL_dup, s_dynarray *buff_ncellPTR,
                             double *out_contrib)
 {
+    (void)EPS_DEGEN;  /* unused since EPS went internal; leaves the API in step 2 */
     int N = centers->N;
     if (N == 1) {
         if (out_contrib) out_contrib[0] = volume_sphere(radii[0]);
@@ -800,9 +797,9 @@ double volume_union_spheres(const s_points *centers, const double radii[centers-
         return volume_union_3_spheres(centers->p[0], radii[0],
                                       centers->p[1], radii[1],
                                       centers->p[2], radii[2],
-                                      true, EPS_DEGEN, out_contrib);
+                                      true, 0.0, out_contrib);
     }
     /* N >= 4: general RT + alpha-complex path.  The returned total does not
      * depend on out_contrib (the split only adds a parallel accumulation). */
-    return union_core(centers, radii, EPS_DEGEN, TOL_dup, buff_ncellPTR, out_contrib);
+    return union_core(centers, radii, TOL_dup, buff_ncellPTR, out_contrib);
 }

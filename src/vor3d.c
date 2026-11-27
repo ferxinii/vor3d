@@ -86,6 +86,7 @@ s_vor3d_domain vor3d_domain_from_points(const s_points *points, double EPS_DEG)
 s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
                                          double TOL, int keep_exterior)
 {
+    (void)EPS_DEG;  /* unused since EPS went internal; leaves the API in step 2 */
     if (!mesh || !trimesh_is_valid(mesh)) return (s_vor3d_domain){0};
 
     /* The hull is needed by both kernels: it IS the domain when convex, and
@@ -106,8 +107,8 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
      * exterior pockets flagged via nc->interior), which the clip treats
      * identically and which also supports exact walk-based point location. */
     d.cdt = malloc(sizeof *d.cdt);
-    if (d.cdt) *d.cdt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
-                                      : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
+    if (d.cdt) *d.cdt = keep_exterior ? tetrahedralize_domain_flagged(mesh, TOL)
+                                      : tetrahedralize_interior_trimesh(mesh, TOL);
     if (!d.cdt || !d.cdt->head) {
         fprintf(stderr, "vor3d_domain_from_trimesh: tetrahedralization failed\n");
         free_vor3d_domain(&d);

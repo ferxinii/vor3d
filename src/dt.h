@@ -135,8 +135,7 @@ int N_ncells_not_big_tetra(s_scplx *scplx);  /* Only makes sense if scplx has ke
  * Returns an s_scplx containing only the interior tetrahedra (centroid inside
  * the trimesh). The point set may be a superset of mesh->points if Steiner
  * points were added.  Returns an empty s_scplx ({0}) on error. */
-s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
-                                        double EPS_DEG, double TOL);
+s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh, double TOL);
 
 /* Like tetrahedralize_interior_trimesh, but returns the FULL tetrahedralization
  * of the convex hull of the mesh vertices (interior + exterior "pocket" tets;
@@ -147,8 +146,7 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
  * at a hull boundary face (opposite == NULL) and is therefore outside the mesh.
  * Intended as a robust, exact inside/outside oracle.
  * Returns an empty s_scplx ({0}) on error. */
-s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh,
-                                       double EPS_DEG, double TOL);
+s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh, double TOL);
 
 
 
