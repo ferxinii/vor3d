@@ -1,6 +1,6 @@
 /* WARNING: This file was written by claude code */
 
-#include "delaunay.h"
+#include "dt.h"
 #include "scplx.h"
 #include "trimesh.h"
 #include "./hlibs/dynarray.h"
@@ -2833,6 +2833,12 @@ s_scplx tetrahedralize_interior_trimesh(const s_trimesh *mesh,
                                          double EPS_DEG, double TOL)
 {
     return cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/false);
+}
+
+s_tetmesh tetrahedralize_trimesh(const s_trimesh *mesh, double EPS_DEG, double TOL)
+{
+    s_scplx C = cdt_build(mesh, EPS_DEG, TOL, /*keep_exterior=*/false);
+    return tetmesh_from_scplx(&C, NULL);
 }
 
 s_scplx tetrahedralize_domain_flagged(const s_trimesh *mesh,

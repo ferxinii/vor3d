@@ -11,7 +11,7 @@
 #include "alpha.h"
 #include "acplx.h"
 #include "scplx.h"
-#include "delaunay.h"
+#include "dt.h"
 #include "gtests.h"
 #include "./hlibs/dynarray.h"
 #include "./hlibs/hash.h"

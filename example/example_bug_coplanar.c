@@ -1,7 +1,7 @@
 /* Reproducer for the coplanar-input DT crash documented in ERROR.md.
  *
  * Trigger: 8 cube-corner mesh vertices (all on z=0 or z=1 planes) followed
- * by a 5x5x5 interior grid of 125 points, fed together to construct_dt_3d.
+ * by a 5x5x5 interior grid of 125 points, fed together to delaunay_3d.
  * Expected: crash / assertion failure at point_id=12 (first interior point
  * inserted after all 8 coplanar corners occupy indices 4-11). */
 
@@ -123,19 +123,19 @@ int main(void)
 
     s_points points = {.N = N, .p = pts};
 
-    printf("Calling construct_dt_3d with %d points (%d coplanar mesh verts + %d interior)...\n",
+    printf("Calling delaunay_3d with %d points (%d coplanar mesh verts + %d interior)...\n",
            N, 8, 125);
     fflush(stdout);
 
-    s_scplx dt = construct_dt_3d(&points, NULL, false, 1e-12, NULL, NULL);
+    s_tetmesh dt = delaunay_3d(&points, NULL, 1e-12, NULL, NULL);
 
-    if (!dt.head) {
-        fputs("construct_dt_3d returned an empty complex (error or crash).\n", stderr);
+    if (!tetmesh_is_valid(&dt)) {
+        fputs("delaunay_3d failed (error or crash).\n", stderr);
         free(pts);
         return 1;
     }
 
-    printf("construct_dt_3d succeeded -- %d tetrahedra.\n", dt.N_ncells);
+    printf("delaunay_3d succeeded -- %d tetrahedra.\n", dt.N_tets);
 
     s_vor3d_domain dom = vor3d_domain_from_points(&points, 1e-12);
     write_convh_vtk(&dom.convh, "convh.vtk");
@@ -147,7 +147,7 @@ int main(void)
         fputs("vor3d_diagram returned an invalid diagram.\n", stderr);
         free_vdiagram(&vd);
         free_vor3d_domain(&dom);
-        free_complex(&dt);
+        free_tetmesh(&dt);
         free(pts);
         return 1;
     }
@@ -165,7 +165,7 @@ int main(void)
 
     free_vdiagram(&vd);
     free_vor3d_domain(&dom);
-    free_complex(&dt);
+    free_tetmesh(&dt);
     free(pts);
     return 0;
 }

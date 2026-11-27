@@ -1,8 +1,6 @@
 #include "volsph.h"
 #include "dynarray.h"
 #include "points.h"
-#include "scplx.h"
-#include "delaunay.h"
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
@@ -73,7 +71,7 @@ static void check_mc(const char *name, double exact, double mc, double mc_tol)
 
 int main(void)
 {
-    s_dynarray buff = dynarray_initialize(sizeof(s_ncell *), 64);
+    s_dynarray buff = dynarray_initialize(sizeof(void *), 64);
     const int    N_MC   = 4000000;   /* ~0.1-0.2% MC accuracy */
     const double MC_TOL = 0.015;     /* 1.5% relative (MC noise + boundary conventions) */
     const unsigned int SEED = 20260713u;

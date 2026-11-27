@@ -32,7 +32,8 @@ double volume_union_3_spheres(s_point pA, double rA,
 /* Volume of the union of N balls (centers, radii).  N = 1, 2, 3: analytic;
  * N >= 4: weighted Delaunay (regular) triangulation + alpha complex at alpha = 0
  * (Edelsbrunner's inclusion-exclusion).  Returns NAN on allocation failure.
- * buff_ncellPTR: caller-provided scratch dynarray of s_ncell*.
+ * buff_ncellPTR: caller-provided scratch dynarray of pointers (element size
+ *   sizeof(void *)); its contents are internal.
  * out_contrib (nullable, length centers->N, indexed by ORIGINAL ball id):
  *   per-ball contributions, sum_i out_contrib[i] == the returned volume (up to
  *   rounding; passing it never changes the returned value).  The per-ball unit

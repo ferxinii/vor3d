@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include "points.h"
+#include "delaunay.h"   /* s_tetmesh */
 
 /* Forward decl of the PRNG context (definition in src/random.h). A complex may
  * carry a caller-owned RNG used to break point-location walk ties deterministically
@@ -70,6 +71,10 @@ typedef struct hash_table s_hash_table;
 typedef struct implicit_predicate_registry s_implicit_pred_reg;  /* geometry/gtests_implicit.h */
 
 void free_complex(s_scplx *scplx);
+/* Consumes C (frees it, success or failure). Exports all its tets, keeping only
+ * the points they use; vid_map (nullable, length C->points.N) gets each scplx
+ * vertex id's index in the result, or -1. Zeroed result if C has no tets. */
+s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map);
 void assert_point2tet(const s_scplx *scplx);
 void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *scplx);

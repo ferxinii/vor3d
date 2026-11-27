@@ -6,11 +6,13 @@ Completed items are removed from this file; their notes live in git history and 
 [ ] Bump vor3d submodule; 3 renames needed since 20fe33f (s_bpoly removed): bt_voronoi.c:42 domain->bpoly.CM -> convh_vertex_avg, bt_domain.c:305 + bt_generate.c:101 bpoly.min/max -> bbox_min/bbox_max.
 [ ] Also on that bump (2026-11-27 API changes): include/lung_io.h + tests/leak_lumen.c #include "vdiagram.h" -> "vor3d.h"; bt_voronoi.c:27 vd.vcells == NULL -> !vdiagram_is_valid(&vd); medax_NAN is gone: bt_setup.c:280 init -> (s_medax){0}, failure checks -> medax_is_valid (bt_policies.h:52 comment).
 [ ] Lung e2e timing not re-measured on an idle machine since the unified API.
+[ ] Also on that bump (2026-11-27, scplx.h/delaunay.h private): bt_cell.c:168 bt_cell_from_trimesh -> s_tetmesh M = tetrahedralize_trimesh(mesh, EPS_DEG, TOL); loop t < M.N_tets over M.tets[4t..4t+3] (all tets are interior), free_tetmesh; drop #include "scplx.h" in bt_cell.c and bt_domain.c:6 (dead there).
 
 
 === SMALL / SELF-CONTAINED ===
 
 [ ] Stale tests (found 2026-11-27): rt_validate, rt_smalln_stress, rt_sos_degenerate, orthow_k1, predseam_convention no longer compile (test_orthosphere* / test_*_w undeclared; gtests_implicit.h parse error in predseam). Also fix the "Build:" header comments that still name old lib files (libvoronoi_predicates.a etc.). Do this before any deeper DT change.
+[ ] Helper headers copied between repos have drifted: src/hlibs/{dynarray,hash,linalg}.h vs external/geometry/src/ (13-18 differing lines each), example/dynarray.h too. Pick one owner (geometry?) and include it instead of copying.
 [ ] geometry lp.c: lp3_D is documented as unused ("the enumerate-and-hull clip does not call it") -> remove?
 [ ] Audit the rest of the library for unconditional stderr/stdout prints on success paths: only errors should print (opt-in env debug flags are fine).
 [ ] Env debug flags that CHANGE results (not just print): MEDAX_NOGRID (medax.c), SV_TAU_REL (surf_vkey.h) -> consider removing. Print/validate-only flags (ASHAPE_PROFILE, MEDAX_PROFILE, CDT_VERBOSE, CDT_DUMP_WALLS, CDT_DBG_FACE, CDT_VALIDATE, CDT_CHECK_WALK, DT_TRACE, NCVX_ALL_BOUNDARY, NCVX_TETCHECK) are fine to keep.
@@ -21,8 +23,6 @@ Completed items are removed from this file; their notes live in git history and 
 === PUBLIC API (own session; alpha part in CLAUDE/PLAN_ALPHA_API.md) ===
 
 [ ] Plotting: drop the external/gnuplotC dependency (linked PRIVATE by vor3d; used by src/vdiagram.c plot_vcell/plot_all_vcells/plot_vdiagram_differentviews and src/scplx.c plot_*) in favour of the header-only src/hlibs/gplot.h. Remove or refactor the library plot_* functions, and maybe unify them with the README figure rendering (example/render3d.h, example/readme_figures.c).
-[ ] scplx.h + delaunay.h private? s_scplx/s_ncell expose ~10 internal fields (stamps, pool, pred_reg, l2g_ids, exact_ids, walk hint, mask_alpha, in_stack) and ~25 helpers (malloc_ncell, ridge walks, extract_*, plot_*, dt_builder_*). Lung's ONLY use: bt_cell.c:168 tetrahedralize_domain_flagged -> keep interior tets -> free. Proposal: public plain result s_tetmesh {s_points points; int N_tets; int *tets /*flat, 4 per tet*/} from tetmesh_from_trimesh(...) (interior tets) and maybe delaunay_3d(pts, weights, ..., out_kept_idx); same conventions as s_alpha_complex (owns points, flat int*, nullable out_kept_idx).
-    [ ] Blocker: s_vor3d_domain embeds s_scplx cdt BY VALUE -> needs an opaque pointer (or private definition) before scplx.h can go private.
 [ ] has_big_tetra as a user_passed flag throughout is weird... cant it be incorporated into scplx ? or somehow? If worth it.
 [ ] API REFACTOR: RNG callback + context + caller-owned memory (one refactor, all public headers: vor3d.h, delaunay.h, alpha.h, scplx.h, medax.h, volsph.h ...).
     Note: public scratch-buffer args still exist in volsph.h (buff_ncellPTR, kept on purpose 2026-11-27) -- fold into the allocator design. alpha_complex_3d / alpha_shape_3d allocate scratch internally and return library-malloc'd results (free_alpha_*).

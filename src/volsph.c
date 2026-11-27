@@ -2,7 +2,7 @@
 #include "volsph.h"
 #include "points.h"
 #include "scplx.h"
-#include "delaunay.h"
+#include "dt.h"
 #include "acplx.h"
 #include "hlibs/linalg.h"
 #include "./hlibs/hash.h"

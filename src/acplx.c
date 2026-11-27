@@ -1,6 +1,6 @@
 #include "acplx.h"
 #include "alpha.h"
-#include "delaunay.h"
+#include "dt.h"
 #include "scplx.h"
 #include "./hlibs/hash.h"
 #include "./hlibs/dynarray.h"

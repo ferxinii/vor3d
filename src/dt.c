@@ -1,7 +1,7 @@
 /* Algorithm from article: 
  * Hugo Ledoux. Computing the 3D Voronoi Diagram Robustly: An Easy Explanation. 
  * But considering the possibility of weights (regular triangulation) */
-#include "delaunay.h"
+#include "dt.h"
 #include "scplx.h"
 #include "points.h"
 #include "gtests.h"
@@ -2485,6 +2485,32 @@ s_scplx dt_builder_end(s_dt_builder *b, bool keep_big_tetra, int *out_Nreal,
 
     // assert_point2tet(&b->dt);
     return b->dt;
+}
+
+
+s_tetmesh delaunay_3d(const s_points *pts, const double *weights, double TOL_dup,
+                      s_random_context *rng, int *out_kept_idx)
+{
+    int N_in = pts ? pts->N : 0;
+    if (out_kept_idx) for (int i = 0; i < N_in; i++) out_kept_idx[i] = -1;
+    if (!pts || pts->N < 4) return (s_tetmesh){0};
+
+    /* kept[i] = vid of input i in the compacted DT, or -1. */
+    int *kept = malloc((size_t)pts->N * sizeof(int));
+    if (!kept) return (s_tetmesh){0};
+    for (int i = 0; i < pts->N; i++) kept[i] = i;
+    s_dt_builder b = dt_builder_begin(pts, weights, TOL_dup, NULL, NULL, rng);
+    if (!b._stack) { free(kept); return (s_tetmesh){0}; }
+    s_scplx dt = dt_builder_end(&b, /*keep_big_tetra=*/false, NULL, kept, pts->N);
+
+    int *map = malloc((size_t)(dt.points.N > 0 ? dt.points.N : 1) * sizeof(int));
+    if (!map) { free(kept); free_complex(&dt); return (s_tetmesh){0}; }
+    s_tetmesh T = tetmesh_from_scplx(&dt, map);
+    if (tetmesh_is_valid(&T) && out_kept_idx)
+        for (int i = 0; i < pts->N; i++)
+            out_kept_idx[i] = kept[i] >= 0 ? map[kept[i]] : -1;
+    free(map); free(kept);
+    return T;
 }
 
 

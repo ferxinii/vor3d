@@ -5,7 +5,7 @@
 #include "points.h"
 #include "convh.h"
 #include "trimesh.h"
-#include "scplx.h"     /* s_scplx (s_vor3d_domain.cdt); forward-declares s_random_context */
+typedef struct random_context s_random_context;
 
 
 /* ---- Cells and diagram ---- */
@@ -48,9 +48,9 @@ typedef struct vor3d_domain {
     s_convh    convh;     /* convex: the domain itself; non-convex: its convex hull */
     s_point    convh_vertex_avg;   /* average of convh's vertices (strictly interior) */
     s_point    bbox_min, bbox_max; /* axis-aligned bounding box of convh */
-    s_scplx    cdt;       /* non-convex only: CDT of the interior (interior tets,
-                             plus flagged exterior pockets if built with
-                             keep_exterior); empty (head == NULL) when is_convex */
+    struct simplical_complex *cdt;  /* non-convex only (private): CDT of the
+                             interior, plus flagged exterior pockets if built with
+                             keep_exterior; NULL when is_convex */
     bool       cdt_has_exterior;  /* cdt was built with keep_exterior = 1 */
     double     volume;    /* convex: volume of convh; non-convex: sum of interior tets */
 } s_vor3d_domain;

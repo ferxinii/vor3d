@@ -1,6 +1,6 @@
 /* WARNING: This was built with claude code */
 #include "vor3d.h"
-#include "delaunay.h"
+#include "dt.h"
 #include "scplx.h"
 #include "hlibs/dynarray.h"
 #include "trimesh.h"
@@ -2076,7 +2076,7 @@ static int merge_orphans_pass(const s_vor3d_domain *domain, const s_points *real
                               int N, double EPS_DEG, s_dynarray *surf, s_dynarray *pcs,
                               s_dynarray *piece_tri_off, s_vcell *vcells)
 {
-    const s_points *cverts = &domain->cdt.points;
+    const s_points *cverts = &domain->cdt->points;
     int rc = 0;
 
     for (int i = 0; i < N; i++) { vcells[i] = (s_vcell){0}; vcells[i].seed_id = i; }
@@ -2411,7 +2411,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
         if (merge_orphans) piece_tri_off[i] = dynarray_initialize(sizeof(int), 4);
     }
 
-    if (!compute_vertex_owners(&domain->cdt.points, real_seeds, seed_dt, adj, N,
+    if (!compute_vertex_owners(&domain->cdt->points, real_seeds, seed_dt, adj, N,
                                &owner, &tie))
         goto err;
     int NVD = adj->vtx_off[N];                            /* total Voronoi-vertex duals */
@@ -2452,7 +2452,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
         for (int e = 0; e < ne; e++)
             if (ed[4*e+2] == -1 || ed[4*e+3] == -1) { cellkind[i] = 1; break; }
         if (!cellkind[i]) {
-            s_ncell *loc = in_ncell_walk(&domain->cdt, real_seeds->p[i]);
+            s_ncell *loc = in_ncell_walk(domain->cdt, real_seeds->p[i]);
             if (!loc || !loc->interior) cellkind[i] = 1;
         }
         if (!cellkind[i] && seed_weights) {
@@ -2478,14 +2478,14 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
 
     /* Phase A: flood each boundary tet (one with a surface face) and flag every
      * reachable interior-so-far cell that may touch a boundary face. */
-    for (s_ncell *nc = domain->cdt.head; nc; nc = nc->next) {
+    for (s_ncell *nc = domain->cdt->head; nc; nc = nc->next) {
         if (!nc->interior) continue;              /* skip exterior pockets (flagged CDT) */
         int has_bf = 0;
         for (int f = 0; f < 4; f++) if (face_is_domain_boundary(nc, f)) { has_bf = 1; break; }
         if (!has_bf) continue;
         tet_stamp++;
         s_point tv[4];
-        extract_vertices_ncell(&domain->cdt, nc, tv);
+        extract_vertices_ncell(domain->cdt, nc, tv);
         s_point c = { .x = (tv[0].x+tv[1].x+tv[2].x+tv[3].x)*0.25,
                       .y = (tv[0].y+tv[1].y+tv[2].y+tv[3].y)*0.25,
                       .z = (tv[0].z+tv[1].z+tv[2].z+tv[3].z)*0.25 };
@@ -2527,13 +2527,13 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
 
     /* Phase B: main clip. Interior cells are skipped (emitted whole below) but
      * still expanded through, so the flood stays connected. */
-    for (s_ncell *nc = domain->cdt.head; nc; nc = nc->next) {
+    for (s_ncell *nc = domain->cdt->head; nc; nc = nc->next) {
         if (!nc->interior) continue;              /* skip exterior pockets (flagged CDT) */
         tet_stamp++;
         tetcheck_idx++;
         double tet_acc = 0.0;
         s_point tv[4];
-        extract_vertices_ncell(&domain->cdt, nc, tv);
+        extract_vertices_ncell(domain->cdt, nc, tv);
 
         /* Skip degenerate sliver tets (relative volume < 1e-12 of their bbox
          * cube), like the near-zero "lens" tets the CDT creates between the two
@@ -2710,7 +2710,7 @@ static int clip_domain(const s_vor3d_domain *domain, const s_points *real_seeds,
 
             if (want_surface) {   /* a pinched cell splits into >1 connected component */
                 s_trimesh *sm = NULL; int sn = 0;
-                if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt.points,
+                if (build_cell_surface(&surf[i], i, real_seeds, &domain->cdt->points,
                                        EPS_DEG, &sm, &sn) == 1) {
                     vcells[i].surface   = sm;
                     vcells[i].N_surface = sn;

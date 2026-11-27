@@ -779,3 +779,139 @@ void plot_dt_3d_differentviews(const s_scplx *scplx, char *f_name, s_point range
 
 }
 
+
+
+/* ---- Export to the public s_tetmesh (delaunay.h) ---- */
+
+/* Parity of the permutation taking a[] to b[] (same 4 ids): +1 even, -1 odd. */
+static int perm4_parity(const int a[4], const int b[4])
+{
+    int pos[4];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            if (b[i] == a[j]) { pos[i] = j; break; }
+    int inv = 0;
+    for (int i = 0; i < 4; i++)
+        for (int j = i + 1; j < 4; j++) inv += pos[i] > pos[j];
+    return (inv & 1) ? -1 : 1;
+}
+
+static void tetmesh_flip_tet(s_tetmesh *T, int t)
+{
+    int *v = &T->tets[4*t], *n = &T->neighbors[4*t];
+    int tv = v[0]; v[0] = v[1]; v[1] = tv;
+    int tn = n[0]; n[0] = n[1]; n[1] = tn;
+}
+
+/* Make every tet positively oriented. Within a face-connected component the
+ * relative orientation is purely combinatorial: if B = A with vertex i swapped
+ * for B's apex, B is consistent with A iff the permutation from that tuple to
+ * B is odd. The component's absolute sign then comes from its total signed
+ * volume (+-|V|), which is robust even when single slivers are not. */
+static bool tetmesh_orient_positive(s_tetmesh *T)
+{
+    int N = T->N_tets;
+    int *comp = malloc((size_t)N * sizeof(int));  /* BFS queue of the component */
+    bool *seen = calloc((size_t)N, sizeof(bool));
+    if (!comp || !seen) { free(comp); free(seen); return false; }
+    const s_point *P = T->points.p;
+    for (int s = 0; s < N; s++) {
+        if (seen[s]) continue;
+        int head = 0, tail = 0;
+        comp[tail++] = s; seen[s] = true;
+        while (head < tail) {
+            int a = comp[head++];
+            const int *va = &T->tets[4*a];
+            for (int i = 0; i < 4; i++) {
+                int b = T->neighbors[4*a+i];
+                if (b < 0 || seen[b]) continue;
+                const int *vb = &T->tets[4*b];
+                int apex = -1;
+                for (int k = 0; k < 4; k++)
+                    if (vb[k] != va[0] && vb[k] != va[1] && vb[k] != va[2] && vb[k] != va[3])
+                        apex = vb[k];
+                int ref[4] = { va[0], va[1], va[2], va[3] };
+                ref[i] = apex;
+                if (perm4_parity(ref, vb) > 0) tetmesh_flip_tet(T, b);
+                seen[b] = true;
+                comp[tail++] = b;
+            }
+        }
+        double vol = 0.0;
+        for (int q = 0; q < tail; q++) {
+            const int *v = &T->tets[4*comp[q]];
+            s_point tet[4] = { P[v[0]], P[v[1]], P[v[2]], P[v[3]] };
+            vol += signed_volume_tetra(tet);
+        }
+        if (vol < 0.0) for (int q = 0; q < tail; q++) tetmesh_flip_tet(T, comp[q]);
+    }
+    free(comp); free(seen);
+    return true;
+}
+
+s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map)
+{
+    s_tetmesh T = {0};
+    int Np = C->points.N;
+    int *map = vid_map ? vid_map : malloc((size_t)(Np > 0 ? Np : 1) * sizeof(int));
+    int nt = 0;
+    for (s_ncell *nc = C->head; nc; nc = nc->next) nc->mark_token = nt++;
+    if (!map) goto fail;
+    for (int v = 0; v < Np; v++) map[v] = -1;
+    if (nt == 0) goto fail;
+
+    T.tets = malloc((size_t)nt * 4 * sizeof(int));
+    T.neighbors = malloc((size_t)nt * 4 * sizeof(int));
+    if (!T.tets || !T.neighbors) goto fail;
+
+    /* Vertices in tet use, numbered monotonically in scplx vid (keeps order). */
+    for (s_ncell *nc = C->head; nc; nc = nc->next)
+        for (int k = 0; k < 4; k++) map[nc->vertex_id[k]] = 0;
+    int nv = 0;
+    for (int v = 0; v < Np; v++) if (map[v] == 0) map[v] = nv++;
+
+    T.points.p = malloc((size_t)nv * sizeof(s_point));
+    if (!T.points.p) goto fail;
+    if (C->weights) { T.weights = malloc((size_t)nv * sizeof(double)); if (!T.weights) goto fail; }
+    for (int v = 0; v < Np; v++) {
+        if (map[v] < 0) continue;
+        T.points.p[map[v]] = C->points.p[v];
+        if (C->weights) T.weights[map[v]] = C->weights[v];
+    }
+    T.points.N = nv;
+
+    int t = 0;
+    for (s_ncell *nc = C->head; nc; nc = nc->next, t++)
+        for (int k = 0; k < 4; k++) {
+            T.tets[4*t+k] = map[nc->vertex_id[k]];
+            T.neighbors[4*t+k] = nc->opposite[k] ? nc->opposite[k]->mark_token : -1;
+        }
+    T.N_tets = nt;
+    if (!tetmesh_orient_positive(&T)) goto fail;
+
+    if (!vid_map) free(map);
+    free_complex(C);
+    return T;
+
+fail:
+    if (vid_map) for (int v = 0; v < Np; v++) vid_map[v] = -1;
+    else free(map);
+    free_tetmesh(&T);
+    free_complex(C);
+    return (s_tetmesh){0};
+}
+
+bool tetmesh_is_valid(const s_tetmesh *t)
+{
+    return t && t->tets != NULL;
+}
+
+void free_tetmesh(s_tetmesh *t)
+{
+    if (!t) return;
+    free(t->points.p);
+    free(t->weights);
+    free(t->tets);
+    free(t->neighbors);
+    memset(t, 0, sizeof *t);
+}

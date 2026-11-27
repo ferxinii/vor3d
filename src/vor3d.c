@@ -2,7 +2,7 @@
  * The diagram entry point vor3d_diagram lives in ncvx.c next to both clip
  * kernels. */
 #include "vor3d.h"
-#include "delaunay.h"
+#include "dt.h"
 #include "scplx.h"
 #include "convh.h"
 #include "trimesh.h"
@@ -19,13 +19,13 @@ bool vor3d_domain_is_valid(const s_vor3d_domain *d)
 {
     if (!d || !trimesh_is_valid(&d->surface) || !convhull_is_valid(&d->convh))
         return false;
-    return d->is_convex || d->cdt.head != NULL;
+    return d->is_convex || (d->cdt && d->cdt->head != NULL);
 }
 
 void free_vor3d_domain(s_vor3d_domain *d)
 {
     free_trimesh(&d->surface);
-    free_complex(&d->cdt);
+    if (d->cdt) { free_complex(d->cdt); free(d->cdt); }
     free_convhull(&d->convh);
     memset(d, 0, sizeof(s_vor3d_domain));
 }
@@ -104,9 +104,10 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
      * tets; keep_exterior=1 returns the full convex-hull complex (interior +
      * exterior pockets flagged via nc->interior), which the clip treats
      * identically and which also supports exact walk-based point location. */
-    d.cdt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
-                          : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
-    if (!d.cdt.head) {
+    d.cdt = malloc(sizeof *d.cdt);
+    if (d.cdt) *d.cdt = keep_exterior ? tetrahedralize_domain_flagged(mesh, EPS_DEG, TOL)
+                                      : tetrahedralize_interior_trimesh(mesh, EPS_DEG, TOL);
+    if (!d.cdt || !d.cdt->head) {
         fprintf(stderr, "vor3d_domain_from_trimesh: tetrahedralization failed\n");
         free_vor3d_domain(&d);
         return (s_vor3d_domain){0};
@@ -114,10 +115,10 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
     d.cdt_has_exterior = keep_exterior != 0;
 
     double volume = 0.0;
-    for (s_ncell *nc = d.cdt.head; nc; nc = nc->next) {
+    for (s_ncell *nc = d.cdt->head; nc; nc = nc->next) {
         if (!nc->interior) continue;              /* skip exterior pockets, if kept */
         s_point v[4];
-        extract_vertices_ncell(&d.cdt, nc, v);
+        extract_vertices_ncell(d.cdt, nc, v);
         volume += fabs(signed_volume_tetra(v));
     }
     d.volume = volume;
@@ -141,7 +142,7 @@ bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double EPS_DEG, d
      * walk that steps off it is conclusive too. The lean (interior-only)
      * complex is not convex, so there a walk can leave through a concavity
      * while p is inside: fall back to the winding number. */
-    const s_ncell *nc = in_ncell_walk(&d->cdt, p);
+    const s_ncell *nc = in_ncell_walk(d->cdt, p);
     if (nc) return nc->interior;
     if (d->cdt_has_exterior) return false;
     return point_in_trimesh_winding(&d->surface, p) == 1;
