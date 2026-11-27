@@ -57,7 +57,7 @@ static s_vor3d_domain domain_from_owned_convh(s_convh convh)
 {
     if (!convhull_is_valid(&convh)) { free_convhull(&convh); return (s_vor3d_domain){0}; }
     s_vor3d_domain d = domain_with_convh(convh);
-    d.surface = trimesh_from_arrays(convh.points.p, convh.points.N, convh.faces, convh.Nf, 0.0);
+    d.surface = trimesh_from_arrays(convh.points.p, convh.points.N, convh.faces, convh.Nf);
     if (!trimesh_is_valid(&d.surface)) {
         fprintf(stderr, "vor3d_domain: hull is not a closed manifold\n");
         free_vor3d_domain(&d);
@@ -75,9 +75,10 @@ s_vor3d_domain vor3d_domain_from_convh(const s_convh *convh)
 
 s_vor3d_domain vor3d_domain_from_points(const s_points *points, double EPS_DEG)
 {
+    (void)EPS_DEG;  /* unused since geometry EPS went internal; leaves the API in step 2 */
     if (!points || points->N < 4) return (s_vor3d_domain){0};
     s_convh convh;
-    if (convhull_from_points(points, EPS_DEG, &convh) != 1) return (s_vor3d_domain){0};
+    if (convhull_from_points(points, &convh) != 1) return (s_vor3d_domain){0};
     return domain_from_owned_convh(convh);
 }
 
@@ -90,7 +91,7 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
     /* The hull is needed by both kernels: it IS the domain when convex, and
      * sizes the far auxiliary box / fast-rejects containment queries when not. */
     s_convh convh;
-    if (convhull_from_points(&mesh->points, EPS_DEG, &convh) != 1) return (s_vor3d_domain){0};
+    if (convhull_from_points(&mesh->points, &convh) != 1) return (s_vor3d_domain){0};
     s_vor3d_domain d = domain_with_convh(convh);
 
     if (trimesh_is_convex(mesh)) {
@@ -131,9 +132,10 @@ s_vor3d_domain vor3d_domain_from_trimesh(const s_trimesh *mesh, double EPS_DEG,
 
 bool vor3d_domain_contains(const s_vor3d_domain *d, s_point p, double EPS_DEG, double TOL)
 {
+    (void)EPS_DEG;  /* unused since geometry EPS went internal; leaves the API in step 2 */
     for (int a = 0; a < 3; a++)
         if (p.coords[a] < d->bbox_min.coords[a] || p.coords[a] > d->bbox_max.coords[a]) return false;
-    e_geom_test t = test_point_in_convhull(&d->convh, p, EPS_DEG, TOL);
+    e_geom_test t = test_point_in_convhull(&d->convh, p, TOL);
     if (t == TEST_OUT) return false;
     if (d->is_convex) return t == TEST_IN || t == TEST_BOUNDARY;
 

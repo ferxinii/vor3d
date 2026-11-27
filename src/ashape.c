@@ -42,7 +42,7 @@ static double tet_power_radius2(const s_scplx *dt, const s_ncell *nc)
     s_point p[4]; extract_vertices_ncell(dt, nc, p);
     double  w[4]; extract_weights_ncell(dt, nc, w);
     s_point cc;
-    if (!circumcentre_tetrahedron_w(p, dt->weights ? w : NULL, 1e-20, &cc)) return DBL_MAX;
+    if (!circumcentre_tetrahedron_w(p, dt->weights ? w : NULL, &cc)) return DBL_MAX;
     return dt->weights ? distance_squared(cc, p[0]) - w[0] : distance_squared(cc, p[0]);
 }
 
@@ -460,7 +460,7 @@ static s_trimesh boundary_to_trimesh(s_scplx *dt, int *old2new_out)
         }
     }
 
-    s_trimesh out = trimesh_from_arrays(verts, Nv, tris, (int)faces.N, 0.0);
+    s_trimesh out = trimesh_from_arrays(verts, Nv, tris, (int)faces.N);
     if (old2new_out && out.points.N > 0)   /* points are copied verbatim */
         memcpy(old2new_out, old2new, sizeof(int) * Npts);
 

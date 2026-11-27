@@ -47,7 +47,7 @@ static s_points random_seeds_inside(const s_trimesh *m, int N)
         p.x = bb_min.x + randd01(&rctx) * (bb_max.x - bb_min.x);
         p.y = bb_min.y + randd01(&rctx) * (bb_max.y - bb_min.y);
         p.z = bb_min.z + randd01(&rctx) * (bb_max.z - bb_min.z);
-        if (point_in_trimesh(m, p, EPS_DEG, 20) == 1)
+        if (point_in_trimesh(m, p, 20) == 1)
             seeds.p[got++] = p;
     }
     return seeds;
@@ -121,7 +121,7 @@ static void write_vtk_all(const s_vdiagram *vds, int n_lobes, const char *path)
 static s_vor3d_domain build_domain(const char *obj_path, double *mesh_volume_out)
 {
     printf("\n=== %s ===\n", obj_path);
-    s_trimesh mesh = trimesh_from_obj(obj_path, EPS_DEG);
+    s_trimesh mesh = trimesh_from_obj(obj_path);
     if (!trimesh_is_valid(&mesh)) {
         fprintf(stderr, "Failed to load mesh %s\n", obj_path);
         return (s_vor3d_domain){0};

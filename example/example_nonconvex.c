@@ -44,7 +44,7 @@ static double randd01(void *ctx)
 //         0,3,7, 0,7,4,   /* -x */
 //         1,5,6, 1,6,2,   /* +x */
 //     };
-//     return trimesh_from_arrays(pts, 8, faces, 12, EPS_DEG);
+//     return trimesh_from_arrays(pts, 8, faces, 12);
 // }
 
 /* --- L-shape: 2x2x1 box minus a 1x1x1 corner, volume = 3 ---
@@ -74,7 +74,7 @@ static s_trimesh make_lshape(void)
         4,5,11, 4,11,10,  /* y=2 */
         5,0,6,  5,6,11,   /* x=0 */
     };
-    return trimesh_from_arrays(verts, 12, faces, 20, EPS_DEG);
+    return trimesh_from_arrays(verts, 12, faces, 20);
 }
 
 /* --- Plus-shape: two 3x1x1 boxes crossing at centre, volume = 5 ---
@@ -138,7 +138,7 @@ static s_trimesh make_plus(void)
         10,11,23, 10,23,22,
         11,0,12, 11,12,23,
     };
-    return trimesh_from_arrays(verts, 24, faces, 44, EPS_DEG);
+    return trimesh_from_arrays(verts, 24, faces, 44);
 }
 
 
@@ -194,13 +194,13 @@ static void check_point_in_trimesh(const char *name, const s_trimesh *m,
     (*total)++;
     int ok = 1;
     for (int i = 0; i < N_in; i++) {
-        int r = point_in_trimesh(m, inside_pts[i], EPS_DEG, 20);
+        int r = point_in_trimesh(m, inside_pts[i], 20);
         if (r != 1) {
             printf("  [FAIL] %s: inside point %d returned %d\n", name, i, r); ok=0;
         }
     }
     for (int i = 0; i < N_out; i++) {
-        int r = point_in_trimesh(m, outside_pts[i], EPS_DEG, 20);
+        int r = point_in_trimesh(m, outside_pts[i], 20);
         if (r != 0) {
             printf("  [FAIL] %s: outside point %d returned %d\n", name, i, r); ok=0;
         }
@@ -313,7 +313,7 @@ static s_points random_seeds_inside(const s_trimesh *m, int N)
         p.x = bb_min.x + randd01(&rctx) * (bb_max.x - bb_min.x);
         p.y = bb_min.y + randd01(&rctx) * (bb_max.y - bb_min.y);
         p.z = bb_min.z + randd01(&rctx) * (bb_max.z - bb_min.z);
-        if (point_in_trimesh(m, p, EPS_DEG, 20) == 1)
+        if (point_in_trimesh(m, p, 20) == 1)
             seeds.p[got++] = p;
     }
     return seeds;

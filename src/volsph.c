@@ -116,7 +116,8 @@ static s_tetra_dihedral dihedral_angles_from_lengths(s_tetra_lengths in)
 static double dihedral_angle_at_edge(s_point a, s_point b, s_point c, s_point d,
                                      double EPS_DEGEN)
 {   /* Dihedral angle at edge a-b, c and d are the two opposite vertices */
-    s_point edge_dir = normalize_vec(subtract_points(b, a), EPS_DEGEN);
+    (void)EPS_DEGEN;  /* internal EPS arguments go in step 1b */
+    s_point edge_dir = normalize_vec(subtract_points(b, a));
     if (!point_is_valid(edge_dir)) return 0.0;
 
     /* Project c and d onto plane perpendicular to edge through a */
@@ -580,12 +581,13 @@ static inline void sort2(int *a)
 static void tet_volume_split_power(const s_point c[4], const double r[4],
                                    double EPS_DEGEN, double out_F[4])
 {
+    (void)EPS_DEGEN;  /* internal EPS arguments go in step 1b */
     double w[4];
     for (int i = 0; i < 4; i++) w[i] = r[i]*r[i];
 
     s_point Y;
     s_point X[4];   /* X[k] = radical center of the face OMITTING vertex k */
-    bool ok = circumcentre_tetrahedron_w(c, w, EPS_DEGEN, &Y);
+    bool ok = circumcentre_tetrahedron_w(c, w, &Y);
     for (int k = 0; ok && k < 4; k++) {
         int f[3], n = 0;
         for (int t = 0; t < 4; t++) if (t != k) f[n++] = t;

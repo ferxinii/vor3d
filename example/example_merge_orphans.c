@@ -55,7 +55,7 @@ static s_trimesh make_ushape(void)
         6,7,15,  6,15,14,
         7,0,8,   7,8,15,
     };
-    return trimesh_from_arrays(verts, 16, faces, 28, EPS_DEG);
+    return trimesh_from_arrays(verts, 16, faces, 28);
 }
 
 /* L-shape: union of [0,2]x[0,1] and [0,1]x[1,2], extruded z in [0,1]. Vol = 3. */
@@ -75,7 +75,7 @@ static s_trimesh make_lshape(void)
         4,5,11, 4,11,10,
         5,0,6,  5,6,11,
     };
-    return trimesh_from_arrays(verts, 12, faces, 20, EPS_DEG);
+    return trimesh_from_arrays(verts, 12, faces, 20);
 }
 
 /* Plus-shape: two 3x1x1 boxes crossing at centre. Volume = 5. */
@@ -119,7 +119,7 @@ static s_trimesh make_plus(void)
         10,11,23, 10,23,22,
         11,0,12, 11,12,23,
     };
-    return trimesh_from_arrays(verts, 24, faces, 44, EPS_DEG);
+    return trimesh_from_arrays(verts, 24, faces, 44);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -256,7 +256,7 @@ static void search_orphans(const char *name, s_trimesh mesh, int N_seeds, int tr
             s_point p = {{{ mn.x + random_uniform_double(&rc)*(mx.x-mn.x),
                             mn.y + random_uniform_double(&rc)*(mx.y-mn.y),
                             mn.z + random_uniform_double(&rc)*(mx.z-mn.z) }}};
-            if (point_in_trimesh(&mesh, p, EPS_DEG, 20) == 1) pts[got++] = p;
+            if (point_in_trimesh(&mesh, p, 20) == 1) pts[got++] = p;
         }
         s_points seeds = { .N = N_seeds, .p = pts };
         s_vdiagram raw = run(&domain, &seeds, 1, 0);
@@ -295,7 +295,7 @@ static int stress(const char *name, s_trimesh mesh, int N_seeds, int trials)
             s_point p = {{{ mn.x + random_uniform_double(&rc)*(mx.x-mn.x),
                             mn.y + random_uniform_double(&rc)*(mx.y-mn.y),
                             mn.z + random_uniform_double(&rc)*(mx.z-mn.z) }}};
-            if (point_in_trimesh(&mesh, p, EPS_DEG, 20) == 1) pts[got++] = p;
+            if (point_in_trimesh(&mesh, p, 20) == 1) pts[got++] = p;
         }
         s_points seeds = { .N = N_seeds, .p = pts };
         s_vdiagram raw = run(&domain, &seeds, 1, 0);

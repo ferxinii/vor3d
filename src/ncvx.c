@@ -702,7 +702,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
                 tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                 tetc_w_ptr = tetc_w;
             }
-            if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &Pt)) {
+            if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, &Pt)) {
                 s_vlabel lb = canonical_vv_label(seed_id, j1, j2, j3, seeds, seed_weights, nbr, NB);
                 if (!dynarray_push(&pts, &Pt) || !dynarray_push(&cand, &lb)) goto err;
             }
@@ -821,7 +821,7 @@ static int clip_vcell_clip_tet_lp(int seed_id, const s_points *seeds,
         s_points P = { (int)pts.N, (s_point *)pts.items };
         int *pmap = out_labels ? malloc(sizeof(int) * (pts.N ? pts.N : 1)) : NULL;
         if (out_labels && !pmap) goto err;
-        int r = convhull_from_points_mapped(&P, EPS_DEG, out, pmap);
+        int r = convhull_from_points_mapped(&P, out, pmap);
         if (r == 1 && out_labels) {
             s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N, EPS_DEG);
             if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN; goto err; }
@@ -870,7 +870,7 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
             tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
             tetc_w_ptr = tetc_w;
         }
-        int ok = circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &Pt);
+        int ok = circumcentre_tetrahedron_w(tetc, tetc_w_ptr, &Pt);
         if (ok) {
             /* interior cell: all faces are Voronoi walls, so every vertex is a
              * VV point on the bisectors of its (possibly cospherical) cluster. */
@@ -883,7 +883,7 @@ static int emit_interior_cell(int seed_id, const s_points *seeds,
     s_points P = { (int)pts.N, (s_point *)pts.items };
     int *pmap = out_labels ? malloc(sizeof(int) * (pts.N ? pts.N : 1)) : NULL;
     if (out_labels && !pmap) { dynarray_free(&pts); dynarray_free(&cand); return -1; }
-    int r = convhull_from_points_mapped(&P, EPS_DEG, out, pmap);
+    int r = convhull_from_points_mapped(&P, out, pmap);
     if (r == 1 && out_labels) {
         s_vlabel *labels = scatter_labels(&cand, pmap, &P, &out->points, (int)pts.N, out->points.N, EPS_DEG);
         if (!labels) { free(pmap); free_convhull(out); *out = convhull_NAN;
@@ -1019,7 +1019,7 @@ static int clip_cell_tet_accumulate(int seed_id, const s_points *seeds,
                 tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                 tetc_w_ptr = tetc_w;
             }
-            if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &Pt))
+            if (circumcentre_tetrahedron_w(tetc, tetc_w_ptr, &Pt))
                 if (!dynarray_push(pts, &Pt)) return 0;
         }
     }
@@ -1768,7 +1768,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                     tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                     tetc_w_ptr = tetc_w;
                 }
-                if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &cc)) { boundary = 1; break; }
+                if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, &cc)) { boundary = 1; break; }
                 if (norm_squared(subtract_points(cc, s)) >= clear2) { boundary = 1; break; }
                 if (!dynarray_push(&ccbuf, &cc)) goto err;
             }
@@ -1777,7 +1777,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
         s_convh hull; double hv;
         if (!boundary) {                                 /* INTERIOR: hull the cached duals */
             s_points P = { (int)ccbuf.N, (s_point *)ccbuf.items };
-            int r = convhull_from_points(&P, EPS_DEG, &hull);
+            int r = convhull_from_points(&P, &hull);
             if (r == -1) goto err;
             if (r == 1) hv = volume_convhull(&hull);
             else boundary = 1;                           /* degenerate -> fall through to clip */
@@ -1809,7 +1809,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                         tetc_w[2] = seed_weights[j2]; tetc_w[3] = seed_weights[j3];
                         tetc_w_ptr = tetc_w;
                     }
-                    if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, EPS_DEG, &cc)) continue;
+                    if (!circumcentre_tetrahedron_w(tetc, tetc_w_ptr, &cc)) continue;
                     double r2 = norm_squared(subtract_points(cc, s));
                     if (r2 >= clear2 * (1.0 - 1e-9) &&
                         !nface_dual_in_bp(bp, fadj, &geom, center, cc, s,
@@ -1852,8 +1852,8 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                             e1_w[3] = seed_weights[c1]; e2_w[3] = seed_weights[c2];
                             e1_wp = e1_w; e2_wp = e2_w;
                         }
-                        if (!circumcentre_tetrahedron_w(e1, e1_wp, EPS_DEG, &cc1) ||
-                            !circumcentre_tetrahedron_w(e2, e2_wp, EPS_DEG, &cc2)) continue;
+                        if (!circumcentre_tetrahedron_w(e1, e1_wp, &cc1) ||
+                            !circumcentre_tetrahedron_w(e2, e2_wp, &cc2)) continue;
                         if (norm_squared(subtract_points(cc1, s)) < clear2m &&
                             norm_squared(subtract_points(cc2, s)) < clear2m)
                             continue;                        /* whole edge inside bp */
@@ -1869,7 +1869,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                             e1_w[0] = s_w; e1_w[1] = wt1; e1_w[2] = wt2; e1_w[3] = seed_weights[a];
                             e1_wp = e1_w;
                         }
-                        if (!circumcentre_tetrahedron_w(e1, e1_wp, EPS_DEG, &cc1)) continue;
+                        if (!circumcentre_tetrahedron_w(e1, e1_wp, &cc1)) continue;
                         s_point u = cross_prod(subtract_points(t1, s),
                                                subtract_points(t2, s));
                         if (dot_prod(u, subtract_points(real_seeds->p[a], s)) > 0)
@@ -1916,7 +1916,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
             int r = 0;
             if (pooled) {
                 s_points P = { (int)pts.N, (s_point *)pts.items };
-                r = convhull_from_points(&P, EPS_DEG, &hull);
+                r = convhull_from_points(&P, &hull);
                 if (r == -1) goto err;
             }
             if (r != 1) {          /* no evidence, or degenerate N-face pool: fan */
@@ -1940,7 +1940,7 @@ static int clip_convex_hull(const s_convh *bp, s_point center, const s_points *r
                     hv = 0.0;
                 } else {
                     s_points P = { (int)pts.N, (s_point *)pts.items };
-                    r = convhull_from_points(&P, EPS_DEG, &hull);
+                    r = convhull_from_points(&P, &hull);
                     if (r != 1) {
                         fprintf(stderr, "clip_convex_hull: boundary cell %d failed to hull "
                                 "(%d pooled vertices, rc=%d)\n", i, (int)pts.N, r);
@@ -2137,7 +2137,7 @@ static int merge_orphans_pass(const s_vor3d_domain *domain, const s_points *real
         int sp = -1, sp_bdy = -1, sp_big = 0;
         double big = -1.0;
         for (int q = 0; q < np; q++) {
-            e_geom_test tp = test_point_in_convhull(&pieces[q], real_seeds->p[i], EPS_DEG, 0.0);
+            e_geom_test tp = test_point_in_convhull(&pieces[q], real_seeds->p[i], 0.0);
             if (tp == TEST_IN) { sp = q; break; }
             if (tp == TEST_BOUNDARY && sp_bdy < 0) sp_bdy = q;
             double v = volume_convhull(&pieces[q]);
@@ -2798,7 +2798,7 @@ static void convex_cell_surfaces(s_vcell *vcells, int N)
     for (int i = 0; i < N; i++) {
         if (vcells[i].N_pieces != 1) continue;
         const s_convh *h = &vcells[i].pieces[0];
-        s_trimesh m = trimesh_from_arrays(h->points.p, h->points.N, h->faces, h->Nf, 0.0);
+        s_trimesh m = trimesh_from_arrays(h->points.p, h->points.N, h->faces, h->Nf);
         if (!trimesh_is_valid(&m)) continue;
         vcells[i].surface = malloc(sizeof(s_trimesh));
         if (!vcells[i].surface) { free_trimesh(&m); continue; }

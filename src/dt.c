@@ -1678,11 +1678,11 @@ static e_type_union_tetra determine_case(const s_scplx *scplx,
     s_point vertices_face[3] = { P[fa], P[fb], P[fc] };
     s_point p = P[pid], d = P[did];
 
-    e_geom_test test_p_in_face = test_point_in_triangle_3D(vertices_face, p, 0, 0);
+    e_geom_test test_p_in_face = test_point_in_triangle_3D(vertices_face, p, 0);
     if (test_p_in_face == TEST_BOUNDARY) return CASE_P_IN_EDGE;
 
     /* Checks intersection of segment pd with face */
-    switch (test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0, 0)) {
+    switch (test_segment_triangle_intersect_3D((s_point[2]){p,d}, vertices_face, 0)) {
         case INTERSECT_DEGENERATE:
             /* either pd has endpoint inside abc, or pd intersects edge/vertex */
             if (test_p_in_face == TEST_IN) return CASE_CONVEX;
@@ -1951,7 +1951,7 @@ static int flip_cascade(s_scplx *scplx, int point_id, s_dstack *stack, bool *ign
             } else {
                 s_point face_pts[3];
                 extract_vertices_face(scplx, current, 2, &opp_cell_id, face_pts);
-                on_boundary = (test_point_in_triangle_3D(face_pts, point, 0, 0) == TEST_BOUNDARY);
+                on_boundary = (test_point_in_triangle_3D(face_pts, point, 0) == TEST_BOUNDARY);
             }
             if (on_boundary) {
                 if (dt_trace_on())

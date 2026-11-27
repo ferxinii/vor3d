@@ -1103,6 +1103,7 @@ static inline int build_cell_surface(const s_dynarray *tris, int cell_seed,
                                      const s_points *seeds, const s_points *cverts,
                                      double EPS_DEG, s_trimesh **out_meshes, int *out_n)
 {
+    (void)EPS_DEG;  /* internal EPS arguments go in step 1b */
     *out_meshes = NULL; *out_n = 0;
     size_t Ntri = tris->N;
     if (Ntri == 0) return 0;
@@ -1490,7 +1491,7 @@ weld_done: ;
             }
             nf++;
         }
-        s_trimesh m = trimesh_from_arrays(cc, nv, cf, nf, EPS_DEG);
+        s_trimesh m = trimesh_from_arrays(cc, nv, cf, nf);
         int valid = trimesh_is_valid(&m);
         double cvol = valid ? volume_trimesh(&m) : 0.0;
         int keep = valid, degenerate = 0;

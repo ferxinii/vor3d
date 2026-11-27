@@ -40,7 +40,7 @@ static s_trimesh make_lshape(void)
         0,1,7,  0,7,6,   1,2,8,  1,8,7,   2,3,9,  2,9,8,
         3,4,10, 3,10,9,  4,5,11, 4,11,10, 5,0,6,  5,6,11,
     };
-    return trimesh_from_arrays(verts, 12, faces, 20, EPS_DEG);
+    return trimesh_from_arrays(verts, 12, faces, 20);
 }
 
 /* ---------------- Plus-shape (from example_nonconvex.c) ------------------ */
@@ -70,7 +70,7 @@ static s_trimesh make_plus(void)
         6,7,19,  6,19,18,  7,8,20,  7,20,19,  8,9,21,  8,21,20,
         9,10,22, 9,22,21,  10,11,23, 10,23,22, 11,0,12, 11,12,23,
     };
-    return trimesh_from_arrays(verts, 24, faces, 44, EPS_DEG);
+    return trimesh_from_arrays(verts, 24, faces, 44);
 }
 
 /* ---------------- jittered icosphere ------------------------------------ */
@@ -154,7 +154,7 @@ static s_trimesh make_sphere(int nsub, double R, double jitter)
         V[i].x *= r; V[i].y *= r; V[i].z *= r;
     }
 
-    s_trimesh m = trimesh_from_arrays(V, nV, F, nF, EPS_DEG);
+    s_trimesh m = trimesh_from_arrays(V, nV, F, nF);
     free(V); free(F);
     return m;
 }
@@ -226,7 +226,7 @@ int main(int argc, char **argv)
     run_shape("lshape", make_lshape(),             0.08*s);
     run_shape("plus",   make_plus(),               0.08*s);
     for (int i = 0; i < 5; i++) {
-        s_trimesh lobe = trimesh_from_obj(lobe_obj[i], EPS_DEG);
+        s_trimesh lobe = trimesh_from_obj(lobe_obj[i]);
         if (!trimesh_is_valid(&lobe)) {
             printf("%-8s could not load %s\n", lobe_name[i], lobe_obj[i]);
             continue;

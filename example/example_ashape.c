@@ -289,8 +289,8 @@ static void case_lshape(s_random_context *rng)
         printf("        L-volume=%.4g (analytic 0.75, cube hull ~1)\n", vt);
         /* Crisp non-convexity test: the notch centre is outside the solid,
          * the bulk centre is inside. */
-        int notch_out = point_in_trimesh(&m, (s_point){{{0.75,0.75,0.5}}}, 1e-9, 8);
-        int bulk_in   = point_in_trimesh(&m, (s_point){{{0.25,0.25,0.5}}}, 1e-9, 8);
+        int notch_out = point_in_trimesh(&m, (s_point){{{0.75,0.75,0.5}}}, 8);
+        int bulk_in   = point_in_trimesh(&m, (s_point){{{0.25,0.25,0.5}}}, 8);
         check("notch centre is OUTSIDE (concavity carved)", notch_out == 0);
         check("bulk centre is INSIDE (solid)", bulk_in == 1);
         check("volume in solid range [0.55,0.85]", vt > 0.55 && vt < 0.85);

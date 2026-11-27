@@ -509,6 +509,7 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
                           s_hash_table *sel, double EPS_DEG, int inside_filter,
                           int build_graph, s_emit_counts *cnt)
 {
+    (void)EPS_DEG;  /* internal EPS arguments go in step 1b */
     s_dynarray pts = dynarray_initialize(sizeof(s_point), 1024);
     s_dynarray rad = dynarray_initialize(sizeof(double), 1024);
     s_hash_table tet2node;                 /* tet pointer -> emitted node index */
@@ -539,7 +540,7 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
 
         s_point verts[4]; extract_vertices_ncell(dt, c, verts);
         s_point cc;
-        if (!circumcentre_tetrahedron(verts, EPS_DEG, &cc)) { cnt->degenerate++; continue; }
+        if (!circumcentre_tetrahedron(verts, &cc)) { cnt->degenerate++; continue; }
         if (inside_filter && mesh_inside(mesh, grid, cc) != 1) { cnt->outside++; continue; }
 
         double r = vnorm(vsub(cc, verts[0]));   /* all 4 verts equidistant */

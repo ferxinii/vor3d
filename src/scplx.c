@@ -515,7 +515,7 @@ int test_point_in_ncell(const s_scplx *scplx, const s_ncell *ncell, s_point quer
     s_point v2 = scplx->points.p[ncell->vertex_id[2]];
     s_point v3 = scplx->points.p[ncell->vertex_id[3]];
     s_point tetra[4] = {v0, v1, v2, v3};
-    return test_point_in_tetrahedron(tetra, query, 0, 0);
+    return test_point_in_tetrahedron(tetra, query, 0);
  }
 
 
@@ -642,7 +642,7 @@ static s_ncell *in_ncell_walk_core(const s_scplx *scplx, s_point p, int query_id
                     return current;
                 continue;
             }
-            e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0, 0);
+            e_geom_test test = test_point_in_triangle_3D(facet_vertices, p, 0);
             if (test == TEST_IN || test == TEST_BOUNDARY) { return current; }
             if (next && next != prev) {
                 // TIE-BREAKING: move to the neighbor whose centroid is closer to p.
