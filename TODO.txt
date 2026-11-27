@@ -7,6 +7,7 @@ Completed items are removed from this file; their notes live in git history and 
 [ ] Also on that bump (2026-11-27 API changes): include/lung_io.h + tests/leak_lumen.c #include "vdiagram.h" -> "vor3d.h"; bt_voronoi.c:27 vd.vcells == NULL -> !vdiagram_is_valid(&vd); medax_NAN is gone: bt_setup.c:280 init -> (s_medax){0}, failure checks -> medax_is_valid (bt_policies.h:52 comment).
 [ ] Lung e2e timing not re-measured on an idle machine since the unified API.
 [ ] Also on that bump (2026-11-27, scplx.h/delaunay.h private): bt_cell.c:168 bt_cell_from_trimesh -> s_tetmesh M = tetrahedralize_trimesh(mesh, EPS_DEG, TOL); loop t < M.N_tets over M.tets[4t..4t+3] (all tets are interior), free_tetmesh; drop #include "scplx.h" in bt_cell.c and bt_domain.c:6 (dead there).
+[ ] Also on that bump: bt_setup.c:69-73 (alpha-shape root cell) -> alpha_shape_3d(..., want_tets = true) and build the convex pieces from as.tets instead of bt_cell_from_trimesh (no CDT of the alpha-shape surface). Changes the piece decomposition (same region/volume) -> golden outputs need re-baselining; time it vs the CDT path first.
 
 
 === SMALL / SELF-CONTAINED ===

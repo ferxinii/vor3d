@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include "points.h"
 #include "trimesh.h"
+#include "delaunay.h"   /* s_tetmesh */
 
 typedef struct random_context s_random_context;
 
@@ -60,6 +61,10 @@ typedef struct alpha_shape {
     int       N_promoted;     /* tets changed by manifold repair */
     int       N_pts_dropped;  /* input points touching no in-tet (incl. duplicates
                                  and redundant weighted points) */
+    s_tetmesh tets;           /* the in-tets (want_tets), zeroed otherwise: they
+                                 tetrahedralize the shape; points start with
+                                 surface.points (same indices), then the interior
+                                 vertices; neighbors == -1 across the surface */
 } s_alpha_shape;
 
 /* Boundary surface of the REGULARIZED alpha shape of pts.
@@ -80,6 +85,8 @@ typedef struct alpha_shape {
  *   rng     : breaks point-location walk ties in the DT build (NULL = fixed).
  *   out_kept_idx (nullable, length pts->N): index of input point i in
  *             as.surface.points, or -1 if it is not a surface vertex.
+ *   want_tets: also return the in-tets in as.tets (e.g. to split the shape
+ *             into convex pieces without re-tetrahedralizing the surface).
  *
  * Algorithm:
  *   1. (Weighted) Delaunay triangulation of the (deduplicated) points, with
@@ -142,7 +149,8 @@ typedef struct alpha_shape {
  * filled with -1.  free_alpha_shape is safe on both. */
 s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
                              double alpha, double TOL_dup,
-                             s_random_context *rng, int *out_kept_idx);
+                             s_random_context *rng, int *out_kept_idx,
+                             bool want_tets);
 bool alpha_shape_is_valid(const s_alpha_shape *as);
 void free_alpha_shape(s_alpha_shape *as);
 

@@ -75,6 +75,10 @@ void free_complex(s_scplx *scplx);
  * the points they use; vid_map (nullable, length C->points.N) gets each scplx
  * vertex id's index in the result, or -1. Zeroed result if C has no tets. */
 s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map);
+/* Same, without consuming C, exporting only the mask_alpha tets if
+ * mask_alpha_only (neighbors outside the exported set -> -1). Resets every
+ * mark_token to 0. */
+s_tetmesh tetmesh_from_scplx_cells(s_scplx *C, bool mask_alpha_only, int *vid_map);
 void assert_point2tet(const s_scplx *scplx);
 void print_ncell(const s_ncell *ncell);
 void print_scomplex(const s_scplx *scplx);

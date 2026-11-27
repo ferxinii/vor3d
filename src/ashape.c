@@ -15,6 +15,7 @@
 #include "gtests.h"
 #include "./hlibs/dynarray.h"
 #include "./hlibs/hash.h"
+#include <assert.h>
 #include <float.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -469,6 +470,38 @@ static s_trimesh boundary_to_trimesh(s_scplx *dt, int *old2new_out)
 }
 
 
+/* The in-tets as a tetmesh whose points start with the surface vertices
+ * (old2new: DT vid -> surface index, N_surf of them), then the interior
+ * vertices in DT order. Zeroed on failure. */
+static s_tetmesh in_tets_surface_first(s_scplx *dt, const int *old2new, int N_surf)
+{
+    int *map = malloc((size_t)dt->points.N * sizeof(int));
+    if (!map) return (s_tetmesh){0};
+    s_tetmesh T = tetmesh_from_scplx_cells(dt, /*mask_alpha_only=*/true, map);
+    int *perm = tetmesh_is_valid(&T) ? malloc((size_t)T.points.N * sizeof(int)) : NULL;
+    s_point *P = perm ? malloc((size_t)T.points.N * sizeof(s_point)) : NULL;
+    double *W = (P && T.weights) ? malloc((size_t)T.points.N * sizeof(double)) : NULL;
+    if (!P || (T.weights && !W)) { free(map); free(perm); free(P); free_tetmesh(&T); return (s_tetmesh){0}; }
+
+    /* perm[tetmesh index] = new index; every surface vertex is an in-tet vertex. */
+    int next = N_surf;
+    for (int v = 0; v < dt->points.N; v++) {
+        if (map[v] < 0) continue;
+        perm[map[v]] = old2new[v] >= 0 ? old2new[v] : next++;
+    }
+    assert(next == T.points.N);
+    for (int i = 0; i < T.points.N; i++) {
+        P[perm[i]] = T.points.p[i];
+        if (W) W[perm[i]] = T.weights[i];
+    }
+    for (int k = 0; k < 4 * T.N_tets; k++) T.tets[k] = perm[T.tets[k]];
+    free(T.points.p); T.points.p = P;
+    if (W) { free(T.weights); T.weights = W; }
+    free(map); free(perm);
+    return T;
+}
+
+
 /* ------------------------------------------------------------------ */
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
@@ -482,12 +515,14 @@ void free_alpha_shape(s_alpha_shape *as)
 {
     if (!as) return;
     free_trimesh(&as->surface);
+    free_tetmesh(&as->tets);
     *as = (s_alpha_shape){ .surface = trimesh_NAN, .alpha = NAN };
 }
 
 s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
                              double alpha, double TOL_dup,
-                             s_random_context *rng, int *out_kept_idx)
+                             s_random_context *rng, int *out_kept_idx,
+                             bool want_tets)
 {
     const s_alpha_shape FAIL = { .surface = trimesh_NAN, .alpha = NAN };
     int N_in = pts ? pts->N : 0;
@@ -550,6 +585,12 @@ s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
         .N_pts_dropped = dropped,
     };
     ASHAPE_TICK("volume");
+
+    if (want_tets) {
+        as.tets = in_tets_surface_first(&dt, old2new, mesh.points.N);
+        if (!tetmesh_is_valid(&as.tets)) { free_alpha_shape(&as); as = FAIL; goto done; }
+        ASHAPE_TICK("tets");
+    }
 
     if (out_kept_idx)
         for (int i = 0; i < pts->N; i++)

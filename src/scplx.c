@@ -849,13 +849,14 @@ static bool tetmesh_orient_positive(s_tetmesh *T)
     return true;
 }
 
-s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map)
+s_tetmesh tetmesh_from_scplx_cells(s_scplx *C, bool mask_alpha_only, int *vid_map)
 {
     s_tetmesh T = {0};
     int Np = C->points.N;
     int *map = vid_map ? vid_map : malloc((size_t)(Np > 0 ? Np : 1) * sizeof(int));
     int nt = 0;
-    for (s_ncell *nc = C->head; nc; nc = nc->next) nc->mark_token = nt++;
+    for (s_ncell *nc = C->head; nc; nc = nc->next)
+        nc->mark_token = (!mask_alpha_only || nc->mask_alpha) ? nt++ : -1;
     if (!map) goto fail;
     for (int v = 0; v < Np; v++) map[v] = -1;
     if (nt == 0) goto fail;
@@ -866,7 +867,8 @@ s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map)
 
     /* Vertices in tet use, numbered monotonically in scplx vid (keeps order). */
     for (s_ncell *nc = C->head; nc; nc = nc->next)
-        for (int k = 0; k < 4; k++) map[nc->vertex_id[k]] = 0;
+        if (nc->mark_token >= 0)
+            for (int k = 0; k < 4; k++) map[nc->vertex_id[k]] = 0;
     int nv = 0;
     for (int v = 0; v < Np; v++) if (map[v] == 0) map[v] = nv++;
 
@@ -880,25 +882,34 @@ s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map)
     }
     T.points.N = nv;
 
-    int t = 0;
-    for (s_ncell *nc = C->head; nc; nc = nc->next, t++)
+    for (s_ncell *nc = C->head; nc; nc = nc->next) {
+        int t = nc->mark_token;
+        if (t < 0) continue;
         for (int k = 0; k < 4; k++) {
             T.tets[4*t+k] = map[nc->vertex_id[k]];
             T.neighbors[4*t+k] = nc->opposite[k] ? nc->opposite[k]->mark_token : -1;
         }
+    }
     T.N_tets = nt;
     if (!tetmesh_orient_positive(&T)) goto fail;
 
+    for (s_ncell *nc = C->head; nc; nc = nc->next) nc->mark_token = 0;
     if (!vid_map) free(map);
-    free_complex(C);
     return T;
 
 fail:
+    for (s_ncell *nc = C->head; nc; nc = nc->next) nc->mark_token = 0;
     if (vid_map) for (int v = 0; v < Np; v++) vid_map[v] = -1;
     else free(map);
     free_tetmesh(&T);
-    free_complex(C);
     return (s_tetmesh){0};
+}
+
+s_tetmesh tetmesh_from_scplx(s_scplx *C, int *vid_map)
+{
+    s_tetmesh T = tetmesh_from_scplx_cells(C, false, vid_map);
+    free_complex(C);
+    return T;
 }
 
 bool tetmesh_is_valid(const s_tetmesh *t)
