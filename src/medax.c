@@ -33,6 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MEDAX_INVALID ((s_medax){0})   /* failure result: verts.p == NULL */
+
 #define MEDAX_MARGIN 1e-6              /* barycentric interior margin (Step 2) */
 static const double MEDAX_SQRT3 = 1.7320508075688772;
 
@@ -512,14 +514,14 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
     s_hash_table tet2node;                 /* tet pointer -> emitted node index */
     if (!pts.items || !rad.items) {
         dynarray_free(&pts); dynarray_free(&rad);
-        return medax_NAN;
+        return MEDAX_INVALID;
     }
     if (build_graph) {
         size_t exp = (size_t)(dt->N_ncells > 0 ? dt->N_ncells : 1);
         if (!hash_init(&tet2node, sizeof(uint64_t), sizeof(int), (2 * exp) | 1, exp,
                        edge_hash, edge_eq, NULL)) {
             dynarray_free(&pts); dynarray_free(&rad);
-            return medax_NAN;
+            return MEDAX_INVALID;
         }
     }
     *cnt = (s_emit_counts){0};
@@ -550,12 +552,12 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
         if (!ok) {
             dynarray_free(&pts); dynarray_free(&rad);
             if (build_graph) hash_free(&tet2node);
-            return medax_NAN;
+            return MEDAX_INVALID;
         }
         cnt->emitted++;
     }
 
-    s_medax ma = medax_NAN;
+    s_medax ma = MEDAX_INVALID;
     ma.verts.N = (int)pts.N;
     ma.verts.p = (s_point*)pts.items;      /* transfer ownership */
     ma.radius  = (double*)rad.items;
@@ -564,7 +566,7 @@ static s_medax emit_medax(const s_scplx *dt, const s_trimesh *mesh,
         long ne = 0;
         s_medial_graph *g = build_medgraph(dt, &tet2node, ma.verts.p, ma.verts.N, &ne);
         hash_free(&tet2node);
-        if (!g) { free_medax(&ma); return medax_NAN; }
+        if (!g) { free_medax(&ma); return MEDAX_INVALID; }
         cnt->edges = ne;
         ma.graph = g;
     }
@@ -597,10 +599,10 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double (*randd01)(void*), void *rctx,
                            double EPS_DEG, double TOL, bool want_graph)
 {
-    if (!trimesh_is_valid(mesh)) return medax_NAN;
+    if (!trimesh_is_valid(mesh)) return MEDAX_INVALID;
     if (theta0 <= 0.0) theta0 = MEDAX_THETA0_DEFAULT;
     if (rho0   <= 0.0) rho0   = MEDAX_RHO0_DEFAULT;
-    if (r_sample > 0.0 && !randd01) return medax_NAN;
+    if (r_sample > 0.0 && !randd01) return MEDAX_INVALID;
 
     /* Step 2: samples + umbrella records */
     struct timespec _mt; clock_gettime(CLOCK_MONOTONIC, &_mt);
@@ -614,16 +616,16 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     } while (0)
 
     s_medax_samples S = build_samples(mesh, r_sample, randd01, rctx, EPS_DEG);
-    if (!S.samples.p) return medax_NAN;
+    if (!S.samples.p) return MEDAX_INVALID;
     MEDAX_TICK("sampling");
 
     /* Step 2: Delaunay triangulation of the samples (lean, no mirrors). Samples
      * within TOL are merged (the first survives, so mesh vertices win). */
     int *kept = malloc(sizeof(int) * (size_t)S.samples.N);
-    if (!kept) { free_samples(&S); return medax_NAN; }
+    if (!kept) { free_samples(&S); return MEDAX_INVALID; }
     for (int i = 0; i < S.samples.N; i++) kept[i] = i;
     s_dt_builder b = dt_builder_begin(&S.samples, NULL, TOL, NULL, NULL, NULL);
-    if (!b._stack) { free(kept); free_samples(&S); return medax_NAN; }
+    if (!b._stack) { free(kept); free_samples(&S); return MEDAX_INVALID; }
     int Nreal = 0;
     s_scplx dt = dt_builder_end(&b, false, &Nreal, kept, S.samples.N);
     if (Nreal != S.samples.N) compact_samples(&S, kept);
@@ -651,7 +653,7 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
         if (gp) trimesh_inside_grid_free(&grid);
         free_complex(&dt);
         free_samples(&S);
-        return medax_NAN;
+        return MEDAX_INVALID;
     }
     MEDAX_TICK("edge-sel");
 
@@ -670,13 +672,18 @@ s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
     return ma;
 }
 
+bool medax_is_valid(const s_medax *ma)
+{
+    return ma != NULL && ma->verts.p != NULL;
+}
+
 void free_medax(s_medax *ma)
 {
     if (!ma) return;
     free(ma->verts.p);
     free(ma->radius);
     free_medial_graph(ma->graph);
-    *ma = medax_NAN;
+    *ma = MEDAX_INVALID;
 }
 
 int medax_write_vtk(const s_medax *ma, const char *path)

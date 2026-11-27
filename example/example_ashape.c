@@ -334,13 +334,13 @@ static void case_degenerate(void)
     s_points p3 = { .N = 3, .p = malloc(sizeof(s_point)*3) };
     p3.p[0]=(s_point){{{0,0,0}}}; p3.p[1]=(s_point){{{1,0,0}}}; p3.p[2]=(s_point){{{0,1,0}}};
     s_alpha_shape a3 = alpha_shape_3d(&p3, NULL, 1.0, 1e-9, NULL, NULL);
-    check("3 points -> invalid", isnan(a3.alpha) && !trimesh_is_valid(&a3.surface));
+    check("3 points -> invalid", !alpha_shape_is_valid(&a3) && !trimesh_is_valid(&a3.surface));
     free_alpha_shape(&a3); free_points(&p3);
 
     s_points pc = { .N = 25, .p = malloc(sizeof(s_point)*25) };
     for (int i = 0; i < 25; i++) pc.p[i] = (s_point){{{ (double)(i%5), (double)(i/5), 0.0 }}};
     s_alpha_shape ac = alpha_shape_3d(&pc, NULL, 100.0, 1e-9, NULL, NULL);
-    check("coplanar -> invalid", isnan(ac.alpha) && !trimesh_is_valid(&ac.surface));
+    check("coplanar -> invalid", !alpha_shape_is_valid(&ac) && !trimesh_is_valid(&ac.surface));
     free_alpha_shape(&ac); free_points(&pc);
 }
 

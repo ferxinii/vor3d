@@ -136,13 +136,13 @@ int main(void)
     for (int a = 0; a < 6; a++) {
         s_random_context r1 = random_initialize(3), r2 = random_initialize(3);
         s_alpha_complex ac = alpha_complex_3d(&pts, NULL, alphas[a], 1e-12, &r1, kept);
-        CHECK(!isnan(ac.alpha) && ac.alpha == alphas[a], "complex alpha=%g failed", alphas[a]);
+        CHECK(alpha_complex_is_valid(&ac) && ac.alpha == alphas[a], "complex alpha=%g failed", alphas[a]);
         check_complex(&ac, &pts, NULL, kept, "unweighted");
         s_alpha_shape as = alpha_shape_3d(&pts, NULL, alphas[a], 1e-12, &r2, kept);
         double vk = complex_tet_volume(&ac);
-        if (ac.N_tets == 0) CHECK(isnan(as.alpha), "empty in-set must fail the shape");
+        if (ac.N_tets == 0) CHECK(!alpha_shape_is_valid(&as), "empty in-set must fail the shape");
         else {
-            CHECK(!isnan(as.alpha), "shape alpha=%g failed", alphas[a]);
+            CHECK(alpha_shape_is_valid(&as), "shape alpha=%g failed", alphas[a]);
             check_shape_kept(&as, &pts, kept, "unweighted");
             if (as.N_promoted == 0)
                 CHECK(fabs(vk - as.volume) <= 1e-12 * (1 + vk), "alpha=%g complex vol %.17g vs shape %.17g",
@@ -160,7 +160,7 @@ int main(void)
     int N_nonredundant = -1;
     for (int a = 0; a < 4; a++) {
         s_alpha_complex ac = alpha_complex_3d(&pts, w, walphas[a], 1e-12, NULL, kept);
-        CHECK(!isnan(ac.alpha), "weighted complex alpha=%g failed", walphas[a]);
+        CHECK(alpha_complex_is_valid(&ac), "weighted complex alpha=%g failed", walphas[a]);
         check_complex(&ac, &pts, w, kept, "weighted");
         printf("  alpha=%-6g V=%d E=%d F=%d T=%d\n", walphas[a], ac.points.N, ac.N_edges, ac.N_faces, ac.N_tets);
         if (walphas[a] == 1e3) N_nonredundant = ac.points.N;   /* every DT vertex is in K */
@@ -189,7 +189,7 @@ int main(void)
         CHECK(n_bad_red == 0, "%d redundant balls in K(0)", n_bad_red);
         CHECK(n_bad_contrib == 0, "%d balls outside K(0) with nonzero union contribution", n_bad_contrib);
         s_alpha_shape as = alpha_shape_3d(&pts, w, 0.0, 1e-12, NULL, kept);
-        CHECK(!isnan(as.alpha), "weighted shape alpha=0 failed");
+        CHECK(alpha_shape_is_valid(&as), "weighted shape alpha=0 failed");
         CHECK(as.volume <= Vu, "shape vol %g > union %g", as.volume, Vu);
         check_shape_kept(&as, &pts, kept, "weighted");
         printf("  K(0): V=%d (centre-in-own-cell %d, non-redundant %d); shape vol=%.6g <= union %.6g\n",
@@ -205,7 +205,7 @@ int main(void)
     printf("[auto] dropped points\n");
     {
         s_alpha_shape as = alpha_shape_3d(&pts, w, NAN, 1e-12, NULL, kept);
-        CHECK(!isnan(as.alpha), "weighted auto failed");
+        CHECK(alpha_shape_is_valid(&as), "weighted auto failed");
         CHECK(as.N_pts_dropped == N - N_nonredundant, "weighted auto dropped %d, redundant %d",
               as.N_pts_dropped, N - N_nonredundant);
         check_shape_kept(&as, &pts, kept, "weighted auto");
@@ -218,7 +218,7 @@ int main(void)
         for (int i = 0; i < 5; i++) pd[N+i] = p[7*i];
         int *kd = malloc((N + 5) * sizeof(int));
         as = alpha_shape_3d(&(s_points){ N + 5, pd }, NULL, NAN, 1e-12, NULL, kd);
-        CHECK(!isnan(as.alpha) && as.N_pts_dropped == 5, "unweighted auto + 5 dups: dropped %d", as.N_pts_dropped);
+        CHECK(alpha_shape_is_valid(&as) && as.N_pts_dropped == 5, "unweighted auto + 5 dups: dropped %d", as.N_pts_dropped);
         printf("  unweighted: alpha=%g dropped=%d (5 duplicates)\n", as.alpha, as.N_pts_dropped);
         free_alpha_shape(&as);
         free(pd); free(kd);
@@ -235,17 +235,17 @@ int main(void)
         for (int c = 0; c < 3; c++) {
             for (int i = 0; i < cases[c].N; i++) kept[i] = 123;
             s_alpha_complex f = alpha_complex_3d(&cases[c], NULL, 1.0, 1e-12, NULL, kept);
-            CHECK(isnan(f.alpha) && f.points.N == 0 && !f.tets, "complex %s should fail", names[c]);
+            CHECK(!alpha_complex_is_valid(&f) && f.points.N == 0 && !f.tets, "complex %s should fail", names[c]);
             for (int i = 0; i < cases[c].N; i++) CHECK(kept[i] == -1, "complex %s kept not -1", names[c]);
             free_alpha_complex(&f);
             for (int i = 0; i < cases[c].N; i++) kept[i] = 123;
             s_alpha_shape fs = alpha_shape_3d(&cases[c], NULL, NAN, 1e-12, NULL, kept);
-            CHECK(isnan(fs.alpha) && fs.surface.points.N == 0, "shape %s should fail", names[c]);
+            CHECK(!alpha_shape_is_valid(&fs) && fs.surface.points.N == 0, "shape %s should fail", names[c]);
             for (int i = 0; i < cases[c].N; i++) CHECK(kept[i] == -1, "shape %s kept not -1", names[c]);
             free_alpha_shape(&fs);
         }
         s_alpha_complex f = alpha_complex_3d(&pts, NULL, NAN, 1e-12, NULL, NULL);
-        CHECK(isnan(f.alpha), "complex NaN alpha should fail");
+        CHECK(!alpha_complex_is_valid(&f), "complex NaN alpha should fail");
         free_alpha_complex(&f);
     }
 

@@ -1,6 +1,7 @@
 #ifndef VOR3D_ALPHA_H
 #define VOR3D_ALPHA_H
 
+#include <stdbool.h>
 #include "points.h"
 #include "trimesh.h"
 
@@ -38,13 +39,14 @@ typedef struct alpha_complex {
  *
  * Failure (fewer than 4 points, NaN alpha, degenerate input -- coplanar / all
  *   duplicates, i.e. no real tetrahedron -- or allocation failure): returns a
- *   zeroed struct with ac.alpha = NAN, and out_kept_idx filled with -1.  Test
- *   with isnan(ac.alpha).  Empty K is NOT a failure (alpha too small): it
- *   returns points.N = N_* = 0 with ac.alpha == alpha.
+ *   zeroed struct with ac.alpha = NAN (alpha_complex_is_valid false), and
+ *   out_kept_idx filled with -1.  Empty K is NOT a failure (alpha too small):
+ *   it returns points.N = N_* = 0 with ac.alpha == alpha.
  * free_alpha_complex is safe on both. */
 s_alpha_complex alpha_complex_3d(const s_points *pts, const double *weights,
                                  double alpha, double TOL_dup,
                                  s_random_context *rng, int *out_kept_idx);
+bool alpha_complex_is_valid(const s_alpha_complex *ac);
 void free_alpha_complex(s_alpha_complex *ac);
 
 
@@ -136,11 +138,12 @@ typedef struct alpha_shape {
  *
  * Failure (fewer than 4 points, degenerate input -- coplanar / all
  * duplicates --, empty in-set at this alpha, allocation): returns a zeroed
- * struct with surface = trimesh_NAN and alpha = NAN; out_kept_idx is filled
- * with -1.  free_alpha_shape is safe on both. */
+ * struct with alpha = NAN (alpha_shape_is_valid false); out_kept_idx is
+ * filled with -1.  free_alpha_shape is safe on both. */
 s_alpha_shape alpha_shape_3d(const s_points *pts, const double *weights,
                              double alpha, double TOL_dup,
                              s_random_context *rng, int *out_kept_idx);
+bool alpha_shape_is_valid(const s_alpha_shape *as);
 void free_alpha_shape(s_alpha_shape *as);
 
 #endif

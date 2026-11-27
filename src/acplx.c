@@ -404,6 +404,11 @@ fail:
 /* Public API: alpha_complex_3d                                              */
 /* ------------------------------------------------------------------------- */
 
+bool alpha_complex_is_valid(const s_alpha_complex *ac)
+{
+    return ac != NULL && !isnan(ac->alpha);
+}
+
 void free_alpha_complex(s_alpha_complex *ac)
 {
     if (!ac) return;

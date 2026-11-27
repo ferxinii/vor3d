@@ -1,6 +1,7 @@
 #ifndef VOR3D_MEDAX_H
 #define VOR3D_MEDAX_H
 
+#include <stdbool.h>
 #include "trimesh.h"
 #include "points.h"
 
@@ -40,8 +41,6 @@ typedef struct medax {
     s_medial_graph *graph;    /* the medial graph; NULL unless requested */
 } s_medax;
 
-#define medax_NAN (s_medax){ points_NAN, NULL, NULL }
-
 /* Extract the inner approximate medial axis of a closed trimesh (Dey-Zhao).
  * The surface is sampled, the samples are Delaunay-triangulated, and the
  * Voronoi vertices dual to "medial" Delaunay edges are kept.
@@ -62,12 +61,14 @@ typedef struct medax {
  * TOL: duplicate-point tolerance for the internal DT.
  * want_graph: also build ma.graph (the medial graph); otherwise ma.graph is
  *   NULL and only the point set (verts, radius) is produced.
- * Returns a zero struct (medax_NAN) on error. */
+ * On failure returns an invalid medax (medax_is_valid false). Zero medial
+ * vertices is NOT a failure. free_medax is safe on both. */
 s_medax medax_from_trimesh(const s_trimesh *mesh, double r_sample,
                            double theta0, double rho0,
                            double (*randd01)(void*), void *rctx,
                            double EPS_DEG, double TOL, bool want_graph);
 
+bool medax_is_valid(const s_medax *ma);
 void free_medax(s_medax *ma);
 
 /* Debug/visualization: write as VTK polydata (POINTS + VERTICES cells, LINES

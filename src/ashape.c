@@ -473,6 +473,11 @@ static s_trimesh boundary_to_trimesh(s_scplx *dt, int *old2new_out)
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
 
+bool alpha_shape_is_valid(const s_alpha_shape *as)
+{
+    return as != NULL && !isnan(as->alpha);
+}
+
 void free_alpha_shape(s_alpha_shape *as)
 {
     if (!as) return;
