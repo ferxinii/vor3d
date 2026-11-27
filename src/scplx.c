@@ -3,7 +3,6 @@
 #include "points.h"
 #include "gtests.h"
 #include "dt_predseam.h"  /* Phase 1: id-based predicate seam (walk-by-id) */
-#include "gnuplotc.h"
 #include "./hlibs/dynarray.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -704,87 +703,6 @@ double power_distance_point_vertex(const s_scplx *scplx, int vid, s_point p)
     if (!scplx->weights) return distance_squared(scplx->points.p[vid], p);
     else return distance_squared(scplx->points.p[vid], p) - scplx->weights[vid];
 }
-
-
-
-
-/* PLOTS */
-void plot_add_ncell(s_gnuplot *interface, const s_scplx *scplx, const s_ncell *ncell, char *config)
-{
-    s_point face_vertices[3];
-    for (int ii=0; ii<4; ii++) {
-        extract_vertices_face(scplx, ncell, 2, &ii, face_vertices);
-        draw_solid_triangle_3d(interface, face_vertices[0].coords, face_vertices[1].coords,
-                               face_vertices[2].coords, config);
-    }
-}
-
-
-void plot_ncell_3d(const s_scplx *scplx, const s_ncell *ncell, char *f_name, s_point ranges[2])
-{
-    s_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
-    gnuplot_config(interface, "set pm3d depthorder",
-                              "set pm3d border lc 'black' lw 0.5",
-                              "set view 100, 60",
-                              "set xyplane at 0");
-    if (ranges) {
-        char buff[1024];
-        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
-                 ranges[0].x, ranges[1].x, ranges[0].y, ranges[1].y, ranges[0].z, ranges[1].z); 
-        gnuplot_config(interface, buff);
-    }
-
-    plot_add_ncell(interface, scplx, ncell, "fs transparent solid 0.2 fc rgb '#000090'");
-    gnuplot_end(interface);
-}
-
-
-void plot_all_ncells_3d(const s_scplx *scplx, char *f_name, s_point ranges[2], char *view_command)
-{
-     char colors[][20] = { "#000090", "#000fff", "#0090ff", "#0fffee", 
-        "#90ff70", "#ffee00", "#ff7000", "#ee0000", "#7f0000" };
-    char buff[1024];
-
-    s_gnuplot *interface = gnuplot_start(PNG_3D, f_name, (int[2]){1080, 1080}, 18);
-    gnuplot_config(interface, "set pm3d depthorder",
-                              "set pm3d border lc 'black' lw 0.5",
-                              "set xyplane at 0",
-                              view_command);
-    if (ranges) {
-        snprintf(buff, 1024, "set xrange [%f:%f]\n set yrange [%f:%f]\n set zrange [%f:%f]", 
-                 ranges[0].x, ranges[1].x, ranges[0].y, ranges[1].y, ranges[0].z, ranges[1].z); 
-    }
-    if (ranges) gnuplot_config(interface, buff);
-
-    int it = 0;
-    s_ncell *current = scplx->head;
-    while (current) {
-        snprintf(buff, 1024, "fs transparent solid 0.2 fc rgb '%s'", colors[it%8]);
-        plot_add_ncell(interface, scplx, current, buff);
-        current = current->next;
-        it++;
-    }
-    gnuplot_end(interface);
-}
-
-
-void plot_dt_3d_differentviews(const s_scplx *scplx, char *f_name, s_point ranges[2])
-{
-    char final_name[512];
-    snprintf(final_name, 512, "%s_v1.png", f_name);
-    plot_all_ncells_3d(scplx, final_name, ranges, "set view 100, 60, 1.5");
-
-    snprintf(final_name, 512, "%s_v2.png", f_name);
-    plot_all_ncells_3d(scplx, final_name, ranges, "set view 100, 90, 1.5");
-
-    snprintf(final_name, 512, "%s_v3.png", f_name);
-    plot_all_ncells_3d(scplx, final_name, ranges, "set view 100, 180, 1.5");
-
-    snprintf(final_name, 512, "%s_v4.png", f_name);
-    plot_all_ncells_3d(scplx, final_name, ranges, "set view 100, 270, 1.5");
-
-}
-
 
 
 /* ---- Export to the public s_tetmesh (delaunay.h) ---- */

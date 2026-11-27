@@ -99,11 +99,7 @@ add_custom_command(TARGET example_medax POST_BUILD
     COMMAND sh -c "ln -sfn '${CMAKE_CURRENT_SOURCE_DIR}/lobes' '$<TARGET_FILE_DIR:example_medax>/lobes'"
     COMMENT "Linking lobes directory into build"
 )
-# Create empty output directories
-foreach(dir plots)
-    add_custom_command(TARGET example_basic POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            $<TARGET_FILE_DIR:example_basic>/${dir}
-        COMMENT "Creating empty directory: ${dir}"
-    )
-endforeach()
+add_executable(readme_figures readme_figures.c)
+target_link_libraries(readme_figures PUBLIC vor3d m OpenMP::OpenMP_C)
+target_compile_options(readme_figures PRIVATE -Wall -Werror -Wextra -O3)
+target_compile_definitions(readme_figures PRIVATE MESH_DIR="${CMAKE_CURRENT_SOURCE_DIR}/meshes")

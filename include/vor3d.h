@@ -132,10 +132,4 @@ int find_inside_which_vcell(const s_vdiagram *vd, s_point x, double tol_bdry);
 void free_vdiagram(s_vdiagram *vd);
 void free_vcell(s_vcell *c);
 
-
-/* ---- Plotting (TEMPORARY: to be removed or refactored onto hlibs/gplot.h, see TODO.txt) ---- */
-void plot_vcell(const s_vor3d_domain *domain, const s_vcell *vcell, char *f_name, const s_point ranges[2]);
-void plot_all_vcells(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2], char *view_command);
-void plot_vdiagram_differentviews(const s_vdiagram *vdiagram, char *f_name, const s_point ranges[2]);
-
 #endif

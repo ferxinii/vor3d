@@ -10,7 +10,6 @@ static double rnd01(void *c) { return random_uniform_double(c); }
 #include "dynarray.h"
 
 #define FILE_BP "bp_points.txt.aux"
-#define PLOT_VOLUMES(name) system("./plot_together.plt " name)
 
 /* Seeds are uniform random points inside the domain. The count roughly matches
  * the density of the Poisson-disk sampler (radius 1) this example used before
@@ -142,10 +141,6 @@ int main(void)
     rctx_omp = malloc(sizeof(s_random_context) * omp_get_max_threads());
     random_initialize_threads(time(NULL), 1, omp_get_max_threads(), rctx_omp);
 
-    
-    bool PLOT = false;
-    (void)PLOT;
-
     puts("\nTETRAHEDON:");
     generate_file_tetrahedron_bp(FILE_BP, 3);
     s_vor3d_domain dom_tet = domain_from_csv(FILE_BP);
@@ -153,7 +148,6 @@ int main(void)
     s_vdiagram vd_tet = build_random(&dom_tet, &rctx_omp[0]);
     if (!vdiagram_is_valid(&vd_tet)) { puts("Could not construct vd."); exit(1); }
     check_volume(&vd_tet);
-    if (PLOT) plot_vdiagram_differentviews(&vd_tet, "plots/tet", NULL);
     free_vdiagram(&vd_tet);
     iterate(10000, false, &dom_tet);
     free_vor3d_domain(&dom_tet);
@@ -165,7 +159,6 @@ int main(void)
     s_vdiagram vd_cube = build_random(&dom_cube, &rctx_omp[0]);
     if (!vdiagram_is_valid(&vd_cube)) { puts("Could not construct vd."); exit(1); }
     check_volume(&vd_cube);
-    if (PLOT) plot_vdiagram_differentviews(&vd_cube, "plots/cube", NULL);
     free_vdiagram(&vd_cube);
     iterate(10000, false, &dom_cube);
     free_vor3d_domain(&dom_cube);
@@ -178,7 +171,6 @@ int main(void)
     s_vdiagram vd_sph = build_random(&dom_sph, &rctx_omp[0]);
     if (!vdiagram_is_valid(&vd_sph)) { puts("Could not construct vd."); exit(1); }
     check_volume(&vd_sph);
-    if (PLOT) plot_vdiagram_differentviews(&vd_sph, "plots/sph", NULL);
     free_vdiagram(&vd_sph);
     iterate(100, true, &dom_sph);
     free_vor3d_domain(&dom_sph);

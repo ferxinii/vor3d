@@ -87,7 +87,6 @@ s_ncell *bruteforce_find_ncell_containing(const s_scplx *scplx, s_point p);
  * kind on which walking is sound). */
 s_ncell *in_ncell_walk(const s_scplx *scplx, s_point p);
 s_ncell *in_ncell_walk_id(const s_scplx *scplx, int point_id);  /* walk by registered point id (seam-routed) */
-void plot_dt_3d_differentviews(const s_scplx *scplx, char *f_name, s_point ranges[2]);
 
 
 /* HELPERS */

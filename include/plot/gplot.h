@@ -9,7 +9,7 @@
  *  - The macros use two C23 features (__VA_OPT__ and empty {});
  *    only -Wpedantic below C23 warns about them.
  *    Tested on macOS (clang 17): default, -std=c11, -std=c17 and -std=c2x.
- *  - gnuplot (with the pngcairo and pdfcairo terminals) in PATH. Videos also need ffmpeg.
+ *  - gnuplot (with the pngcairo and pdfcairo terminals) in PATH. Videos and GIFs also need ffmpeg.
  *
  *  Linux with a strict -std=cXX, not gnuXX (NOT TESTED, Claude's recommendation): glibc hides the
  *  POSIX functions above in strict modes, so define this before ANY #include:
@@ -50,6 +50,7 @@
         gplot_draw_2d(v, 100, x, y);
     }
     gplot_end(v);
+    // GPLOT_GIF_2D / GPLOT_GIF_3D work the same and write an animated GIF ("anim.gif")
 */
 
 
@@ -62,10 +63,12 @@ typedef struct gplot s_gplot;  // Interface to gnuplot
 typedef enum gplot_plot {
     GPLOT_PNG_2D,
     GPLOT_PDF_2D,
-    GPLOT_VIDEO_2D,
+    GPLOT_VIDEO_2D,       // .mp4 (H.264)
+    GPLOT_GIF_2D,         // animated GIF, one palette for all frames
     GPLOT_PNG_3D,
     GPLOT_PDF_3D,
-    GPLOT_VIDEO_3D
+    GPLOT_VIDEO_3D,
+    GPLOT_GIF_3D
 } e_gplot_plot;
 
 typedef struct gplot_conf {  // Zero fields get defaults: 800x600, font 12, 24 fps, layout 1x1
@@ -120,9 +123,9 @@ typedef struct gplot_style {  // Zero / NULL fields are not emitted, so gnuplot'
 // void gplot_config(s_gplot *g, const char *cmd, ...);
 // void gplot_next_subplot(s_gplot *g, const char *cmd, ...);
 
-// VIDEO
+// VIDEO AND GIF
 // void gplot_next_frame(s_gplot *g, const char *cmd, ...);  // Not before the first frame
-// void gplot_video_to_gif(const char *file_video, const char *file_gif, const int size[2], int framerate);
+// A GIF's palette is computed from all frames, so ffmpeg holds them all in memory until gplot_end.
 
 // DRAW: GENERIC
 // void gplot_draw_command(s_gplot *g, const char *command);  // Raw plot clause, ex: "t, sin(t) w l notitle"
@@ -196,7 +199,6 @@ static inline void gplot_end(s_gplot *interface);
 static inline void gplot_config_impl(s_gplot *interface, ...);
 static inline void gplot_next_subplot_impl(s_gplot *interface, ...);
 static inline void gplot_next_frame_impl(s_gplot *interface, ...);
-static inline void gplot_video_to_gif(const char *file_video, const char *file_gif, const int size[2], int framerate);
 
 static inline void gplot_draw_command(s_gplot *interface, const char *command);
 static inline void gplot_draw_file_impl(s_gplot *interface, const char *file,
@@ -252,7 +254,8 @@ struct gplot {
     e_gplot_plot type;
     int dim;
     const char *terminal;
-    bool is_video;
+    bool is_video;        // Also true for GIFs: frames go through ffmpeg
+    bool is_gif;
 
     char *file_name;
     int font_size;
@@ -271,6 +274,7 @@ struct gplot {
     size_t cmd_log_len;
     size_t *cmd_sent;     // Per worker: how much of cmd_log it has received
 
+    bool in_multiplot;    // "set multiplot" sent for the current frame
     int N_items;
     FILE *plot_cmd; 
     char *plot_cmd_buf;
@@ -462,9 +466,20 @@ static inline bool gplot_sync_cmds(s_gplot *interface)
 }
 
 
+static inline void gplot_open_multiplot(s_gplot *interface)
+{   // The frame's multiplot opens at its first plot, after the pending commands. gnuplot undoes
+    // some settings (margins) made inside a multiplot at "unset multiplot", so commands given
+    // before a frame's first plot must reach gnuplot outside it, on every worker alike
+    if (interface->in_multiplot) return;
+    fprintf(interface->pipe, "set multiplot layout %d,%d\n", interface->layout[0], interface->layout[1]);
+    interface->in_multiplot = true;
+}
+
+
 static inline bool gplot_flush_plot(s_gplot *interface)
 {   // Sends "plot <clauses>" to gnuplot, after any pending commands, and empties the clause buffer
     if (!gplot_sync_cmds(interface)) return false;
+    gplot_open_multiplot(interface);
     const char *keyword = (interface->dim == 2) ? "plot " : "splot ";
 
     if (interface->N_items == 0) {  // Empty frame: one transparent point, so axes and title still exist
@@ -512,20 +527,13 @@ static inline bool gplot_set_frame_output(s_gplot *interface)
 }
 
 
-static inline void gplot_frame_begin(s_gplot *interface)
-{
-    gplot_sync_cmds(interface);  // A parallel worker catches up before its frame starts
-    fprintf(interface->pipe, "set multiplot layout %d,%d\n",
-            interface->layout[0], interface->layout[1]);
-}
-
-
 static inline void gplot_frame_end(s_gplot *interface)
 {
     if (!gplot_flush_plot(interface)) {
         fprintf(stderr, "gplot ERROR: gplot_frame_end\n");
     }
     gplot_pipe_and_newline(interface->pipe, "unset multiplot");
+    interface->in_multiplot = false;
 }
 
 
@@ -573,6 +581,8 @@ static inline bool gplot_set_type(s_gplot *interface, e_gplot_plot type)
         case GPLOT_PDF_3D:   { interface->terminal = "pdfcairo"; interface->dim = 3; interface->is_video = false; break; }
         case GPLOT_VIDEO_2D: { interface->terminal = "pngcairo"; interface->dim = 2; interface->is_video = true;  break; }
         case GPLOT_VIDEO_3D: { interface->terminal = "pngcairo"; interface->dim = 3; interface->is_video = true;  break; }
+        case GPLOT_GIF_2D:   { interface->terminal = "pngcairo"; interface->dim = 2; interface->is_video = true;  interface->is_gif = true; break; }
+        case GPLOT_GIF_3D:   { interface->terminal = "pngcairo"; interface->dim = 3; interface->is_video = true;  interface->is_gif = true; break; }
         default: { fprintf(stderr, "gplot ERROR: UNIMPLEMENTED TYPE\n"); return false; }
     }
     return true;
@@ -598,14 +608,21 @@ static inline bool gplot_make_frames_dir(s_gplot *interface)
 }
 
 
+static inline const char *gplot_ffmpeg_encoder(const s_gplot *interface)
+{   // GIF: one palette computed from all frames; video: H.264
+    return interface->is_gif
+        ? "-filter_complex \"split[a][b];[a]palettegen[p];[b][p]paletteuse\" -loop 0"
+        : "-pix_fmt yuv420p -c:v libx264 -crf 18";
+}
+
+
 static inline bool gplot_set_ffmpeg_output(s_gplot *interface)
 {   // Serial video: gnuplot writes every PNG into one ffmpeg process
     char cmd[1024];
     int o = snprintf(cmd, sizeof(cmd),
                      "| ffmpeg -y -loglevel error "
-                     "-f png_pipe -r %d -i pipe: "
-                     "-pix_fmt yuv420p -c:v libx264 -crf 18 \"%s\"",
-                     interface->framerate, interface->file_name);
+                     "-f png_pipe -r %d -i pipe: %s \"%s\"",
+                     interface->framerate, gplot_ffmpeg_encoder(interface), interface->file_name);
     if (o < 0 || (size_t)o >= sizeof(cmd)) {
         fprintf(stderr, "gplot ERROR: ffmpeg command too long\n");
         return false;
@@ -648,8 +665,6 @@ static inline s_gplot *gplot_start_impl(e_gplot_plot type, const char *file_name
     else if (out->video_parallel_threads > 0) ok = gplot_make_frames_dir(out) && gplot_set_frame_output(out);
     else                                      ok = gplot_set_ffmpeg_output(out);
     if (!ok) goto error;
-
-    gplot_frame_begin(out);
 
     return out;
 
@@ -727,8 +742,6 @@ static inline void gplot_next_frame_impl(s_gplot *interface, ...)
         fprintf(stderr, "gplot ERROR: could not hand frame %d to a worker\n", interface->frames_N);  
     }
 
-    gplot_frame_begin(interface);
-
     va_list ap;
     va_start(ap, interface);
     gplot_pipe_config_vargs(interface->cmd_log, ap);
@@ -740,8 +753,8 @@ static inline void gplot_frames_to_video(s_gplot *interface)
 {
     char buff[1024];
     snprintf(buff, 1024,
-             "ffmpeg -y -loglevel error -framerate %d -i \"%s/frame_%%05d.png\" -pix_fmt yuv420p -c:v libx264 -crf 18 \"%s\"",
-             interface->framerate, interface->frames_dir, interface->file_name);
+             "ffmpeg -y -loglevel error -framerate %d -i \"%s/frame_%%05d.png\" %s \"%s\"",
+             interface->framerate, interface->frames_dir, gplot_ffmpeg_encoder(interface), interface->file_name);
     system(buff);
 }
 
@@ -768,14 +781,6 @@ static inline void gplot_end(s_gplot *interface)
     }
 
     gplot_free(interface);
-}
-
-
-static inline void gplot_video_to_gif(const char *file_video, const char *file_gif, const int size[2], int framerate)
-{
-      char command_mp4_to_gif[1024];
-      snprintf(command_mp4_to_gif, 1024, "ffmpeg -loglevel error -i %s -vf \"fps=%d,scale=%d:%d:flags=lanczos\" -gifflags +transdiff -y %s 2>&1", file_video, framerate, size[0], size[1], file_gif);
-      system(command_mp4_to_gif);
 }
 
 

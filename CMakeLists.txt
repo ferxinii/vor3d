@@ -25,10 +25,6 @@ if (NOT TARGET geometry)
     add_subdirectory(external/geometry)
 endif()
 
-if (NOT TARGET gnuplotC)
-    add_subdirectory(external/gnuplotC)
-endif()
-
 add_library(vor3d STATIC
     src/vor3d.c
     src/dt.c
@@ -49,7 +45,6 @@ target_include_directories(vor3d
 
 target_link_libraries(vor3d
     PRIVATE
-        gnuplotC
         predicates_basic     # orient3d_dd (dt.c)
         predicates_lp        # lp3_* + power_lp3_* (surf_vkey.h)
         predicates_power     # power_incircle3d (dt.c)
